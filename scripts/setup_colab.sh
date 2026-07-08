@@ -17,7 +17,7 @@ echo ">>> Configuring Git Identity..."
 git config --global user.email "$GIT_EMAIL"
 git config --global user.name "$GIT_NAME"
 
-# Dynamically construct the URL using your Token and Username
+# Dynamically construct URL using your Token and Username
 AUTH_REPO_URL="https://${GITHUB_USERNAME}:${GITHUB_TOKEN}@github.com/epmresearch/vlm-safety-reasoning.git"
 
 if [ -d "$REPO_DIR" ]; then
