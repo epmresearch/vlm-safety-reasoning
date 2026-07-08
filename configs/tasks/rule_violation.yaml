@@ -1,0 +1,10 @@
+task_name: "rule_violation"
+prompt_key: "RULE_VIOLATION_PROMPT"
+output_fields: ["rule_id", "violated", "reasoning", "bounding_box"]
+
+reward_weights:
+  json_validity: 1.0
+  rule_violation_accuracy: 2.0
+  grounding_iou: 1.0
+
+max_new_tokens: 256

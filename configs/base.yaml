@@ -1,0 +1,18 @@
+# Shared settings used across every experiment.
+drive_root: "/content/gdrive/MyDrive/vlm-finetuning-project1"
+hf_org: "your-hf-username-or-org"      # used as prefix when pushing adapters to the Hub
+wandb_project: "vlm-safety-project1"
+wandb_entity: null                      # set to your W&B username/team if needed
+seed: 42
+
+dataset:
+  hf_repo: "LouisChen15/ConstructionSite"
+  raw_cache_subdir: "datasets/raw"
+  processed_subdir: "datasets/processed"
+
+paths:
+  checkpoints_subdir: "checkpoints"
+  results_subdir: "results"
+  figures_subdir: "figures"
+  logs_subdir: "logs"
+  secrets_subdir: "secrets"
