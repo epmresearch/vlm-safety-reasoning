@@ -1,5 +1,5 @@
 # Shared settings used across every experiment.
-drive_root: "/content/gdrive/MyDrive/vlm-finetuning-project1"
+drive_root: "/content/drive/MyDrive/vlm-finetuning-project1"
 hf_org: "nabeelshan"
 wandb_project: "vlm-safety-project1"
 wandb_entity: "nabeel-shan-research"
