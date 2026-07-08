@@ -1,8 +1,8 @@
 # Shared settings used across every experiment.
 drive_root: "/content/gdrive/MyDrive/vlm-finetuning-project1"
-hf_org: "your-hf-username-or-org"      # used as prefix when pushing adapters to the Hub
+hf_org: "nabeelshan"
 wandb_project: "vlm-safety-project1"
-wandb_entity: null                      # set to your W&B username/team if needed
+wandb_entity: "nabeel-shan-research"
 seed: 42
 
 dataset:

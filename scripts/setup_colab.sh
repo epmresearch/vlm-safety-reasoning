@@ -2,9 +2,9 @@
 # Full Colab session bootstrap. Run this as the first cell of every session.
 set -e
 
-REPO_URL="https://github.com/<your-username>/vlm-safety-finetuning.git"
-REPO_DIR="vlm-safety-finetuning"
-DRIVE_ROOT="/content/gdrive/MyDrive/vlm-finetuning-project1"
+REPO_URL="https://github.com/epmresearch/vlm-safety-reasoning.git"
+REPO_DIR="vlm-safety-reasoning"
+DRIVE_ROOT="/content/gdrive/MyDrive/vlm-safety-project1"
 
 echo ">>> Mounting Drive (if not already mounted)..."
 python - <<'EOF'
