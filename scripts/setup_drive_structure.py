@@ -1,20 +1,20 @@
 """
 setup_drive_structure.py
 
-Creates the Project 1 Google Drive skeleton (data/checkpoints/results/logs).
+Creates the Project 1 Google Drive skeleton (notebooks/data/checkpoints/results/logs).
 Run this ONCE, inside Colab, after mounting Drive. Safe to re-run — it never
 overwrites existing files, only fills in missing folders/placeholders.
 
 Usage (inside a Colab cell):
 
     from google.colab import drive
-    drive.mount('/content/gdrive')
+    drive.mount('/content/drive')
 
-    !python setup_drive_structure.py /content/gdrive/MyDrive/vlm-finetuning-project1
+    !python setup_drive_structure.py /content/drive/MyDrive/vlm-finetuning-project1
 
-Or from a notebook, after uploading this file to the repo's scripts/ folder:
+Or from a notebook, after cloning the repo:
 
-    !python scripts/setup_drive_structure.py /content/gdrive/MyDrive/vlm-finetuning-project1
+    !python scripts/setup_drive_structure.py /content/drive/MyDrive/vlm-finetuning-project1
 """
 
 import sys
@@ -39,7 +39,7 @@ def touch_if_missing(p: Path, content: str = "") -> None:
 def main():
     if len(sys.argv) < 2:
         print("Usage: python setup_drive_structure.py <drive_root_path>")
-        print("Example: python setup_drive_structure.py /content/gdrive/MyDrive/vlm-finetuning-project1")
+        print("Example: python setup_drive_structure.py /content/drive/MyDrive/vlm-finetuning-project1")
         sys.exit(1)
 
     root = Path(sys.argv[1]).expanduser()
@@ -51,9 +51,13 @@ def main():
     env_path = secrets_dir / ".env"
     if not env_path.exists():
         touch_if_missing(env_path, "HF_TOKEN=\nWANDB_API_KEY=\n")
-        print("  >>> IMPORTANT: open secrets/.env in Drive and paste your REAL tokens in manually.")
+        print("  >>> IMPORTANT: this is a blank placeholder. Do NOT edit it in the Drive web UI.")
+        print("  >>> Instead: delete this file and upload your real, filled-in .env file in its place.")
     else:
         print(f"  skip (exists, not overwriting real secrets): {env_path}")
+
+    # --- notebooks/ ---
+    ensure_dir(root / "notebooks")
 
     # --- datasets/ ---
     ensure_dir(root / "datasets" / "raw")
@@ -83,7 +87,7 @@ def main():
     touch_if_missing(logs_dir / "error_log.txt")
 
     print(f"\nDone. Drive structure ready at: {root}")
-    print("Next: paste real HF_TOKEN / WANDB_API_KEY into secrets/.env manually (never via script).")
+    print("Next: delete the placeholder secrets/.env and upload your real, filled-in .env file there instead.")
 
 
 if __name__ == "__main__":
