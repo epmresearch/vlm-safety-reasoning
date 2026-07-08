@@ -4,13 +4,7 @@ set -e
 
 REPO_URL="https://github.com/epmresearch/vlm-safety-reasoning.git"
 REPO_DIR="vlm-safety-reasoning"
-DRIVE_ROOT="/content/gdrive/MyDrive/vlm-safety-project1"
-
-echo ">>> Mounting Drive (if not already mounted)..."
-python - <<'EOF'
-from google.colab import drive
-drive.mount('/content/gdrive', force_remount=False)
-EOF
+DRIVE_ROOT="/content/drive/MyDrive/vlm-finetuning-project1"
 
 if [ -d "$REPO_DIR" ]; then
     echo ">>> Repo already present, pulling latest..."
