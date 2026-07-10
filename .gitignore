@@ -21,3 +21,6 @@ tests/
 evaluation/
 docs/
 rewards/
+cb.py
+cb.txt
+notebooks/

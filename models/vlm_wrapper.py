@@ -31,8 +31,8 @@ class UnifiedVLMWrapper:
         if load_in_4bit:
             load_kwargs["load_in_4bit"] = True
 
-        self.model = AutoModelForVision2Seq.from_pretrained(hf_path, **load_kwargs)
-        self.processor = AutoProcessor.from_pretrained(hf_path)
+        self.model = AutoModelForVision2Seq.from_pretrained(hf_path, trust_remote_code=True, **load_kwargs)
+        self.processor = AutoProcessor.from_pretrained(hf_path, trust_remote_code=True)
 
         if lora_path:
             logger.info(f"Attaching LoRA adapter from: {lora_path}")

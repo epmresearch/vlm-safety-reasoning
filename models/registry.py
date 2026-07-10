@@ -71,3 +71,9 @@ def register_finetuned_variant(base_model_id: str, new_model_id: str, adapter_lo
 def checkpoint_path(task: str, variant: str) -> str:
     """e.g. checkpoint_path('rule_violation', 'sft_v1') -> Drive path"""
     return str(get_drive_path("checkpoints", task, variant))
+
+
+def checkpoint_path_multitask(size_name: str, variant: str) -> str:
+    """e.g. checkpoint_path_multitask('small', 'sft_v1') -> Drive path.
+    Used instead of checkpoint_path() since multi-task SFT isn't tied to one task."""
+    return str(get_drive_path("checkpoints", "multitask", size_name, variant))

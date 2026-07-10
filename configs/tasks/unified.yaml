@@ -1,0 +1,12 @@
+task_name: "full_unified"
+prompt_key: "UNIFIED_PROMPT"
+output_fields: ["caption", "detected_objects", "safety_violations"]
+
+reward_weights:      # unused until GRPO phase; kept for later
+  json_validity: 1.0
+  caption_quality: 1.0
+  rule_violation_accuracy: 2.0
+  rule_grounding_iou: 1.0
+  object_grounding_iou: 1.5
+
+max_new_tokens: 700   # single response now covers caption + objects + violations
