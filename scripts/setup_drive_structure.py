@@ -1,11 +1,11 @@
 """
 setup_drive_structure.py
 
-Creates the Project 1 Google Drive skeleton (notebooks/data/checkpoints/results/logs).
+Creates the Project's Google Drive skeleton (notebooks/data/checkpoints/results/logs).
 Run this ONCE, inside Colab, after mounting Drive. Safe to re-run — it never
 overwrites existing files, only fills in missing folders/placeholders.
 
-Usage (inside a Colab cell):
+Usage (After uploading setup_drive_structure.py inside Colab):
 
     from google.colab import drive
     drive.mount('/content/drive')
@@ -51,8 +51,8 @@ def main():
     env_path = secrets_dir / ".env"
     if not env_path.exists():
         touch_if_missing(env_path, "HF_TOKEN=\nWANDB_API_KEY=\n")
-        print("  >>> IMPORTANT: this is a blank placeholder. Do NOT edit it in the Drive web UI.")
-        print("  >>> Instead: delete this file and upload your real, filled-in .env file in its place.")
+        print("  >>> IMPORTANT: this is a blank placeholder.")
+        print("  >>> Delete this file and upload your real, filled-in .env file in its place.")
     else:
         print(f"  skip (exists, not overwriting real secrets): {env_path}")
 
@@ -63,10 +63,10 @@ def main():
     ensure_dir(root / "datasets" / "raw")
     for task in TASKS:
         ensure_dir(root / "datasets" / "processed" / task)
-    touch_if_missing(
-        root / "datasets" / "split_manifest.json",
-        json.dumps({"note": "Uses HF native 7009/3004 split, unmodified."}, indent=2),
-    )
+    # touch_if_missing(
+    #     root / "datasets" / "split_manifest.json",
+    #     json.dumps({"note": "Uses HF native 7009/3004 split, unmodified."}, indent=2),
+    # )
 
     # --- checkpoints/ ---
     for task in TASKS:
