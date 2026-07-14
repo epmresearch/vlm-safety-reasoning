@@ -46,7 +46,7 @@ def main():
         print(f"  skip (exists): {env_path}")
 
     # --- dataset cache/ ---
-    ensure_dir(root / "datasets" / "unified_cache")
+    ensure_dir(root / "datasets" / "raw")
 
     # --- checkpoints/ ---
     for model in MODELS:
