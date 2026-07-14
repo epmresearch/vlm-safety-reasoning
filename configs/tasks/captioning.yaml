@@ -1,9 +1,0 @@
-task_name: "captioning"
-prompt_key: "CAPTIONING_PROMPT"
-output_fields: ["caption"]
-
-reward_weights:
-  json_validity: 0.5
-  caption_quality: 2.0
-
-max_new_tokens: 200

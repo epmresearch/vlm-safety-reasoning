@@ -1,18 +1,36 @@
-lr: 2.0e-4
-epochs: 3
-per_device_train_batch_size: 2
-gradient_accumulation_steps: 8
+# SFT training hyperparameters.
+# Per-model batch sizes are in core/constants.py MODEL_BATCH_CONFIGS.
+
+num_train_epochs: 3
+learning_rate: 2.0e-4
 warmup_ratio: 0.03
 weight_decay: 0.01
-logging_steps: 10
-save_steps: 100
-eval_steps: 100
+max_seq_length: 2048
+load_in_4bit: true
 
+# Logging & checkpointing
+logging_steps: 10
+save_steps: 200
+eval_steps: 200
+eval_strategy: "steps"
+save_total_limit: 3
+load_best_model_at_end: true
+metric_for_best_model: "eval_loss"
+greater_is_better: false
+
+# LoRA configuration
 lora:
   r: 16
   alpha: 16
-  dropout: 0.05
-  target_modules: ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+  dropout: 0
+  target_modules: "all-linear"
 
-max_seq_length: 2048
-load_in_4bit: true
+# Vision-specific
+finetune_vision_layers: false
+finetune_language_layers: true
+finetune_attention_modules: true
+finetune_mlp_modules: true
+use_gradient_checkpointing: "unsloth"
+
+# Precision
+bf16: true

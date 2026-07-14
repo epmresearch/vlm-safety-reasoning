@@ -1,40 +1,70 @@
 """
-Reads multi-size results CSVs from Drive and produces paper-ready figures.
+Generates comprehensive paper figures for the unified model outputs.
+Usage: python scripts/generate_figures.py
 """
-import argparse
-import pandas as pd
 import matplotlib.pyplot as plt
-
+import seaborn as sns
+import pandas as pd
+import json
 from core.io import get_drive_path, ensure_dir
-from core.logging import get_logger
+from core.constants import DEFAULT_MODEL_TIER
+from models.model_loader import get_model_info
 
-logger = get_logger(__name__)
-
-
-def plot_comparison(task: str) -> None:
-    path = get_drive_path("results", task, "comparison_table_multisize.csv")
+def load_metrics(model_short_name: str, variant: str) -> dict:
+    path = get_drive_path("results", model_short_name, variant) / "metrics.json"
     if not path.exists():
-        logger.warning(f"No comparison table found at {path}. Run compare_results_multisize first.")
+        return {}
+    with open(path, "r") as f:
+        return json.load(f)
+
+def generate_radar_chart():
+    # Placeholder for radar chart logic
+    pass
+
+def generate_bar_charts(out_dir):
+    short_name = get_model_info(DEFAULT_MODEL_TIER)["short_name"]
+    base_metrics = load_metrics(short_name, "baseline")
+    sft_metrics = load_metrics(short_name, "unified-sft-v1")
+    
+    if not base_metrics or not sft_metrics:
+        print("Metrics not found. Run evaluation first.")
         return
 
-    df = pd.read_csv(path)
-    fig, ax = plt.subplots(figsize=(8, 4.5))
-    ax.bar(df["model"], df["avg_score"])
-    ax.set_ylabel("Average Score")
-    ax.set_title(f"{task}: Base vs SFT across model sizes")
-    ax.set_ylim(0, 1)
-    plt.xticks(rotation=30, ha="right")
+    data = {
+        "Metric": ["Valid JSON (%)", "Format Completeness (%)", "Caption BERTScore", "Grounding IoU", "Violation F1"],
+        "Baseline": [
+            base_metrics.get("structural", {}).get("valid_json_ratio", 0) * 100,
+            base_metrics.get("structural", {}).get("complete_format_ratio", 0) * 100,
+            base_metrics.get("captioning", {}).get("bert_f1", 0) * 100,
+            base_metrics.get("grounding", {}).get("mean_iou", 0) * 100,
+            base_metrics.get("violations", {}).get("f1", 0) * 100
+        ],
+        "SFT": [
+            sft_metrics.get("structural", {}).get("valid_json_ratio", 0) * 100,
+            sft_metrics.get("structural", {}).get("complete_format_ratio", 0) * 100,
+            sft_metrics.get("captioning", {}).get("bert_f1", 0) * 100,
+            sft_metrics.get("grounding", {}).get("mean_iou", 0) * 100,
+            sft_metrics.get("violations", {}).get("f1", 0) * 100
+        ]
+    }
+    
+    df = pd.DataFrame(data)
+    df_melted = df.melt(id_vars="Metric", var_name="Model", value_name="Score")
+
+    plt.figure(figsize=(10, 6))
+    sns.barplot(data=df_melted, x="Metric", y="Score", hue="Model", palette="viridis")
+    plt.title(f"Baseline vs SFT Performance ({DEFAULT_MODEL_TIER.upper()})")
+    plt.ylim(0, 100)
+    plt.xticks(rotation=45)
     plt.tight_layout()
+    
+    out_path = out_dir / "performance_comparison.png"
+    plt.savefig(out_path)
+    print(f"Saved figure: {out_path}")
 
-    fig_dir = get_drive_path("figures")
-    ensure_dir(fig_dir)
-    fig.savefig(fig_dir / f"{task}_multisize_comparison.png", dpi=200)
-    fig.savefig(fig_dir / f"{task}_multisize_comparison.pdf")
-    logger.info(f"Saved figures for {task}")
-
+def main():
+    out_dir = ensure_dir(get_drive_path("results", "figures"))
+    generate_bar_charts(out_dir)
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--task", required=True)
-    args = parser.parse_args()
-    plot_comparison(args.task)
+    main()

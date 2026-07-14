@@ -1,39 +1,43 @@
 """
-Entry point: runs SFT training then evaluates the resulting checkpoint.
-Usage: python experiments/run_sft.py --task rule_violation --model_id rule_violation-base
+Entry point: runs SFT training for the unified task.
+Usage: python experiments/run_sft.py --tier 2b --variant unified-sft-v1
 """
 import argparse
 
-from models.sft_trainer import run_sft
-from core.config import load_task_config
-from data.loader import load_construction_dataset
-from evaluation.evaluator import ModelEvaluator
-from evaluation.error_analyzer import save_failure_report
+from core.constants import DEFAULT_MODEL_TIER
 from core.logging import get_logger
+from data.loader import load_dataset_splits
+from data.preprocessor import build_unified_sft_dataset
+from models.sft_trainer import run_sft_unified
 
 logger = get_logger(__name__)
 
-
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--task", required=True)
-    parser.add_argument("--model_id", required=True)
-    parser.add_argument("--variant_name", default="sft_v1")
+    parser.add_argument("--tier", default=DEFAULT_MODEL_TIER, help="Model tier (e.g., 2b, 4b, 8b)")
+    parser.add_argument("--variant", default="unified-sft-v1", help="Variant name for SFT")
+    parser.add_argument("--no-resume", action="store_true", help="Do not resume from checkpoint")
     args = parser.parse_args()
 
-    run_sft(args.task, args.model_id, args.variant_name)
+    # Load dataset
+    logger.info("Loading dataset splits...")
+    splits = load_dataset_splits()
+    
+    # Preprocess
+    logger.info("Preprocessing datasets for unified SFT...")
+    train_ds = build_unified_sft_dataset(splits["train"])
+    val_ds = build_unified_sft_dataset(splits["val"])
 
-    new_model_id = f"{args.task}-{args.variant_name}"
-    task_cfg = load_task_config(args.task)
-    dataset = load_construction_dataset()
-
-    evaluator = ModelEvaluator(model_id=new_model_id, task=args.task, task_cfg=task_cfg)
-    results = evaluator.run(dataset["test"], run_name=args.variant_name)
-    evaluator.save_results(results, filename=f"{args.variant_name}_eval.csv")
-    save_failure_report(results, args.task, filename=f"{args.variant_name}_failures.csv")
-
-    logger.info("SFT run + evaluation complete.")
-
+    logger.info(f"Starting SFT for tier: {args.tier}, variant: {args.variant}...")
+    checkpoint_dir = run_sft_unified(
+        tier=args.tier,
+        variant=args.variant,
+        train_dataset=list(train_ds),
+        val_dataset=list(val_ds),
+        resume=not args.no_resume,
+    )
+    
+    logger.info(f"SFT run complete. Checkpoint saved to {checkpoint_dir}")
 
 if __name__ == "__main__":
     main()

@@ -20,7 +20,7 @@ def push_adapter(adapter_path: str, hub_repo: str, private: bool = True) -> None
     api = HfApi(token=token)
     create_repo(hub_repo, token=token, private=private, exist_ok=True)
 
-    logger.info(f"Uploading {adapter_path} -> {hub_repo}")
+    logger.info(f"Uploading {adapter_path} -> {hub_repo} (private={private})")
     api.upload_folder(
         folder_path=adapter_path,
         repo_id=hub_repo,
@@ -33,7 +33,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--adapter_path", required=True)
     parser.add_argument("--hub_repo", required=True)
-    parser.add_argument("--private", action="store_true", default=True)
+    parser.add_argument("--public", action="store_false", dest="private", help="Make repo public (default is private)")
     args = parser.parse_args()
 
     push_adapter(args.adapter_path, args.hub_repo, args.private)

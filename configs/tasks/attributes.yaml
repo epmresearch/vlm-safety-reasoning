@@ -1,9 +1,0 @@
-task_name: "attributes"
-prompt_key: "ATTRIBUTES_PROMPT"
-output_fields: ["illumination", "camera_distance", "view", "quality_of_info"]
-
-reward_weights:
-  json_validity: 0.5
-  attribute_accuracy: 2.0
-
-max_new_tokens: 100

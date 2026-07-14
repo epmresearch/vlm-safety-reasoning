@@ -1,167 +1,188 @@
 """
-Converts raw dataset samples into per-task chat-format training examples
-(SFT) and prompt-only examples (kept for future GRPO). Also builds the
-combined multi-task dataset used for the multi-size SFT strategy: ONE model
-per size, trained on ALL tasks together — not one model per task.
+Converts raw ConstructionSite 10k samples into the Unsloth multimodal
+conversation format for SFT training.
 
-Project 1 tasks: rule_violation, captioning, grounding.
-(attributes/metadata task is explicitly excluded from Project 1 scope.)
+Each training sample becomes a dict with:
+  {
+    "messages": [
+      {"role": "system", "content": [{"type": "text", "text": SYSTEM_PROMPT}]},
+      {"role": "user",   "content": [{"type": "image", "image": pil_image},
+                                      {"type": "text",  "text": INSPECTION_PROMPT}]},
+      {"role": "assistant", "content": [{"type": "text", "text": target_json_str}]}
+    ]
+  }
+
+The target JSON is minimized (no indentation) and wrapped in ```json ... ``` fences.
+Bounding boxes are scaled from dataset [0,1] to Qwen3-VL [0,1000].
 """
 import json
-import random
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
-from data.schemas import SFTSample, GRPOPrompt, ChatMessage
-from data.prompt_templates import SYSTEM_PROMPT_BASE, PROMPT_REGISTRY, get_grounding_prompt
-from data.box_utils import clean_boxes
+from data.prompt_templates import SYSTEM_PROMPT, UNIFIED_INSPECTION_PROMPT
+from data.box_utils import normalize_boxes, clean_boxes, scale_01_to_1000
+from core.constants import GROUNDING_CLASSES, RULES
 from core.logging import get_logger
 
 logger = get_logger(__name__)
 
-GROUNDING_CLASSES = ["excavator", "rebar", "worker_with_white_hard_hat"]
 
+def _build_violations_list(raw: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Extracts safety violations from raw sample, scaling boxes to [0,1000].
 
-def _get_prompt_text(task_cfg: Dict[str, Any]) -> str:
-    return PROMPT_REGISTRY[task_cfg["prompt_key"]]
-
-
-# ---------------------------------------------------------------------------
-# Ground-truth builders
-# ---------------------------------------------------------------------------
-
-def _rule_violation_ground_truth(raw: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Multi-label: collects EVERY violated rule present in the image (fixes the
-    earlier single-label bug that silently dropped co-occurring violations).
-    Degenerate boxes are filtered; a violation with no valid box left keeps
-    its reasoning but reports bounding_box=None (matches the earlier
-    0000167 zero-box edge case — reasoning kept, grounding excluded).
+    Rules with None value (no violation) are skipped.
+    Degenerate boxes are filtered by clean_boxes().
+    normalize_boxes() handles the flat [n,n,n,n] edge case.
     """
     violations = []
     for i in range(1, 5):
         v = raw.get(f"rule_{i}_violation")
         if v is None:
             continue
-        boxes = clean_boxes(v.get("bounding_box"))
+        raw_boxes = v.get("bounding_box") if isinstance(v, dict) else None
+        boxes = clean_boxes(normalize_boxes(raw_boxes))
+        boxes_1000 = [scale_01_to_1000(b) for b in boxes]
         violations.append({
             "rule_id": f"rule_{i}",
-            "reasoning": v.get("reason", "") or "",
-            "bounding_box": list(boxes[0]) if boxes else None,
-            "all_bounding_boxes": [list(b) for b in boxes],  # internal use only
+            "reason": (v.get("reason", "") if isinstance(v, dict) else "") or "",
+            "bounding_boxes": boxes_1000,
         })
-    return {"violations": violations}
+    return violations
 
 
-def _captioning_ground_truth(raw: Dict[str, Any]) -> Dict[str, Any]:
-    return {"caption": raw.get("image_caption", "")}
+def _build_detected_objects(raw: Dict[str, Any]) -> Dict[str, List[List[int]]]:
+    """Extracts detected objects from raw sample, scaling boxes to [0,1000].
+
+    Object classes with empty list [] are preserved as empty.
+    normalize_boxes() handles the flat [n,n,n,n] edge case.
+    """
+    detected = {}
+    for cls in GROUNDING_CLASSES:
+        raw_boxes = raw.get(cls, [])
+        boxes = clean_boxes(normalize_boxes(raw_boxes))
+        detected[cls] = [scale_01_to_1000(b) for b in boxes]
+    return detected
 
 
-def _grounding_ground_truth_single_class(raw: Dict[str, Any], class_name: str) -> Dict[str, Any]:
-    boxes = clean_boxes(raw.get(class_name, []))
-    return {"class_name": class_name, "bounding_boxes": [list(b) for b in boxes]}
+def _build_target_json(raw: Dict[str, Any]) -> str:
+    """Builds the minimized JSON target string wrapped in code fences.
+
+    Returns:
+        ```json\n{"caption":"...","detected_objects":{...},"safety_violations":[...]}\n```
+    """
+    target_dict = {
+        "caption": raw.get("image_caption", ""),
+        "detected_objects": _build_detected_objects(raw),
+        "safety_violations": _build_violations_list(raw),
+    }
+    # Minimized: no indent, compact separators
+    json_str = json.dumps(target_dict, separators=(",", ":"), ensure_ascii=False)
+    return f"```json\n{json_str}\n```"
 
 
-GROUND_TRUTH_BUILDERS = {
-    "rule_violation": _rule_violation_ground_truth,
-    "captioning": _captioning_ground_truth,
-    # "grounding" handled separately per-class — see build_grounding_sft_samples()
-}
+def raw_sample_to_conversation(raw: Dict[str, Any], pil_image) -> Dict[str, Any]:
+    """Converts a single raw dataset sample into Unsloth multimodal conversation format.
+
+    Args:
+        raw: Dict from the HF dataset (one row).
+        pil_image: The PIL Image object for this sample.
+
+    Returns:
+        Dict with "messages" key containing the system/user/assistant conversation.
+    """
+    target_str = _build_target_json(raw)
+
+    return {
+        "messages": [
+            {
+                "role": "system",
+                "content": [{"type": "text", "text": SYSTEM_PROMPT}],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image", "image": pil_image},
+                    {"type": "text", "text": UNIFIED_INSPECTION_PROMPT},
+                ],
+            },
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": target_str}],
+            },
+        ]
+    }
 
 
-# ---------------------------------------------------------------------------
-# SFT sample construction — rule_violation / captioning
-# ---------------------------------------------------------------------------
+def build_unified_sft_dataset(
+    hf_dataset,
+    max_samples: Optional[int] = None,
+) -> List[Dict[str, Any]]:
+    """Converts a full HF dataset split into a list of Unsloth conversation dicts.
 
-def to_sft_format(raw_sample: Dict[str, Any], task: str, task_cfg: Dict[str, Any]) -> SFTSample:
-    prompt_text = _get_prompt_text(task_cfg)
-    ground_truth = GROUND_TRUTH_BUILDERS[task](raw_sample)
+    Uses list comprehension (not .map()) per Unsloth docs for vision training.
 
-    if task == "rule_violation":
-        # Strip internal-only "all_bounding_boxes" before training — the
-        # model should only ever see/produce the schema-defined fields.
-        assistant_payload = {
-            "violations": [
-                {"rule_id": v["rule_id"], "reasoning": v["reasoning"], "bounding_box": v["bounding_box"]}
-                for v in ground_truth["violations"]
-            ]
-        }
-    else:
-        assistant_payload = ground_truth
+    Args:
+        hf_dataset: A HuggingFace Dataset split (train or val).
+        max_samples: Optional cap on number of samples (for debugging).
 
-    messages = [
-        ChatMessage(role="system", content=SYSTEM_PROMPT_BASE),
-        ChatMessage(role="user", content=prompt_text),
-        ChatMessage(role="assistant", content=json.dumps(assistant_payload)),
-    ]
-    return SFTSample(image_id=raw_sample["image_id"], task=task, messages=messages)
+    Returns:
+        List of conversation dicts ready for SFTTrainer.
+    """
+    dataset_iter = hf_dataset
+    if max_samples is not None:
+        dataset_iter = hf_dataset.select(range(min(max_samples, len(hf_dataset))))
 
-
-def build_sft_dataset(raw_dataset, task: str, task_cfg: Dict[str, Any]) -> List[SFTSample]:
-    samples = []
-    for raw in raw_dataset:
+    conversations = []
+    skipped = 0
+    for sample in dataset_iter:
         try:
-            samples.append(to_sft_format(raw, task, task_cfg))
+            pil_image = sample["image"]  # PIL Image from HF datasets
+            conv = raw_sample_to_conversation(sample, pil_image)
+            conversations.append(conv)
         except Exception as e:
-            logger.warning(f"Skipping sample {raw.get('image_id')} (task={task}) due to error: {e}")
-    return samples
+            skipped += 1
+            logger.warning(
+                f"Skipping sample {sample.get('image_id', '?')}: {e}"
+            )
+
+    logger.info(
+        f"Built unified SFT dataset: {len(conversations)} samples "
+        f"({skipped} skipped)"
+    )
+    return conversations
 
 
-# ---------------------------------------------------------------------------
-# Grounding — one sample PER (image, class), matching the paper's methodology
-# ---------------------------------------------------------------------------
+def build_ground_truth_dict(raw: Dict[str, Any]) -> Dict[str, Any]:
+    """Builds the ground-truth dict for evaluation comparison.
 
-def build_grounding_sft_samples(raw_dataset, classes: List[str] = None) -> List[SFTSample]:
-    classes = classes or GROUNDING_CLASSES
-    samples = []
-    for raw in raw_dataset:
-        for cls in classes:
-            try:
-                gt = _grounding_ground_truth_single_class(raw, cls)
-                messages = [
-                    ChatMessage(role="system", content=SYSTEM_PROMPT_BASE),
-                    ChatMessage(role="user", content=get_grounding_prompt(cls)),
-                    ChatMessage(role="assistant", content=json.dumps(gt)),
-                ]
-                samples.append(SFTSample(image_id=raw["image_id"], task="grounding", messages=messages))
-            except Exception as e:
-                logger.warning(f"Skipping grounding sample {raw.get('image_id')} class={cls}: {e}")
-    return samples
+    Returns the same structure as the model output but with ground-truth values.
+    Boxes remain in dataset [0,1] scale (evaluation handles scale conversion).
+    """
+    violations = []
+    for i in range(1, 5):
+        v = raw.get(f"rule_{i}_violation")
+        if v is None:
+            continue
+        raw_boxes = v.get("bounding_box") if isinstance(v, dict) else None
+        boxes = clean_boxes(normalize_boxes(raw_boxes))
+        violations.append({
+            "rule_id": f"rule_{i}",
+            "reason": (v.get("reason", "") if isinstance(v, dict) else "") or "",
+            "bounding_boxes": [list(b) for b in boxes],
+        })
 
+    detected = {}
+    for cls in GROUNDING_CLASSES:
+        raw_boxes = raw.get(cls, [])
+        boxes = clean_boxes(normalize_boxes(raw_boxes))
+        detected[cls] = [list(b) for b in boxes]
 
-# ---------------------------------------------------------------------------
-# Combined multi-task dataset (Project 1 decision: ONE model per size,
-# trained across ALL tasks together — not one model per task)
-# ---------------------------------------------------------------------------
-
-def build_multitask_sft_dataset(raw_dataset, task_cfgs: Dict[str, Dict[str, Any]], seed: int = 42) -> List[SFTSample]:
-    """task_cfgs: {"rule_violation": <cfg>, "captioning": <cfg>, "grounding": <cfg>}"""
-    all_samples: List[SFTSample] = []
-
-    if "rule_violation" in task_cfgs:
-        all_samples += build_sft_dataset(raw_dataset, "rule_violation", task_cfgs["rule_violation"])
-    if "captioning" in task_cfgs:
-        all_samples += build_sft_dataset(raw_dataset, "captioning", task_cfgs["captioning"])
-    if "grounding" in task_cfgs:
-        classes = task_cfgs["grounding"].get("classes", GROUNDING_CLASSES)
-        all_samples += build_grounding_sft_samples(raw_dataset, classes)
-
-    rng = random.Random(seed)
-    rng.shuffle(all_samples)
-
-    logger.info(f"Built multi-task SFT dataset: {len(all_samples)} total samples "
-                f"across tasks={list(task_cfgs.keys())}")
-    return all_samples
-
-
-# ---------------------------------------------------------------------------
-# GRPO prompt builder (kept for later — not used while GRPO is paused)
-# ---------------------------------------------------------------------------
-
-def to_grpo_prompt(raw_sample: Dict[str, Any], task: str, task_cfg: Dict[str, Any]) -> GRPOPrompt:
-    prompt_text = _get_prompt_text(task_cfg)
-    ground_truth = GROUND_TRUTH_BUILDERS[task](raw_sample)
-    messages = [
-        ChatMessage(role="system", content=SYSTEM_PROMPT_BASE),
-        ChatMessage(role="user", content=prompt_text),
-    ]
-    return GRPOPrompt(image_id=raw_sample["image_id"], task=task, prompt_messages=messages, ground_truth=ground_truth)
+    return {
+        "caption": raw.get("image_caption", ""),
+        "detected_objects": detected,
+        "safety_violations": violations,
+        # Metadata for stratified evaluation
+        "illumination": raw.get("illumination", ""),
+        "camera_distance": raw.get("camera_distance", ""),
+        "view": raw.get("view", ""),
+        "quality_of_info": raw.get("quality_of_info", ""),
+    }

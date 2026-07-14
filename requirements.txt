@@ -1,21 +1,47 @@
+# Core ML
 torch>=2.3.0
 transformers>=4.46.0
 accelerate>=0.34.0
 peft>=0.13.0
 trl>=0.11.0
-unsloth @ git+https://github.com/unslothai/unsloth.git
+
+# Unsloth (install separately in Colab via pip install unsloth)
+# unsloth is installed from git in setup_colab.sh, not pinned here
+
+# Qwen-VL specific
+qwen-vl-utils>=0.0.8
+
+# Data
 datasets>=2.20.0
 pillow>=10.0.0
 pydantic>=2.7.0
 pyyaml>=6.0.1
 pandas>=2.2.0
 numpy>=1.26.0
+
+# Evaluation - Captioning
+bert-score>=0.3.13
+nltk>=3.9.0
+pycocoevalcap>=1.2
+
+# Evaluation - General
 scikit-learn>=1.5.0
 sentence-transformers>=3.0.0
+
+# Experiment tracking
 wandb>=0.17.0
 huggingface_hub>=0.24.0
+
+# Utilities
 tqdm>=4.66.0
 matplotlib>=3.9.0
 python-dotenv>=1.0.1
-pytest>=8.3.0
 loguru>=0.7.2
+
+# Testing
+pytest>=8.3.0
+
+# Note: flash-attn is installed separately in Colab (requires CUDA build):
+#   pip install flash-attn --no-build-isolation
+# Note: unsloth is installed from git in setup_colab.sh:
+#   pip install unsloth

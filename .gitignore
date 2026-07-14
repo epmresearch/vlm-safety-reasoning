@@ -13,14 +13,5 @@ venv/
 wandb/
 struct.md
 setup_project_structure.py
-tests/
-03_reward_function_dev.ipynb
-04_sft_orchestration.ipynb
-05_grpo_orchestration.ipynb
-06_comparison_and_figures.ipynb
-evaluation/
-docs/
-rewards/
 cb.py
 cb.txt
-notebooks/

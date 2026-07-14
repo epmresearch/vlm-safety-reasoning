@@ -1,12 +1,16 @@
 task_name: "full_unified"
-prompt_key: "UNIFIED_PROMPT"
+prompt_key: "UNIFIED_INSPECTION_PROMPT"
 output_fields: ["caption", "detected_objects", "safety_violations"]
 
-reward_weights:      # unused until GRPO phase; kept for later
+# Output format: minimized JSON wrapped in ```json ... ``` code fences.
+# No indentation, no extra whitespace. Single-line JSON body.
+output_format: "fenced_minimized_json"
+
+reward_weights:      # unused until GRPO phase; kept for forward-compatibility
   json_validity: 1.0
   caption_quality: 1.0
   rule_violation_accuracy: 2.0
   rule_grounding_iou: 1.0
   object_grounding_iou: 1.5
 
-max_new_tokens: 700   # single response now covers caption + objects + violations
+max_new_tokens: 700   # single response covers caption + objects + violations

@@ -1,27 +1,19 @@
 """
 setup_drive_structure.py
 
-Creates the Project's Google Drive skeleton (notebooks/data/checkpoints/results/logs).
-Run this ONCE, inside Colab, after mounting Drive. Safe to re-run — it never
+Creates the Project's Google Drive skeleton (data/checkpoints/results/logs).
+Run this ONCE, inside Colab, after mounting Drive. Safe to re-run, it never
 overwrites existing files, only fills in missing folders/placeholders.
 
-Usage (After uploading setup_drive_structure.py inside Colab):
-
-    from google.colab import drive
-    drive.mount('/content/drive')
-
-    !python setup_drive_structure.py /content/drive/MyDrive/vlm-finetuning-project1
-
-Or from a notebook, after cloning the repo:
-
+Usage:
     !python scripts/setup_drive_structure.py /content/drive/MyDrive/vlm-finetuning-project1
 """
 
 import sys
-import json
 from pathlib import Path
 
-TASKS = ["rule_violation", "captioning", "grounding", "attributes"]
+# Use short names instead of old task names for checkpointing
+MODELS = ["qwen-2b", "qwen-4b", "qwen-8b"]
 
 
 def ensure_dir(p: Path) -> None:
@@ -39,7 +31,6 @@ def touch_if_missing(p: Path, content: str = "") -> None:
 def main():
     if len(sys.argv) < 2:
         print("Usage: python setup_drive_structure.py <drive_root_path>")
-        print("Example: python setup_drive_structure.py /content/drive/MyDrive/vlm-finetuning-project1")
         sys.exit(1)
 
     root = Path(sys.argv[1]).expanduser()
@@ -51,43 +42,27 @@ def main():
     env_path = secrets_dir / ".env"
     if not env_path.exists():
         touch_if_missing(env_path, "HF_TOKEN=\nWANDB_API_KEY=\n")
-        print("  >>> IMPORTANT: this is a blank placeholder.")
-        print("  >>> Delete this file and upload your real, filled-in .env file in its place.")
     else:
-        print(f"  skip (exists, not overwriting real secrets): {env_path}")
+        print(f"  skip (exists): {env_path}")
 
-    # --- notebooks/ ---
-    ensure_dir(root / "notebooks")
-
-    # --- datasets/ ---
-    ensure_dir(root / "datasets" / "raw")
-    for task in TASKS:
-        ensure_dir(root / "datasets" / "processed" / task)
-    # touch_if_missing(
-    #     root / "datasets" / "split_manifest.json",
-    #     json.dumps({"note": "Uses HF native 7009/3004 split, unmodified."}, indent=2),
-    # )
+    # --- dataset cache/ ---
+    ensure_dir(root / "datasets" / "unified_cache")
 
     # --- checkpoints/ ---
-    for task in TASKS:
-        ensure_dir(root / "checkpoints" / task)
+    for model in MODELS:
+        ensure_dir(root / "checkpoints" / model)
 
     # --- results/ ---
-    for task in TASKS:
-        ensure_dir(root / "results" / task)
-    ensure_dir(root / "results" / "error_analyses")
-
-    # --- figures/ ---
-    ensure_dir(root / "figures")
+    for model in MODELS:
+        ensure_dir(root / "results" / model)
+    ensure_dir(root / "results" / "figures")
 
     # --- logs/ ---
     logs_dir = root / "logs"
     ensure_dir(logs_dir)
     touch_if_missing(logs_dir / "colab_session_log.txt")
-    touch_if_missing(logs_dir / "error_log.txt")
 
     print(f"\nDone. Drive structure ready at: {root}")
-    print("Next: delete the placeholder secrets/.env and upload your real, filled-in .env file there instead.")
 
 
 if __name__ == "__main__":

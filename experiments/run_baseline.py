@@ -1,34 +1,61 @@
 """
-Entry point: runs baseline (no fine-tuning) inference + evaluation for a task.
-Usage: python experiments/run_baseline.py --task rule_violation --model_id rule_violation-base
+Entry point: runs baseline (no fine-tuning) inference + evaluation for the unified task.
+Usage: python experiments/run_baseline.py --tier 2b
 """
 import argparse
+import json
 
-from core.config import load_task_config
-from data.loader import load_construction_dataset
-from evaluation.evaluator import ModelEvaluator
-from evaluation.error_analyzer import save_failure_report
+from core.constants import DEFAULT_MODEL_TIER
+from core.io import get_drive_path, ensure_dir
 from core.logging import get_logger
+from data.loader import load_dataset_splits
+from models.model_loader import load_model_for_inference
+from models.inference import run_inference
+from evaluation.evaluator import run_full_evaluation
 
 logger = get_logger(__name__)
 
-
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--task", required=True)
-    parser.add_argument("--model_id", required=True)
+    parser.add_argument("--tier", default=DEFAULT_MODEL_TIER, help="Model tier (e.g., 2b, 4b, 8b)")
+    parser.add_argument("--max_samples", type=int, default=None, help="Limit number of test samples")
     args = parser.parse_args()
 
-    task_cfg = load_task_config(args.task)
-    dataset = load_construction_dataset()
+    # Load dataset
+    logger.info("Loading unified dataset...")
+    splits = load_dataset_splits()
+    test_data = splits["test"]
+    if args.max_samples:
+        test_data = test_data.select(range(args.max_samples))
 
-    evaluator = ModelEvaluator(model_id=args.model_id, task=args.task, task_cfg=task_cfg)
-    results = evaluator.run(dataset["test"], run_name="baseline")
-    evaluator.save_results(results, filename="baseline_eval.csv")
-    save_failure_report(results, args.task, filename="baseline_failures.csv")
+    # Load base model
+    logger.info(f"Loading baseline model for tier: {args.tier}...")
+    model, tokenizer, model_info = load_model_for_inference(tier=args.tier)
 
-    logger.info("Baseline run complete.")
+    # Run inference
+    logger.info("Running baseline inference...")
+    results = run_inference(
+        model=model,
+        tokenizer=tokenizer,
+        dataset=test_data,
+        max_samples=args.max_samples,
+    )
 
+    # Prepare for evaluation
+    raw_predictions = [res["raw_output"] for res in results]
+    references = list(test_data)
+    
+    # Run evaluation
+    logger.info("Running evaluation...")
+    eval_results = run_full_evaluation(raw_predictions, references)
+
+    # Save results
+    output_dir = ensure_dir(get_drive_path("results", model_info["short_name"], "baseline"))
+    
+    with open(output_dir / "metrics.json", "w") as f:
+        json.dump(eval_results, f, indent=2)
+        
+    logger.info(f"Baseline run complete. Results saved to {output_dir}")
 
 if __name__ == "__main__":
     main()

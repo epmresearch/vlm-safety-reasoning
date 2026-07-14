@@ -1,0 +1,70 @@
+"""
+Main evaluator orchestrator.
+Combines all metric functions into a unified evaluation pipeline.
+"""
+from typing import Dict, List, Any
+
+from evaluation.output_parser import parse_model_output
+from evaluation.metrics_captioning import compute_all_caption_metrics
+from evaluation.metrics_grounding import compute_grounding_metrics
+from evaluation.metrics_violations import compute_violation_metrics
+from evaluation.metrics_structural import compute_structural_metrics
+from evaluation.metrics_reasoning import batch_score_reasoning
+from core.logging import get_logger
+
+logger = get_logger(__name__)
+
+def run_full_evaluation(raw_predictions: List[str], references: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Runs the complete evaluation pipeline.
+    raw_predictions: list of raw string responses from the model.
+    references: list of ground truth UnifiedOutput dictionaries.
+    """
+    logger.info("Starting full evaluation pipeline...")
+    
+    # 1. Structural metrics
+    structural_metrics = compute_structural_metrics(raw_predictions)
+    
+    # Parse predictions
+    parsed_preds = [parse_model_output(raw_str) for raw_str in raw_predictions]
+    
+    # Extract components
+    pred_captions = [p.get("caption", "") if p else "" for p in parsed_preds]
+    gt_captions = [r.get("caption", "") for r in references]
+    
+    pred_objects = [p.get("detected_objects", {}) if p else {} for p in parsed_preds]
+    gt_objects = [r.get("detected_objects", {}) for r in references]
+    
+    pred_violations = [p.get("safety_violations", []) if p else [] for p in parsed_preds]
+    gt_violations = [r.get("safety_violations", []) for r in references]
+    
+    # 2. Captioning metrics
+    logger.info("Computing captioning metrics...")
+    caption_metrics = compute_all_caption_metrics(pred_captions, gt_captions)
+    
+    # 3. Grounding metrics
+    logger.info("Computing grounding metrics...")
+    grounding_metrics = compute_grounding_metrics(pred_objects, gt_objects)
+    
+    # 4. Violation metrics
+    logger.info("Computing safety violation metrics...")
+    violation_metrics = compute_violation_metrics(pred_violations, gt_violations)
+    
+    # 5. Reasoning metrics
+    logger.info("Computing reasoning metrics (LLM-as-a-Judge)...")
+    reasoning_metrics = batch_score_reasoning(pred_violations, gt_violations)
+    
+    # Combine all results
+    all_metrics = {}
+    all_metrics.update(structural_metrics)
+    all_metrics.update(caption_metrics)
+    all_metrics.update(grounding_metrics)
+    all_metrics.update(violation_metrics)
+    all_metrics.update(reasoning_metrics)
+    
+    logger.info("Evaluation complete.")
+    
+    return {
+        "metrics": all_metrics,
+        "parsed_predictions": parsed_preds
+    }

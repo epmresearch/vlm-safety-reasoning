@@ -1,8 +1,11 @@
 """
 GRPO / GSPO-style reinforcement learning on top of an SFT checkpoint,
-using TRL's GRPOTrainer with reward functions from rewards/.
+using TRL's GRPOTrainer with unified reward functions from rewards/.
+
+The model produces unified JSON output (caption + detected_objects +
+safety_violations) and the composite reward scores it across all axes.
 """
-from typing import Callable, List
+from typing import Callable, Dict, List
 
 from core.config import load_config, load_task_config
 from core.io import ensure_dir
@@ -12,39 +15,58 @@ from models.registry import get_model_entry, register_finetuned_variant, checkpo
 from data.loader import load_construction_dataset
 from data.preprocessor import to_grpo_prompt
 
-from rewards.json_validity import reward_json_validity
-from rewards.rule_violation_accuracy import reward_rule_violation_accuracy
-from rewards.grounding_iou import reward_grounding_iou
-from rewards.caption_quality import reward_caption_quality
-from rewards.attribute_accuracy import reward_attribute_accuracy
+from rewards.unified_reward import compute_reward, DEFAULT_WEIGHTS
 
 logger = get_logger(__name__)
 
-REWARD_FN_MAP = {
-    "json_validity": reward_json_validity,
-    "rule_violation_accuracy": reward_rule_violation_accuracy,
-    "grounding_iou": reward_grounding_iou,
-    "caption_quality": reward_caption_quality,
-    "attribute_accuracy": reward_attribute_accuracy,
-}
 
+def _build_grpo_reward_fn(
+    weights: Dict[str, float],
+) -> Callable[[List[str], List[Dict]], List[float]]:
+    """Build a single reward function for GRPOTrainer.
 
-def build_reward_functions(task_cfg: dict) -> List[Callable]:
-    weights = task_cfg["reward_weights"]
-    fns = []
-    for name, weight in weights.items():
-        base_fn = REWARD_FN_MAP[name]
+    TRL's GRPOTrainer expects reward functions with signature:
+        (completions: List[str], **kwargs) -> List[float]
 
-        def weighted_fn(completions, base_fn=base_fn, weight=weight, **kwargs):
-            scores = base_fn(completions, **kwargs)
-            return [s * weight for s in scores]
+    where kwargs includes ground_truth (list of dicts aligned with
+    completions). We wrap our unified compute_reward to match.
 
-        weighted_fn.__name__ = f"reward_{name}"
-        fns.append(weighted_fn)
-    return fns
+    Args:
+        weights: Per-component reward weights.
+
+    Returns:
+        A callable matching the GRPOTrainer reward function interface.
+    """
+
+    def unified_reward_fn(
+        completions: List[str],
+        ground_truth: List[Dict] = None,
+        **kwargs,
+    ) -> List[float]:
+        if ground_truth is None:
+            return [0.0] * len(completions)
+
+        scores = []
+        for completion, gt in zip(completions, ground_truth):
+            score = compute_reward(completion, gt, weights=weights)
+            scores.append(score)
+        return scores
+
+    unified_reward_fn.__name__ = "reward_unified"
+    return unified_reward_fn
 
 
 def run_grpo(task: str, model_id: str, variant_name: str = "grpo_v1") -> str:
+    """Run GRPO training for the unified safety inspection task.
+
+    Args:
+        task: Task name (e.g. "full_unified").
+        model_id: Model registry ID to fine-tune.
+        variant_name: Name for the output variant.
+
+    Returns:
+        Path to the saved checkpoint directory.
+    """
     cfg = load_config(task=task, training_kind="grpo")
     task_cfg = load_task_config(task)
     entry = get_model_entry(model_id)
@@ -60,6 +82,13 @@ def run_grpo(task: str, model_id: str, variant_name: str = "grpo_v1") -> str:
         from peft import PeftModel
         model = PeftModel.from_pretrained(model, lora_path, is_trainable=True)
 
+    # Build reward weights from task config, falling back to defaults
+    config_weights = task_cfg.get("reward_weights", {})
+    weights = dict(DEFAULT_WEIGHTS)
+    weights.update(config_weights)
+
+    logger.info(f"Reward weights: {weights}")
+
     logger.info("Building GRPO prompt dataset...")
     raw_dataset = load_construction_dataset()
     grpo_prompts = [to_grpo_prompt(raw, task, task_cfg) for raw in raw_dataset["train"]]
@@ -72,7 +101,7 @@ def run_grpo(task: str, model_id: str, variant_name: str = "grpo_v1") -> str:
         for p in grpo_prompts
     ]
 
-    reward_funcs = build_reward_functions(task_cfg)
+    reward_fn = _build_grpo_reward_fn(weights)
 
     output_dir = checkpoint_path(task, variant_name)
     ensure_dir(output_dir)
@@ -98,11 +127,14 @@ def run_grpo(task: str, model_id: str, variant_name: str = "grpo_v1") -> str:
         model=model,
         args=grpo_config,
         train_dataset=train_data,
-        reward_funcs=reward_funcs,
+        reward_funcs=[reward_fn],
         tokenizer=tokenizer,
     )
 
-    logger.info(f"Starting GRPO training: task={task}, model_id={model_id}, variant={variant_name}")
+    logger.info(
+        f"Starting GRPO training: task={task}, model_id={model_id}, "
+        f"variant={variant_name}"
+    )
     trainer.train()
 
     logger.info(f"Saving adapter to {output_dir}")

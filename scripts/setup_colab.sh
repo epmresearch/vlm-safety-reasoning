@@ -30,6 +30,12 @@ else
     cd "$REPO_DIR"
 fi
 
+echo ">>> Installing unsloth..."
+pip install "unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git"
+
+echo ">>> Installing dependencies..."
+pip install --no-deps "xformers<0.0.27" "trl<0.9.0" peft accelerate bitsandbytes
+
 echo ">>> Installing requirements..."
 pip install -q -r requirements.txt
 
