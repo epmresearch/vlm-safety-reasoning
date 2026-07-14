@@ -45,6 +45,9 @@ def main():
     else:
         print(f"  skip (exists): {env_path}")
 
+    # --- notebooks/ ---
+    ensure_dir(root / "notebooks")
+
     # --- dataset cache/ ---
     ensure_dir(root / "datasets" / "raw")
 
