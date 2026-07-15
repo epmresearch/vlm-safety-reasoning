@@ -6,7 +6,7 @@ Provides two loading functions:
   - load_dataset_splits(): Returns train/val/test with a validation split
     carved from training data (250 samples, seed=42).
 """
-from datasets import load_dataset, load_from_disk, DatasetDict
+from datasets import load_dataset, load_from_disk, DatasetDict, ClassLabel
 from pathlib import Path
 from core.config import load_base_config
 from core.constants import VALIDATION_SPLIT_SIZE, VALIDATION_SPLIT_SEED
@@ -48,29 +48,45 @@ def create_stratified_val_split(hf_dataset, val_size: float = 0.1, seed: int = 4
     Uses the rarest class present in each sample to create strata.
     """
     logger.info("Computing strata for balanced train/val split...")
-    
+
+    # Exclude "image" so .map() never decodes PIL images for this computation —
+    # this is what was making it take 8+ minutes instead of a few seconds.
+    cols_needed = [c for c in hf_dataset.column_names if c != "image"]
+
     def add_stratum(batch):
         strata = []
-        for i in range(len(batch["image_id"])):
-            # Reconstruct a single sample dict for the helper
+        num_rows = len(next(iter(batch.values())))
+        for i in range(num_rows):
             sample = {k: v[i] for k, v in batch.items()}
             strata.append(_compute_stratum(sample))
         return {"stratum": strata}
 
-    # Add the stratum column (batched for speed)
-    stratified_ds = hf_dataset.map(add_stratum, batched=True, desc="Adding strata")
-    
+    stratified_ds = hf_dataset.map(
+        add_stratum,
+        batched=True,
+        desc="Adding strata",
+        input_columns=cols_needed,
+    )
+
+    # train_test_split's stratify_by_column requires a ClassLabel feature,
+    # not a plain int (Value) column — cast it explicitly, or it raises:
+    # "Stratifying by column is only supported for ClassLabel column"
+    num_strata = 8  # matches _compute_stratum()'s return range (0-7)
+    stratified_ds = stratified_ds.cast_column(
+        "stratum", ClassLabel(names=[str(i) for i in range(num_strata)])
+    )
+
     # Perform the stratified split
     splits = stratified_ds.train_test_split(
-        test_size=val_size, 
+        test_size=val_size,
         stratify_by_column="stratum",
         seed=seed
     )
-    
+
     # Remove the stratum column so it doesn't pollute the dataset
     train_split = splits["train"].remove_columns(["stratum"])
     val_split = splits["test"].remove_columns(["stratum"])
-    
+
     logger.info(f"Stratified split complete: Train={len(train_split)}, Val={len(val_split)}")
     return train_split, val_split
 
