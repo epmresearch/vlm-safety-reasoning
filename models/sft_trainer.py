@@ -107,10 +107,10 @@ def run_sft_unified(
             )
 
     # Load model
-    model, tokenizer = load_model_for_training(
+    model, tokenizer, model_info = load_model_for_training(
         model_name=model_info["hf_path"],
         tier=tier,
-        sft_cfg=sft_cfg,
+        sft_cfg=sft_cfg
     )
 
     # Build SFTConfig

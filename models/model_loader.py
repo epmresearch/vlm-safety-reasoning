@@ -128,7 +128,7 @@ def load_model_for_training(
         else "all-linear",
     )
 
-    return model, tokenizer
+    return model, tokenizer, get_model_info(tier)
 
 
 def load_model_for_inference(
@@ -170,4 +170,4 @@ def load_model_for_inference(
     # Set to inference mode
     FastVisionModel.for_inference(model)
 
-    return model, tokenizer
+    return model, tokenizer, get_model_info(tier)
