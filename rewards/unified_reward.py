@@ -51,7 +51,7 @@ def compute_reward(
     Args:
         prediction: Raw model output string (with ```json fences).
         ground_truth: Ground truth dict with keys:
-            caption, detected_objects, safety_violations.
+            caption, rule_X_violation, and object classes.
         weights: Optional weight overrides. Keys must be a subset of
             DEFAULT_WEIGHTS. Missing keys use defaults.
 

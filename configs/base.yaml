@@ -8,6 +8,7 @@ seed: 42
 dataset:
   hf_repo: "LouisChen15/ConstructionSite"
   raw_cache_subdir: "datasets/raw"
+  cleaned_subdir: "datasets/raw_cleaned"
   processed_subdir: "datasets/processed"
 
 paths:

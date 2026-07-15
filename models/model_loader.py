@@ -66,7 +66,7 @@ def load_model_for_training(
 
     # Defaults if sft_cfg not provided
     load_in_4bit = True
-    max_seq_length = 2048
+    max_seq_length = 4096
     lora_r = 16
     lora_alpha = 16
     lora_dropout = 0
@@ -158,13 +158,13 @@ def load_model_for_inference(
         model, tokenizer = FastVisionModel.from_pretrained(
             adapter_path,
             load_in_4bit=True,
-            max_seq_length=2048,
+            max_seq_length=4096,
         )
     else:
         model, tokenizer = FastVisionModel.from_pretrained(
             model_name,
             load_in_4bit=True,
-            max_seq_length=2048,
+            max_seq_length=4096,
         )
 
     # Set to inference mode

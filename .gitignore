@@ -15,3 +15,5 @@ struct.md
 setup_project_structure.py
 cb.py
 cb.txt
+read.py
+codebase_dump.txt

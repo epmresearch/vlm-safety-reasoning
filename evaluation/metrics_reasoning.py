@@ -11,6 +11,7 @@ Dimensions (0-2 each, total 0-6):
 """
 from typing import Any, Dict, List, Tuple
 import torch
+from tqdm import tqdm
 
 from core.logging import get_logger
 
@@ -126,8 +127,8 @@ def score_reasoning(
 def batch_score_reasoning(
     judge_model: Any, 
     judge_tokenizer: Any, 
-    pred_violations: List[List[Dict[str, Any]]], 
-    gt_violations: List[List[Dict[str, Any]]]
+    pred_violations: List[Dict[str, Any]], 
+    gt_violations: List[Dict[str, Any]]
 ) -> Dict[str, float]:
     """Batched reasoning evaluation for correctly identified violations."""
     if not judge_model:
@@ -135,13 +136,13 @@ def batch_score_reasoning(
         
     total_scores = []
     
-    from tqdm import tqdm
-    for pred_list, gt_list in tqdm(zip(pred_violations, gt_violations), desc="Judge Eval", total=len(pred_violations)):
-        pred_list = pred_list or []
-        gt_list = gt_list or []
+    for pred_dict, gt_dict in tqdm(zip(pred_violations, gt_violations), desc="Judge Eval", total=len(pred_violations)):
+        pred_dict = pred_dict or {}
+        gt_dict = gt_dict or {}
         
-        pred_by_rule = {v.get("rule_id"): v.get("reason", "") for v in pred_list if v.get("rule_id")}
-        gt_by_rule = {v.get("rule_id"): v.get("reason", "") for v in gt_list if v.get("rule_id")}
+        from core.constants import RULES
+        pred_by_rule = {r: pred_dict.get(f"{r}_violation", {}).get("reason", "") for r in RULES if pred_dict.get(f"{r}_violation")}
+        gt_by_rule = {r: gt_dict.get(f"{r}_violation", {}).get("reason", "") for r in RULES if gt_dict.get(f"{r}_violation")}
         
         common_rules = set(pred_by_rule.keys()) & set(gt_by_rule.keys())
         

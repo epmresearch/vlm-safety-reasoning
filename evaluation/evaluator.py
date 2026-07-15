@@ -14,7 +14,7 @@ from core.logging import get_logger
 
 logger = get_logger(__name__)
 
-def run_full_evaluation(raw_predictions: List[str], references: List[Dict[str, Any]]) -> Dict[str, Any]:
+def run_full_evaluation(raw_predictions: List[str], references: List[Dict[str, Any]], judge_model: Any = None, judge_tokenizer: Any = None) -> Dict[str, Any]:
     """
     Runs the complete evaluation pipeline.
     raw_predictions: list of raw string responses from the model.
@@ -32,11 +32,11 @@ def run_full_evaluation(raw_predictions: List[str], references: List[Dict[str, A
     pred_captions = [p.get("caption", "") if p else "" for p in parsed_preds]
     gt_captions = [r.get("caption", "") for r in references]
     
-    pred_objects = [p.get("detected_objects", {}) if p else {} for p in parsed_preds]
-    gt_objects = [r.get("detected_objects", {}) for r in references]
+    pred_objects = [p if p else {} for p in parsed_preds]
+    gt_objects = references
     
-    pred_violations = [p.get("safety_violations", []) if p else [] for p in parsed_preds]
-    gt_violations = [r.get("safety_violations", []) for r in references]
+    pred_violations = [p if p else {} for p in parsed_preds]
+    gt_violations = references
     
     # 2. Captioning metrics
     logger.info("Computing captioning metrics...")
@@ -52,7 +52,7 @@ def run_full_evaluation(raw_predictions: List[str], references: List[Dict[str, A
     
     # 5. Reasoning metrics
     logger.info("Computing reasoning metrics (LLM-as-a-Judge)...")
-    reasoning_metrics = batch_score_reasoning(pred_violations, gt_violations)
+    reasoning_metrics = batch_score_reasoning(judge_model, judge_tokenizer, pred_violations, gt_violations)
     
     # Combine all results
     all_metrics = {}

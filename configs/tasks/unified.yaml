@@ -6,7 +6,7 @@ output_fields: ["caption", "detected_objects", "safety_violations"]
 # No indentation, no extra whitespace. Single-line JSON body.
 output_format: "fenced_minimized_json"
 
-reward_weights:      # unused until GRPO phase; kept for forward-compatibility
+reward_weights:      # unused until GRPO phase;
   json_validity: 1.0
   caption_quality: 1.0
   rule_violation_accuracy: 2.0

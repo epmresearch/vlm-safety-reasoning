@@ -30,8 +30,7 @@ def _extract_pred_boxes(parsed: Dict[str, Any], cls_name: str) -> List[List[floa
 
     Predicted boxes are in [0, 1000] scale; converts to [0, 1].
     """
-    detected = parsed.get("detected_objects", {})
-    raw_boxes = detected.get(cls_name, [])
+    raw_boxes = parsed.get(cls_name, [])
     boxes = normalize_boxes(raw_boxes)
     scaled = [scale_1000_to_01(b) for b in boxes if len(b) == 4]
     return clean_boxes(scaled)
@@ -42,8 +41,7 @@ def _extract_gt_boxes(ground_truth: dict, cls_name: str) -> List[List[float]]:
 
     GT boxes are already in [0, 1] scale.
     """
-    detected = ground_truth.get("detected_objects", {})
-    raw_boxes = detected.get(cls_name, [])
+    raw_boxes = ground_truth.get(cls_name, [])
     return clean_boxes(normalize_boxes(raw_boxes))
 
 

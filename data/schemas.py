@@ -48,25 +48,16 @@ class RawSample(BaseModel):
 # What the VLM is trained to produce in a single JSON response.
 # ---------------------------------------------------------------------------
 
-class DetectedObjects(BaseModel):
-    """Bounding boxes for each grounding class."""
+class UnifiedOutput(BaseModel):
+    """The complete unified model output — one per image. Flat structure."""
+    caption: str
+    rule_1_violation: Optional[RuleViolation] = None
+    rule_2_violation: Optional[RuleViolation] = None
+    rule_3_violation: Optional[RuleViolation] = None
+    rule_4_violation: Optional[RuleViolation] = None
     excavator: List[BBox] = Field(default_factory=list)
     rebar: List[BBox] = Field(default_factory=list)
     worker_with_white_hard_hat: List[BBox] = Field(default_factory=list)
-
-
-class SafetyViolationEntry(BaseModel):
-    """A single safety rule violation with reasoning and localization."""
-    rule_id: str                          # "rule_1" | "rule_2" | "rule_3" | "rule_4"
-    reason: str
-    bounding_boxes: List[BBox] = Field(default_factory=list)
-
-
-class UnifiedOutput(BaseModel):
-    """The complete unified model output — one per image."""
-    caption: str
-    detected_objects: DetectedObjects
-    safety_violations: List[SafetyViolationEntry] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------

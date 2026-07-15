@@ -26,54 +26,30 @@ from core.logging import get_logger
 logger = get_logger(__name__)
 
 
-def _build_violations_list(raw: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """Extracts safety violations from raw sample, scaling boxes to [0,1000].
-
-    Rules with None value (no violation) are skipped.
-    Degenerate boxes are filtered by clean_boxes().
-    normalize_boxes() handles the flat [n,n,n,n] edge case.
-    """
-    violations = []
-    for i in range(1, 5):
-        v = raw.get(f"rule_{i}_violation")
-        if v is None:
-            continue
-        raw_boxes = v.get("bounding_box") if isinstance(v, dict) else None
-        boxes = clean_boxes(normalize_boxes(raw_boxes))
-        boxes_1000 = [scale_01_to_1000(b) for b in boxes]
-        violations.append({
-            "rule_id": f"rule_{i}",
-            "reason": (v.get("reason", "") if isinstance(v, dict) else "") or "",
-            "bounding_boxes": boxes_1000,
-        })
-    return violations
-
-
-def _build_detected_objects(raw: Dict[str, Any]) -> Dict[str, List[List[int]]]:
-    """Extracts detected objects from raw sample, scaling boxes to [0,1000].
-
-    Object classes with empty list [] are preserved as empty.
-    normalize_boxes() handles the flat [n,n,n,n] edge case.
-    """
-    detected = {}
-    for cls in GROUNDING_CLASSES:
-        raw_boxes = raw.get(cls, [])
-        boxes = clean_boxes(normalize_boxes(raw_boxes))
-        detected[cls] = [scale_01_to_1000(b) for b in boxes]
-    return detected
-
-
 def _build_target_json(raw: Dict[str, Any]) -> str:
     """Builds the minimized JSON target string wrapped in code fences.
 
-    Returns:
-        ```json\n{"caption":"...","detected_objects":{...},"safety_violations":[...]}\n```
+    Returns flat JSON with rule_X_violation and object keys at the root.
     """
-    target_dict = {
-        "caption": raw.get("image_caption", ""),
-        "detected_objects": _build_detected_objects(raw),
-        "safety_violations": _build_violations_list(raw),
-    }
+    target_dict = {"caption": raw.get("image_caption", "")}
+    
+    for i in range(1, 5):
+        v = raw.get(f"rule_{i}_violation")
+        if v is None:
+            target_dict[f"rule_{i}_violation"] = None
+        else:
+            raw_boxes = v.get("bounding_box") if isinstance(v, dict) else None
+            boxes = clean_boxes(normalize_boxes(raw_boxes))
+            target_dict[f"rule_{i}_violation"] = {
+                "reason": (v.get("reason", "") if isinstance(v, dict) else "") or "",
+                "bounding_box": [scale_01_to_1000(b) for b in boxes],
+            }
+            
+    for cls in GROUNDING_CLASSES:
+        raw_boxes = raw.get(cls, [])
+        boxes = clean_boxes(normalize_boxes(raw_boxes))
+        target_dict[cls] = [scale_01_to_1000(b) for b in boxes]
+        
     # Minimized: no indent, compact separators
     json_str = json.dumps(target_dict, separators=(",", ":"), ensure_ascii=False)
     return f"```json\n{json_str}\n```"
@@ -118,8 +94,6 @@ def build_unified_sft_dataset(
 ) -> List[Dict[str, Any]]:
     """Converts a full HF dataset split into a list of Unsloth conversation dicts.
 
-    Uses list comprehension (not .map()) per Unsloth docs for vision training.
-
     Args:
         hf_dataset: A HuggingFace Dataset split (train or val).
         max_samples: Optional cap on number of samples (for debugging).
@@ -157,32 +131,29 @@ def build_ground_truth_dict(raw: Dict[str, Any]) -> Dict[str, Any]:
     Returns the same structure as the model output but with ground-truth values.
     Boxes remain in dataset [0,1] scale (evaluation handles scale conversion).
     """
-    violations = []
-    for i in range(1, 5):
-        v = raw.get(f"rule_{i}_violation")
-        if v is None:
-            continue
-        raw_boxes = v.get("bounding_box") if isinstance(v, dict) else None
-        boxes = clean_boxes(normalize_boxes(raw_boxes))
-        violations.append({
-            "rule_id": f"rule_{i}",
-            "reason": (v.get("reason", "") if isinstance(v, dict) else "") or "",
-            "bounding_boxes": [list(b) for b in boxes],
-        })
-
-    detected = {}
-    for cls in GROUNDING_CLASSES:
-        raw_boxes = raw.get(cls, [])
-        boxes = clean_boxes(normalize_boxes(raw_boxes))
-        detected[cls] = [list(b) for b in boxes]
-
-    return {
+    gt = {
         "caption": raw.get("image_caption", ""),
-        "detected_objects": detected,
-        "safety_violations": violations,
-        # Metadata for stratified evaluation
         "illumination": raw.get("illumination", ""),
         "camera_distance": raw.get("camera_distance", ""),
         "view": raw.get("view", ""),
         "quality_of_info": raw.get("quality_of_info", ""),
     }
+    
+    for i in range(1, 5):
+        v = raw.get(f"rule_{i}_violation")
+        if v is None:
+            gt[f"rule_{i}_violation"] = None
+        else:
+            raw_boxes = v.get("bounding_box") if isinstance(v, dict) else None
+            boxes = clean_boxes(normalize_boxes(raw_boxes))
+            gt[f"rule_{i}_violation"] = {
+                "reason": (v.get("reason", "") if isinstance(v, dict) else "") or "",
+                "bounding_box": [list(b) for b in boxes],
+            }
+            
+    for cls in GROUNDING_CLASSES:
+        raw_boxes = raw.get(cls, [])
+        boxes = clean_boxes(normalize_boxes(raw_boxes))
+        gt[cls] = [list(b) for b in boxes]
+        
+    return gt

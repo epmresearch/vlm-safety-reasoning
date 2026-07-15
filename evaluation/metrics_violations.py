@@ -10,11 +10,11 @@ from core.logging import get_logger
 
 logger = get_logger(__name__)
 
-def compute_violation_metrics(predictions: List[List[Dict[str, Any]]], references: List[List[Dict[str, Any]]]) -> Dict[str, float]:
+def compute_violation_metrics(predictions: List[Dict[str, Any]], references: List[Dict[str, Any]]) -> Dict[str, float]:
     """
     Computes rule identification (F1, Precision, Recall) and grounding IoU for safety violations.
-    predictions: List of safety_violations (each is a list of SafetyViolationEntry dicts).
-    references: List of safety_violations (each is a list of SafetyViolationEntry dicts).
+    predictions: List of flat output dictionaries.
+    references: List of flat output dictionaries.
     """
     if not predictions or not references or len(predictions) != len(references):
         return {}
@@ -27,15 +27,25 @@ def compute_violation_metrics(predictions: List[List[Dict[str, Any]]], reference
     
     iou_scores = []
     
-    for pred_list, gt_list in zip(predictions, references):
-        pred_list = pred_list or []
-        gt_list = gt_list or []
+    for pred_dict, gt_dict in zip(predictions, references):
+        pred_dict = pred_dict or {}
+        gt_dict = gt_dict or {}
         
-        pred_by_rule = {v.get("rule_id"): v for v in pred_list if v.get("rule_id")}
-        gt_by_rule = {v.get("rule_id"): v for v in gt_list if v.get("rule_id")}
+        pred_rules = set()
+        pred_by_rule = {}
+        gt_rules = set()
+        gt_by_rule = {}
         
-        pred_rules: Set[str] = set(pred_by_rule.keys())
-        gt_rules: Set[str] = set(gt_by_rule.keys())
+        for r in RULES:
+            p_v = pred_dict.get(f"{r}_violation")
+            if p_v:
+                pred_rules.add(r)
+                pred_by_rule[r] = p_v
+                
+            g_v = gt_dict.get(f"{r}_violation")
+            if g_v:
+                gt_rules.add(r)
+                gt_by_rule[r] = g_v
         
         # Global counts
         tp = len(pred_rules & gt_rules)
@@ -59,8 +69,8 @@ def compute_violation_metrics(predictions: List[List[Dict[str, Any]]], reference
         # Grounding IoU for correctly identified rules
         common_rules = pred_rules & gt_rules
         for r in common_rules:
-            pred_boxes_1000 = pred_by_rule[r].get("bounding_boxes", [])
-            gt_boxes_01 = gt_by_rule[r].get("bounding_boxes", [])
+            pred_boxes_1000 = pred_by_rule[r].get("bounding_box", [])
+            gt_boxes_01 = gt_by_rule[r].get("bounding_box", [])
             
             pred_boxes_1000 = clean_boxes(pred_boxes_1000)
             gt_boxes_01 = clean_boxes(gt_boxes_01)

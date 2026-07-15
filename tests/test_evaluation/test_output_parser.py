@@ -6,26 +6,22 @@ def test_parse_valid_json():
 ```json
 {
   "caption": "A construction site",
-  "detected_objects": [
-    {"class_name": "helmet", "bbox": [0, 0, 10, 10]}
-  ],
-  "safety_violations": []
+  "excavator": [[0, 0, 10, 10]],
+  "rule_1_violation": {"bounding_box": [[0, 0, 10, 10]], "reason": "reason"}
 }
 ```
 '''
     parsed = parse_model_output(raw_output)
-    assert parsed.is_valid_json is True
-    assert parsed.caption == "A construction site"
-    assert len(parsed.detected_objects) == 1
-    assert len(parsed.safety_violations) == 0
+    assert parsed is not None
+    assert parsed.get("caption") == "A construction site"
+    assert len(parsed.get("excavator", [])) == 1
+    assert parsed.get("rule_1_violation") is not None
 
 def test_parse_invalid_json():
     raw_output = '''```json
 {
   "caption": "A construction site",
-  "detected_objects": [
+  "excavator": [
 '''
     parsed = parse_model_output(raw_output)
-    assert parsed.is_valid_json is False
-    assert parsed.caption == ""
-    assert len(parsed.detected_objects) == 0
+    assert parsed is None

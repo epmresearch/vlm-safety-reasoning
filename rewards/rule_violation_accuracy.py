@@ -18,29 +18,20 @@ logger = get_logger(__name__)
 
 def _extract_pred_rule_ids(parsed: Dict[str, Any]) -> Set[str]:
     """Extract the set of predicted rule IDs from parsed output."""
-    violations = parsed.get("safety_violations", [])
-    if not isinstance(violations, list):
-        return set()
-    return {
-        v.get("rule_id")
-        for v in violations
-        if isinstance(v, dict) and v.get("rule_id") in RULES
-    }
+    predicted = set()
+    for r in RULES:
+        if parsed.get(f"{r}_violation"):
+            predicted.add(r)
+    return predicted
 
 
 def _extract_gt_rule_ids(ground_truth: dict) -> Set[str]:
-    """Extract the set of ground truth rule IDs.
-
-    Ground truth safety_violations is a list of dicts with rule_id keys.
-    """
-    violations = ground_truth.get("safety_violations", [])
-    if not isinstance(violations, list):
-        return set()
-    return {
-        v.get("rule_id")
-        for v in violations
-        if isinstance(v, dict) and v.get("rule_id") in RULES
-    }
+    """Extract the set of ground truth rule IDs."""
+    predicted = set()
+    for r in RULES:
+        if ground_truth.get(f"{r}_violation"):
+            predicted.add(r)
+    return predicted
 
 
 def _multi_label_f1(pred_ids: Set[str], gt_ids: Set[str]) -> float:
