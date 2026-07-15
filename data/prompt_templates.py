@@ -7,21 +7,21 @@ detection + safety violation analysis in a single pass and respond with
 a minimized JSON code block.
 """
 
+
 # ---------------------------------------------------------------------------
 # System Prompt
 # ---------------------------------------------------------------------------
-
 SYSTEM_PROMPT = (
-    "You are an expert AI construction safety inspector. Analyze the provided "
-    "construction site image and perform a full inspection in a single pass. "
-    "Always respond with a JSON code block (```json ... ```) containing your "
-    "analysis. Do not include any text outside the code block."
+    "You are an expert AI construction safety inspector. Analyze the "
+    "construction site image and output a single JSON code block containing "
+    "your full inspection. You must strictly adhere to the requested JSON schema. "
+    "Absolutely no conversational text, preambles, or explanations outside the "
+    "```json ... ``` fences."
 )
 
 # ---------------------------------------------------------------------------
 # Unified Inspection Prompt (user turn)
 # ---------------------------------------------------------------------------
-
 UNIFIED_INSPECTION_PROMPT = (
     "Perform a full site inspection of this construction image. Your response "
     "must include ALL of the following in a single JSON object:\n\n"
@@ -31,8 +31,10 @@ UNIFIED_INSPECTION_PROMPT = (
     "   - excavator\n"
     "   - rebar\n"
     "   - worker_with_white_hard_hat\n"
-    "   If a class has no instances, return an empty list for it.\n\n"
-    "3. SAFETY VIOLATIONS — evaluate the image against ALL four rules. You must include an entry for EVERY rule:\n"
+    "   If an object class is absent, return an empty array []. All bounding box "
+    "coordinates must be in [xmin, ymin, xmax, ymax] format scaled from 0 to 1000.\n\n"
+    "3. SAFETY VIOLATIONS — evaluate the image against ALL four rules. You must "
+    "include an entry for EVERY rule:\n"
     "   Rule 1: Use of basic PPE when on foot (hard hats, appropriate clothing, "
     "closed-toe shoes, high-visibility vests at night, face protection for "
     "cutting/welding/grinding/drilling).\n"
@@ -41,8 +43,9 @@ UNIFIED_INSPECTION_PROMPT = (
     "   Rule 3: Edge protection/warning for underground projects >3 meters deep "
     "with steep retaining walls.\n"
     "   Rule 4: Worker appearing in an excavator's blind spot or operation radius.\n"
-    "   For each rule, if it is violated, output an object with 'reason' (1-2 sentences) and "
-    "'bounding_box' (list of boxes). If a rule is NOT violated, output null for that rule.\n\n"
+    "   For each rule, if it is violated, output an object with 'reason' (1-2 "
+    "sentences) and 'bounding_box' (list of boxes). If a rule is NOT violated, "
+    "the value must be strictly null (not a string, not an empty object).\n\n"
     "Respond with a ```json code block in this exact JSON format:\n"
     '{"caption":"your detailed caption",\n'
     '"rule_1_violation":{"bounding_box":[[xmin,ymin,xmax,ymax],...], "reason":"1-2 sentences"},\n'
@@ -54,6 +57,7 @@ UNIFIED_INSPECTION_PROMPT = (
     '"worker_with_white_hard_hat":[[xmin,ymin,xmax,ymax],...]\n'
     "}"
 )
+
 
 # ---------------------------------------------------------------------------
 # Prompt Registry — maps config prompt_key to actual template
