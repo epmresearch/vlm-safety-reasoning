@@ -8,7 +8,8 @@ import json
 from core.constants import DEFAULT_MODEL_TIER
 from core.io import get_drive_path, ensure_dir
 from core.logging import get_logger
-from data.loader import load_dataset_splits
+from data.loader import load_processed_dataset
+from data.preprocessor import build_ground_truth_dict
 from models.model_loader import load_model_for_inference
 from models.inference import run_inference
 from evaluation.evaluator import run_full_evaluation
@@ -23,7 +24,7 @@ def main():
 
     # Load dataset
     logger.info("Loading unified dataset...")
-    splits = load_dataset_splits()
+    splits = load_processed_dataset()
     test_data = splits["test"]
     if args.max_samples:
         test_data = test_data.select(range(args.max_samples))
@@ -43,7 +44,7 @@ def main():
 
     # Prepare for evaluation
     raw_predictions = [res["raw_output"] for res in results]
-    references = list(test_data)
+    references = [build_ground_truth_dict(r) for r in test_data]
     
     # Run evaluation
     logger.info("Running evaluation...")

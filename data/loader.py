@@ -166,7 +166,30 @@ def load_dataset_splits(
     }
 
 
+def load_processed_dataset() -> DatasetDict:
+    """Loads the fully processed, stratified, and conversational dataset
+    from the processed_subdir. This should be used for all training
+    and baseline inference steps.
+    """
+    base_cfg = load_base_config()
+    processed_path = get_drive_path(base_cfg["dataset"].get("processed_subdir", "datasets/processed"))
+
+    if not Path(processed_path).exists():
+        raise FileNotFoundError(
+            f"No processed dataset found at {processed_path}. "
+            f"Please run your data prep notebook to save the dataset first."
+        )
+
+    logger.info(f"Loading fully processed dataset from disk: {processed_path}")
+    dataset = load_from_disk(str(processed_path))
+
+    for split_name in dataset.keys():
+        logger.info(f"Loaded processed '{split_name}' split: {len(dataset[split_name])} samples")
+
+    return dataset
+
+
 if __name__ == "__main__":
-    splits = load_dataset_splits()
+    splits = load_processed_dataset()
     for name, split in splits.items():
         print(f"{name}: {len(split)} samples")
