@@ -26,12 +26,17 @@ def normalize_boxes(raw_boxes: Optional[Union[list, None]]) -> List[List[float]]
         [x1,y1,x2,y2]      → [[x1,y1,x2,y2]]   (flat single-box)
         [[x1,y1,x2,y2],..] → [[x1,y1,x2,y2],..]  (already correct)
     """
-    if raw_boxes is None or raw_boxes == []:
+    if not isinstance(raw_boxes, list) or len(raw_boxes) == 0:
         return []
     # If first element is a number, it's a flat single-box
     if isinstance(raw_boxes[0], (int, float)):
         return [list(raw_boxes)]
-    return [list(b) for b in raw_boxes]
+        
+    valid_boxes = []
+    for b in raw_boxes:
+        if isinstance(b, (list, tuple)):
+            valid_boxes.append(list(b))
+    return valid_boxes
 
 
 # ---------------------------------------------------------------------------
@@ -40,11 +45,19 @@ def normalize_boxes(raw_boxes: Optional[Union[list, None]]) -> List[List[float]]
 
 def is_valid_box(box: Optional[BBox], min_dim: float = 1e-4) -> bool:
     """Filters degenerate (zero-area) or out-of-range boxes."""
-    if box is None or len(box) != 4:
+    if box is None or not isinstance(box, (list, tuple)) or len(box) != 4:
         return False
+        
+    # Guard against hallucinated non-numeric types (e.g., strings from bad JSON)
+    if not all(isinstance(c, (int, float)) for c in box):
+        return False
+        
     xmin, ymin, xmax, ymax = box
-    if not all(-1e-6 <= c <= 1 + 1e-6 for c in box):
+    
+    # We allow up to 1000 + epsilon to accommodate BOTH [0, 1] and [0, 1000] scale boxes
+    if not all(-1e-6 <= c <= 1000 + 1e-6 for c in box):
         return False
+        
     return (xmax - xmin) > min_dim and (ymax - ymin) > min_dim
 
 

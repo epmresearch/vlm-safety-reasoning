@@ -64,7 +64,7 @@ def generate_single(
 
     # Tokenize
     inputs = tokenizer(
-        text,
+        text=text,
         images=image_inputs,
         videos=video_inputs,
         return_tensors="pt",

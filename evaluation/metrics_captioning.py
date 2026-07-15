@@ -73,9 +73,13 @@ def compute_all_caption_metrics(predictions: List[str], references: List[str]) -
     if not predictions or not references or len(predictions) != len(references):
         return {}
         
+    # Sanitize empty strings to avoid tokenizer crashes in underlying metric libraries (like bert_score)
+    clean_preds = [p if p and str(p).strip() else "empty" for p in predictions]
+    clean_refs = [r if r and str(r).strip() else "empty" for r in references]
+        
     results = {}
-    results.update(compute_bertscore(predictions, references))
-    results.update(compute_meteor(predictions, references))
-    results.update(compute_cider(predictions, references))
+    results.update(compute_bertscore(clean_preds, clean_refs))
+    results.update(compute_meteor(clean_preds, clean_refs))
+    results.update(compute_cider(clean_preds, clean_refs))
     
     return results
