@@ -49,13 +49,12 @@ def create_stratified_val_split(hf_dataset, val_size: float = 0.1, seed: int = 4
     """
     logger.info("Computing strata for balanced train/val split...")
 
-    # Exclude "image" so .map() never decodes PIL images for this computation —
-    # this is what was making it take 8+ minutes instead of a few seconds.
     cols_needed = [c for c in hf_dataset.column_names if c != "image"]
 
-    def add_stratum(batch):
+    def add_stratum(*columns):
+        batch = dict(zip(cols_needed, columns))
+        num_rows = len(columns[0])
         strata = []
-        num_rows = len(next(iter(batch.values())))
         for i in range(num_rows):
             sample = {k: v[i] for k, v in batch.items()}
             strata.append(_compute_stratum(sample))
@@ -68,9 +67,6 @@ def create_stratified_val_split(hf_dataset, val_size: float = 0.1, seed: int = 4
         input_columns=cols_needed,
     )
 
-    # train_test_split's stratify_by_column requires a ClassLabel feature,
-    # not a plain int (Value) column — cast it explicitly, or it raises:
-    # "Stratifying by column is only supported for ClassLabel column"
     num_strata = 8  # matches _compute_stratum()'s return range (0-7)
     stratified_ds = stratified_ds.cast_column(
         "stratum", ClassLabel(names=[str(i) for i in range(num_strata)])
@@ -83,7 +79,6 @@ def create_stratified_val_split(hf_dataset, val_size: float = 0.1, seed: int = 4
         seed=seed
     )
 
-    # Remove the stratum column so it doesn't pollute the dataset
     train_split = splits["train"].remove_columns(["stratum"])
     val_split = splits["test"].remove_columns(["stratum"])
 
