@@ -53,7 +53,7 @@ def run_full_evaluation(raw_predictions: List[str], references: List[Dict[str, A
     
     # 5. Reasoning metrics
     logger.info("Computing reasoning metrics (Captioning Suite)...")
-    reasoning_metrics = batch_score_reasoning(pred_violations, gt_violations, images=images)
+    reasoning_metrics = batch_score_reasoning(pred_violations, gt_violations)
     
     # Combine all results
     all_metrics = {}

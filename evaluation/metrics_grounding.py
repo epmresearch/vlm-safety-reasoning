@@ -51,7 +51,7 @@ def compute_grounding_metrics(predictions: List[Dict[str, Any]], references: Lis
                 scaled_box = scale_1000_to_01(box)
                 pred_boxes_01.append(scaled_box)
             
-            # Compute multi-box IoU (our updated function handles TN, FP, FN properly)
+            # Compute multi-box IoU
             iou, total_inter, total_union = greedy_multibox_iou(pred_boxes_01, gt_boxes_01)
                 
             # Total IoU includes all cases (including TN=1.0, FP=0.0, FN=0.0)

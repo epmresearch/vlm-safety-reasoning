@@ -136,8 +136,7 @@ def compute_clipscore(predictions: List[str], images: List[Any]) -> Dict[str, fl
             text_embeds = text_embeds / text_embeds.norm(p=2, dim=-1, keepdim=True)
             
             cos_sim = torch.matmul(image_embeds, text_embeds.t()).item()
-            # The paper uses weight w=2.5 and reports it out of 100.
-            clipscore = max(0.0, 2.5 * cos_sim) * 100.0
+            clipscore = max(0.0, 2.5 * cos_sim)
             scores.append(clipscore)
             
         return {"clipscore": sum(scores) / len(scores) if scores else 0.0}

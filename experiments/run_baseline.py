@@ -44,7 +44,8 @@ def main():
 
     raw_predictions = [res["raw_output"] for res in results]
     references = [build_ground_truth_dict(res["sample"]) for res in results]
-    images = [res["sample"]["image"] for res in results] if "image" in results[0]["sample"] else None
+    # inference.py strips the image to save RAM, so we pull it directly from the dataset split
+    images = test_data["image"] if "image" in test_data.column_names else None
     
     # Run evaluation
     logger.info("Running evaluation...")
@@ -53,8 +54,23 @@ def main():
     # Save results
     output_dir = ensure_dir(get_drive_path("results", model_info["short_name"], "baseline"))
     
+    # Save aggregated metrics
     with open(output_dir / "metrics.json", "w") as f:
-        json.dump(eval_results, f, indent=2)
+        json.dump(eval_results["metrics"], f, indent=2)
+        
+    # Save the raw predictions, latency, and parsing data so you can analyze it later
+    inference_log = []
+    for i, res in enumerate(results):
+        inference_log.append({
+            "image_id": res["image_id"],
+            "raw_output": res["raw_output"],
+            "latency_seconds": res.get("latency_seconds", 0.0),
+            "parsed_output": eval_results["parsed_predictions"][i],
+            "ground_truth": references[i]
+        })
+        
+    with open(output_dir / "predictions.json", "w") as f:
+        json.dump(inference_log, f, indent=2)
         
     logger.info(f"Baseline run complete. Results saved to {output_dir}")
 
