@@ -136,7 +136,7 @@ def run_sft_unified(
         metric_for_best_model=sft_cfg.get("metric_for_best_model", "eval_loss"),
         greater_is_better=sft_cfg.get("greater_is_better", False),
         bf16=sft_cfg.get("bf16", True),
-        max_seq_length=sft_cfg.get("max_seq_length", 2048),
+        max_seq_length=sft_cfg.get("max_seq_length", 4096),
         seed=base_cfg.get("seed", 42),
         report_to=["wandb"],
         run_name=run_name,

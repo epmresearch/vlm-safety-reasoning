@@ -5,7 +5,7 @@ num_train_epochs: 3
 learning_rate: 2.0e-4
 warmup_ratio: 0.03
 weight_decay: 0.01
-max_seq_length: 2048
+max_seq_length: 8192
 load_in_4bit: true
 
 # Logging & checkpointing

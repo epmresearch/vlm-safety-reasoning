@@ -110,3 +110,4 @@ VALIDATION_SPLIT_SEED = 42
 # Generation
 # ---------------------------------------------------------------------------
 MAX_NEW_TOKENS_UNIFIED = 700
+DEFAULT_MAX_SEQ_LENGTH = 8192

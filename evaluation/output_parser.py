@@ -33,7 +33,7 @@ def parse_model_output(raw_str: str) -> Optional[Dict[str, Any]]:
         parsed = json.loads(text)
         return parsed
     except json.JSONDecodeError as e:
-        logger.warning(f"Failed to parse JSON: {e}")
+        logger.debug(f"Failed to parse JSON: {e}")
         return None
 
 def validate_unified_output(parsed_data: Dict[str, Any]) -> Optional[UnifiedOutput]:
@@ -45,5 +45,5 @@ def validate_unified_output(parsed_data: Dict[str, Any]) -> Optional[UnifiedOutp
     try:
         return UnifiedOutput(**parsed_data)
     except Exception as e:
-        logger.warning(f"Failed to validate UnifiedOutput schema: {e}")
+        logger.debug(f"Failed to validate UnifiedOutput schema: {e}")
         return None

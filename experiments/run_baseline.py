@@ -20,6 +20,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--tier", default=DEFAULT_MODEL_TIER, help="Model tier (e.g., 2b, 4b, 8b)")
     parser.add_argument("--max_samples", type=int, default=None, help="Limit number of test samples")
+    parser.add_argument("--max_seq_length", type=int, default=8192, help="Max sequence length for inference")
     args = parser.parse_args()
 
     # Load dataset
@@ -31,7 +32,10 @@ def main():
 
     # Load base model
     logger.info(f"Loading baseline model for tier: {args.tier}...")
-    model, tokenizer, model_info = load_model_for_inference(tier=args.tier)
+    model, tokenizer, model_info = load_model_for_inference(
+        tier=args.tier,
+        max_seq_length=args.max_seq_length
+    )
 
     # Run inference
     logger.info("Running baseline inference...")

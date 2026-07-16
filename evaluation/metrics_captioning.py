@@ -1,7 +1,7 @@
 """
 Metrics for image captioning evaluation.
 """
-from typing import Dict, List
+from typing import Dict, List, Any
 import logging
 
 from core.logging import get_logger
@@ -14,7 +14,17 @@ def compute_bertscore(predictions: List[str], references: List[str]) -> Dict[str
     Requires bert-score package.
     """
     try:
+        import transformers
+        from transformers import RobertaTokenizer
         from bert_score import score
+        
+        # Suppress massive huggingface download/loading logs
+        transformers.utils.logging.set_verbosity_error()
+        
+        # Patch for bert_score incompatibility with newer transformers versions
+        if not hasattr(RobertaTokenizer, "build_inputs_with_special_tokens"):
+            RobertaTokenizer.build_inputs_with_special_tokens = lambda self, t0, t1=None: [self.cls_token_id] + t0 + [self.sep_token_id]
+            
         P, R, F1 = score(predictions, references, lang="en", verbose=False, rescale_with_baseline=True)
         return {
             "bertscore_precision": P.mean().item(),
@@ -22,7 +32,7 @@ def compute_bertscore(predictions: List[str], references: List[str]) -> Dict[str
             "bertscore_f1": F1.mean().item(),
         }
     except ImportError:
-        logger.warning("bert_score not installed. Skipping BERTScore.")
+        logger.warning("bert_score or transformers not installed. Skipping BERTScore.")
         return {}
 
 def compute_meteor(predictions: List[str], references: List[str]) -> Dict[str, float]:

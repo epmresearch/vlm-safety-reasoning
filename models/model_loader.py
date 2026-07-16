@@ -6,7 +6,7 @@ with frozen vision encoder.
 """
 from typing import Any, Dict, Optional, Tuple
 
-from core.constants import MODEL_TIERS, MODEL_BATCH_CONFIGS, DEFAULT_MODEL_TIER
+from core.constants import MODEL_TIERS, MODEL_BATCH_CONFIGS, DEFAULT_MODEL_TIER, DEFAULT_MAX_SEQ_LENGTH
 from core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -135,6 +135,7 @@ def load_model_for_inference(
     model_name: Optional[str] = None,
     tier: str = DEFAULT_MODEL_TIER,
     adapter_path: Optional[str] = None,
+    max_seq_length: int = DEFAULT_MAX_SEQ_LENGTH,
 ) -> Tuple:
     """Loads a model for inference (with optional LoRA adapter).
 
@@ -142,6 +143,7 @@ def load_model_for_inference(
         model_name: HuggingFace model path. If None, uses tier lookup.
         tier: Model tier.
         adapter_path: Path to saved LoRA adapter. If None, loads base model.
+        max_seq_length: Maximum sequence length for the model.
 
     Returns:
         Tuple of (model, tokenizer).
@@ -151,20 +153,20 @@ def load_model_for_inference(
     if model_name is None:
         model_name = get_model_info(tier)["hf_path"]
 
-    logger.info(f"Loading model for inference: {model_name}")
+    logger.info(f"Loading model for inference: {model_name} with max_seq_length={max_seq_length}")
 
     if adapter_path:
         logger.info(f"Loading with adapter from: {adapter_path}")
         model, tokenizer = FastVisionModel.from_pretrained(
             adapter_path,
             load_in_4bit=True,
-            max_seq_length=4096,
+            max_seq_length=max_seq_length,
         )
     else:
         model, tokenizer = FastVisionModel.from_pretrained(
             model_name,
             load_in_4bit=True,
-            max_seq_length=4096,
+            max_seq_length=max_seq_length,
         )
 
     # Set to inference mode
