@@ -86,13 +86,14 @@ def scale_1000_to_01(box_1000: BBox) -> List[float]:
 # IoU computation
 # ---------------------------------------------------------------------------
 
-def compute_iou(box_a: Optional[BBox], box_b: Optional[BBox]) -> float:
+def compute_iou(box_a: Optional[BBox], box_b: Optional[BBox]) -> Tuple[float, float, float]:
     """Computes IoU between two boxes [xmin, ymin, xmax, ymax].
 
     Both boxes must be in the same scale (either [0,1] or [0,1000]).
+    Returns (iou, inter_area, union_area).
     """
     if box_a is None or box_b is None:
-        return 0.0
+        return 0.0, 0.0, 0.0
     xmin_a, ymin_a, xmax_a, ymax_a = box_a
     xmin_b, ymin_b, xmax_b, ymax_b = box_b
 
@@ -110,35 +111,55 @@ def compute_iou(box_a: Optional[BBox], box_b: Optional[BBox]) -> float:
     union = area_a + area_b - inter_area
 
     if union <= 0:
-        return 0.0
-    return inter_area / union
+        return 0.0, 0.0, 0.0
+    return inter_area / union, inter_area, union
 
 
-def greedy_multibox_iou(pred_boxes: List[BBox], gt_boxes: List[BBox]) -> float:
+def greedy_multibox_iou(pred_boxes: List[BBox], gt_boxes: List[BBox]) -> Tuple[float, float, float]:
     """Greedy multi-box IoU matching.
 
     Handles multi-violator / multi-object cases. Greedily matches each GT box
     to its best remaining predicted box; score = mean IoU over matched GT boxes.
 
-    Special cases:
-        No GT, no pred  → 1.0 (correctly predicted "nothing here")
-        No GT, some pred → 0.0 (false positive)
-        Some GT, no pred → 0.0 (missed everything)
+    Returns:
+        (mean_iou, total_inter_area, total_union_area)
     """
     if not gt_boxes and not pred_boxes:
-        return 1.0
-    if not gt_boxes or not pred_boxes:
-        return 0.0
+        return 1.0, 0.0, 0.0
+    if not gt_boxes:
+        # False Positives
+        union_sum = sum(max(0.0, b[2]-b[0]) * max(0.0, b[3]-b[1]) for b in pred_boxes)
+        return 0.0, 0.0, union_sum
+    if not pred_boxes:
+        # False Negatives
+        union_sum = sum(max(0.0, b[2]-b[0]) * max(0.0, b[3]-b[1]) for b in gt_boxes)
+        return 0.0, 0.0, union_sum
 
     remaining_pred = list(pred_boxes)
     matched_ious = []
+    total_inter = 0.0
+    total_union = 0.0
+    
     for gt in gt_boxes:
         if not remaining_pred:
             matched_ious.append(0.0)
+            area_gt = max(0.0, gt[2]-gt[0]) * max(0.0, gt[3]-gt[1])
+            total_union += area_gt
             continue
-        ious = [compute_iou(gt, p) for p in remaining_pred]
-        best_idx = max(range(len(ious)), key=lambda i: ious[i])
-        matched_ious.append(ious[best_idx])
+            
+        ious_data = [compute_iou(gt, p) for p in remaining_pred]
+        best_idx = max(range(len(ious_data)), key=lambda i: ious_data[i][0])
+        best_iou, best_inter, best_union = ious_data[best_idx]
+        
+        matched_ious.append(best_iou)
+        total_inter += best_inter
+        total_union += best_union
+        
         remaining_pred.pop(best_idx)
+        
+    # Unmatched predictions (False Positives) add to total_union
+    for p in remaining_pred:
+        area_p = max(0.0, p[2]-p[0]) * max(0.0, p[3]-p[1])
+        total_union += area_p
 
-    return sum(matched_ious) / len(matched_ious)
+    return sum(matched_ious) / len(matched_ious), total_inter, total_union

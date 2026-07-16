@@ -9,15 +9,18 @@ from core.logging import get_logger
 
 logger = get_logger(__name__)
 
+import re
+
 def strip_fences(text: str) -> str:
     """
     Strips markdown code fences (e.g., ```json ... ```) from a string.
+    Uses regex to extract content between fences, ignoring any pre-text.
     """
-    text = text.strip()
-    if text.startswith("```"):
-        text = text.strip("`")
-        if text.startswith("json"):
-            text = text[4:].strip()
+    match = re.search(r"```(?:json)?(.*?)```", text, flags=re.DOTALL | re.IGNORECASE)
+    if match:
+        return match.group(1).strip()
+    
+    # Fallback if no fences are found
     return text.strip()
 
 def parse_model_output(raw_str: str) -> Optional[Dict[str, Any]]:

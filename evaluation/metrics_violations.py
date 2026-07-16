@@ -23,9 +23,11 @@ def compute_violation_metrics(predictions: List[Dict[str, Any]], references: Lis
     global_fp = 0
     global_fn = 0
     
-    rule_counts = {r: {"tp": 0, "fp": 0, "fn": 0} for r in RULES}
+    # We add rule_0 (no violation) for explicit tracking
+    ALL_RULES = RULES + ["rule_0"]
+    rule_counts = {r: {"tp": 0, "fp": 0, "fn": 0} for r in ALL_RULES}
     
-    iou_scores = []
+    rule_iou_scores = {r: [] for r in RULES}
     
     for pred_dict, gt_dict in zip(predictions, references):
         pred_dict = pred_dict or {}
@@ -47,6 +49,14 @@ def compute_violation_metrics(predictions: List[Dict[str, Any]], references: Lis
                 gt_rules.add(r)
                 gt_by_rule[r] = g_v
         
+        # Rule 0 tracking
+        if not gt_rules and not pred_rules:
+            rule_counts["rule_0"]["tp"] += 1
+        elif not gt_rules and pred_rules:
+            rule_counts["rule_0"]["fn"] += 1
+        elif gt_rules and not pred_rules:
+            rule_counts["rule_0"]["fp"] += 1
+            
         # Global counts
         tp = len(pred_rules & gt_rules)
         fp = len(pred_rules - gt_rules)
@@ -72,23 +82,25 @@ def compute_violation_metrics(predictions: List[Dict[str, Any]], references: Lis
             pred_boxes_1000 = pred_by_rule[r].get("bounding_box", [])
             gt_boxes_01 = gt_by_rule[r].get("bounding_box", [])
             
+            # Normalize first to handle flat lists
+            pred_boxes_1000 = normalize_boxes(pred_boxes_1000)
+            gt_boxes_01 = normalize_boxes(gt_boxes_01)
+            
+            # Then clean
             pred_boxes_1000 = clean_boxes(pred_boxes_1000)
             gt_boxes_01 = clean_boxes(gt_boxes_01)
             
             # Scale pred to [0, 1]
             pred_boxes_01 = [scale_1000_to_01(b) for b in pred_boxes_1000]
             
-            pred_boxes_01 = normalize_boxes(pred_boxes_01)
-            gt_boxes_01 = normalize_boxes(gt_boxes_01)
-            
             if not pred_boxes_01 and not gt_boxes_01:
                 iou = 1.0
             elif not pred_boxes_01 or not gt_boxes_01:
                 iou = 0.0
             else:
-                iou = greedy_multibox_iou(pred_boxes_01, gt_boxes_01)
+                iou, _, _ = greedy_multibox_iou(pred_boxes_01, gt_boxes_01)
                 
-            iou_scores.append(iou)
+            rule_iou_scores[r].append(iou)
 
     metrics = {}
     
@@ -102,7 +114,7 @@ def compute_violation_metrics(predictions: List[Dict[str, Any]], references: Lis
     metrics["violation_macro_f1"] = f1
     
     # Per-rule metrics
-    for r in RULES:
+    for r in ALL_RULES:
         tp, fp, fn = rule_counts[r]["tp"], rule_counts[r]["fp"], rule_counts[r]["fn"]
         p = tp / (tp + fp) if (tp + fp) > 0 else 0.0
         rec = tp / (tp + fn) if (tp + fn) > 0 else 0.0
@@ -112,7 +124,13 @@ def compute_violation_metrics(predictions: List[Dict[str, Any]], references: Lis
         metrics[f"violation_{r}_recall"] = rec
         metrics[f"violation_{r}_f1"] = r_f1
         
-    # Grounding IoU
-    metrics["violation_grounding_iou"] = sum(iou_scores) / len(iou_scores) if iou_scores else 0.0
+    # Grounding IoU per rule
+    all_ious = []
+    for r in RULES:
+        ious = rule_iou_scores[r]
+        metrics[f"violation_iou_{r}"] = sum(ious) / len(ious) if ious else 0.0
+        all_ious.extend(ious)
+        
+    metrics["violation_grounding_iou"] = sum(all_ious) / len(all_ious) if all_ious else 0.0
     
     return metrics

@@ -14,11 +14,12 @@ from core.logging import get_logger
 
 logger = get_logger(__name__)
 
-def run_full_evaluation(raw_predictions: List[str], references: List[Dict[str, Any]], judge_model: Any = None, judge_tokenizer: Any = None) -> Dict[str, Any]:
+def run_full_evaluation(raw_predictions: List[str], references: List[Dict[str, Any]], images: List[Any] = None) -> Dict[str, Any]:
     """
     Runs the complete evaluation pipeline.
     raw_predictions: list of raw string responses from the model.
     references: list of ground truth UnifiedOutput dictionaries.
+    images: optional list of PIL Images (for CLIPScore).
     """
     logger.info("Starting full evaluation pipeline...")
     
@@ -40,7 +41,7 @@ def run_full_evaluation(raw_predictions: List[str], references: List[Dict[str, A
     
     # 2. Captioning metrics
     logger.info("Computing captioning metrics...")
-    caption_metrics = compute_all_caption_metrics(pred_captions, gt_captions)
+    caption_metrics = compute_all_caption_metrics(pred_captions, gt_captions, images=images)
     
     # 3. Grounding metrics
     logger.info("Computing grounding metrics...")
@@ -51,8 +52,8 @@ def run_full_evaluation(raw_predictions: List[str], references: List[Dict[str, A
     violation_metrics = compute_violation_metrics(pred_violations, gt_violations)
     
     # 5. Reasoning metrics
-    logger.info("Computing reasoning metrics (LLM-as-a-Judge)...")
-    reasoning_metrics = batch_score_reasoning(judge_model, judge_tokenizer, pred_violations, gt_violations)
+    logger.info("Computing reasoning metrics (Captioning Suite)...")
+    reasoning_metrics = batch_score_reasoning(pred_violations, gt_violations, images=images)
     
     # Combine all results
     all_metrics = {}

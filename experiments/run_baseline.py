@@ -42,13 +42,13 @@ def main():
         max_samples=args.max_samples,
     )
 
-    # Prepare for evaluation
     raw_predictions = [res["raw_output"] for res in results]
-    references = [build_ground_truth_dict(r) for r in test_data]
+    references = [build_ground_truth_dict(res["sample"]) for res in results]
+    images = [res["sample"]["image"] for res in results] if "image" in results[0]["sample"] else None
     
     # Run evaluation
     logger.info("Running evaluation...")
-    eval_results = run_full_evaluation(raw_predictions, references)
+    eval_results = run_full_evaluation(raw_predictions, references, images=images)
 
     # Save results
     output_dir = ensure_dir(get_drive_path("results", model_info["short_name"], "baseline"))
