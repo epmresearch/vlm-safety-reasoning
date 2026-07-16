@@ -1,6 +1,6 @@
 task_name: "full_unified"
 prompt_key: "UNIFIED_INSPECTION_PROMPT"
-output_fields: ["caption", "detected_objects", "safety_violations"]
+output_fields: ["caption", "safety_violations"]
 
 # Output format: minimized JSON wrapped in ```json ... ``` code fences.
 # No indentation, no extra whitespace. Single-line JSON body.
@@ -13,4 +13,4 @@ reward_weights:      # unused until GRPO phase;
   rule_grounding_iou: 1.0
   object_grounding_iou: 1.5
 
-max_new_tokens: 700   # single response covers caption + objects + violations
+max_new_tokens: 1000   # single response covers caption + objects + violations

@@ -29,6 +29,11 @@ def compute_grounding_metrics(predictions: List[Dict[str, Any]], references: Lis
     class_inter_exist: Dict[str, float] = {cls: 0.0 for cls in GROUNDING_CLASSES}
     class_union_exist: Dict[str, float] = {cls: 0.0 for cls in GROUNDING_CLASSES}
     
+    class_tn: Dict[str, int] = {cls: 0 for cls in GROUNDING_CLASSES}
+    class_fp: Dict[str, int] = {cls: 0 for cls in GROUNDING_CLASSES}
+    class_fn: Dict[str, int] = {cls: 0 for cls in GROUNDING_CLASSES}
+    class_exist_n: Dict[str, int] = {cls: 0 for cls in GROUNDING_CLASSES}
+    
     for pred, gt in zip(predictions, references):
         pred_objs = pred or {}
         gt_objs = gt or {}
@@ -59,8 +64,17 @@ def compute_grounding_metrics(predictions: List[Dict[str, Any]], references: Lis
             class_inter_total[cls] += total_inter
             class_union_total[cls] += total_union
             
+            # Record TN/FP/FN for transparency
+            if not gt_boxes_01 and not pred_boxes_01:
+                class_tn[cls] += 1
+            elif not gt_boxes_01 and pred_boxes_01:
+                class_fp[cls] += 1
+            elif gt_boxes_01 and not pred_boxes_01:
+                class_fn[cls] += 1
+            
             # Exist IoU only includes images where the ground truth object exists
             if gt_boxes_01:
+                class_exist_n[cls] += 1
                 class_ious_exist[cls].append(iou)
                 class_inter_exist[cls] += total_inter
                 class_union_exist[cls] += total_union
@@ -100,6 +114,12 @@ def compute_grounding_metrics(predictions: List[Dict[str, Any]], references: Lis
         metrics[f"grounding_iou_exist_micro_{cls}"] = inter_e / union_e if union_e > 0 else 0.0
         total_inter_all_e += inter_e
         total_union_all_e += union_e
+        
+        # Transparency counters
+        metrics[f"grounding_tn_count_{cls}"] = class_tn[cls]
+        metrics[f"grounding_fp_count_{cls}"] = class_fp[cls]
+        metrics[f"grounding_fn_count_{cls}"] = class_fn[cls]
+        metrics[f"grounding_exist_n_{cls}"] = class_exist_n[cls]
         
     metrics["grounding_iou_total_macro_mean"] = sum(all_ious_total) / len(all_ious_total) if all_ious_total else 0.0
     metrics["grounding_iou_total_micro_mean"] = total_inter_all_t / total_union_all_t if total_union_all_t > 0 else 0.0

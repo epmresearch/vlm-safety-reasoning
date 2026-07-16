@@ -79,6 +79,7 @@ def generate_single(
             max_new_tokens=max_new_tokens,
             temperature=temperature,
             do_sample=do_sample,
+            repetition_penalty=1.15,
             use_cache=True,
         )
 

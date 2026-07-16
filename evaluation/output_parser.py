@@ -36,12 +36,26 @@ def parse_model_output(raw_str: str) -> Optional[Dict[str, Any]]:
         logger.debug(f"Failed to parse JSON: {e}")
         return None
 
+from core.constants import GROUNDING_CLASSES
+
 def validate_unified_output(parsed_data: Dict[str, Any]) -> Optional[UnifiedOutput]:
     """
     Validates a parsed dictionary against the UnifiedOutput schema.
+    Also rescues boxes from hallucinated 'detected_objects' arrays.
     """
     if parsed_data is None:
         return None
+        
+    # Rescue operation for hallucinated detected_objects
+    if "detected_objects" in parsed_data and isinstance(parsed_data["detected_objects"], list):
+        for obj in parsed_data["detected_objects"]:
+            if isinstance(obj, dict) and "type" in obj and "bounding_box" in obj:
+                cls = obj["type"]
+                if cls in GROUNDING_CLASSES:
+                    if not parsed_data.get(cls):
+                        parsed_data[cls] = []
+                    if isinstance(parsed_data[cls], list):
+                        parsed_data[cls].append(obj["bounding_box"])
     try:
         return UnifiedOutput(**parsed_data)
     except Exception as e:

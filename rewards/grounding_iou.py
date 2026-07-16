@@ -48,14 +48,14 @@ def _extract_gt_boxes(ground_truth: dict, cls_name: str) -> List[List[float]]:
 def compute_reward(prediction: str, ground_truth: dict) -> float:
     """Reward function for object grounding IoU.
 
-    Parses the prediction JSON, extracts detected_objects for each class,
+    Parses the prediction JSON, extracts the flat arrays for each class,
     converts predicted boxes from [0, 1000] to [0, 1], then computes
     greedy_multibox_iou against ground truth. Returns the mean IoU across
     all grounding classes.
 
     Args:
         prediction: Raw model output string (fenced JSON).
-        ground_truth: Ground truth dict with 'detected_objects' key.
+        ground_truth: Ground truth dict.
 
     Returns:
         Mean IoU across grounding classes, in [0, 1].
@@ -68,7 +68,7 @@ def compute_reward(prediction: str, ground_truth: dict) -> float:
     for cls_name in GROUNDING_CLASSES:
         pred_boxes = _extract_pred_boxes(parsed, cls_name)
         gt_boxes = _extract_gt_boxes(ground_truth, cls_name)
-        iou = greedy_multibox_iou(pred_boxes, gt_boxes)
+        iou, _, _ = greedy_multibox_iou(pred_boxes, gt_boxes)
         class_ious.append(iou)
 
     if not class_ious:

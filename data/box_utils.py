@@ -36,6 +36,15 @@ def normalize_boxes(raw_boxes: Optional[Union[list, None]]) -> List[List[float]]
     for b in raw_boxes:
         if isinstance(b, (list, tuple)):
             valid_boxes.append(list(b))
+        elif isinstance(b, dict):
+            # Model hallucinated a dictionary wrapper
+            if "bounding_box" in b and isinstance(b["bounding_box"], (list, tuple)):
+                valid_boxes.append(list(b["bounding_box"]))
+            elif all(k in b for k in ("xmin", "ymin", "xmax", "ymax")):
+                try:
+                    valid_boxes.append([float(b["xmin"]), float(b["ymin"]), float(b["xmax"]), float(b["ymax"])])
+                except (ValueError, TypeError):
+                    pass
     return valid_boxes
 
 

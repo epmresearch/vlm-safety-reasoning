@@ -20,7 +20,7 @@ SYSTEM_PROMPT = "You are an expert AI construction safety inspector."
 UNIFIED_INSPECTION_PROMPT = (
     "Perform a construction safety inspection on this image. Output strictly a single JSON code block. Do not include any conversational text.\n\n"
     "1. CAPTION: A detailed description of foreground, background, workers, equipment, and conditions.\n"
-    "2. DETECTED OBJECTS: Bounding boxes [xmin, ymin, xmax, ymax] scaled from 0 to 1000 for every 'excavator', 'rebar', and 'worker_with_white_hard_hat'. Return [] if absent.\n"
+    "2. SPATIAL GROUNDING: Flat arrays [xmin, ymin, xmax, ymax] scaled from 0 to 1000 for every 'excavator', 'rebar', and 'worker_with_white_hard_hat'. Return [] if absent.\n"
     "3. SAFETY VIOLATIONS: Evaluate against the following 4 rules:\n"
     "   - Rule 1: Use of basic PPE (hard hats, proper clothing, closed-toe shoes, vests).\n"
     "   - Rule 2: Use of safety harness when working at height >3m.\n"
