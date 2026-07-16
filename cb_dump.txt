@@ -1287,7 +1287,7 @@ num_train_epochs: 3
 learning_rate: 2.0e-4
 warmup_ratio: 0.03
 weight_decay: 0.01
-max_seq_length: 2048
+max_seq_length: 8192
 load_in_4bit: true
 
 # Logging & checkpointing
@@ -1322,7 +1322,7 @@ File: configs\tasks\unified.yaml
 ================================================================================
 task_name: "full_unified"
 prompt_key: "UNIFIED_INSPECTION_PROMPT"
-output_fields: ["caption", "detected_objects", "safety_violations"]
+output_fields: ["caption", "safety_violations"]
 
 # Output format: minimized JSON wrapped in ```json ... ``` code fences.
 # No indentation, no extra whitespace. Single-line JSON body.
@@ -1335,7 +1335,7 @@ reward_weights:      # unused until GRPO phase;
   rule_grounding_iou: 1.0
   object_grounding_iou: 1.5
 
-max_new_tokens: 700   # single response covers caption + objects + violations
+max_new_tokens: 1000   # single response covers caption + objects + violations
 
 ================================================================================
 File: core\config.py
@@ -1523,7 +1523,8 @@ VALIDATION_SPLIT_SEED = 42
 # ---------------------------------------------------------------------------
 # Generation
 # ---------------------------------------------------------------------------
-MAX_NEW_TOKENS_UNIFIED = 700
+MAX_NEW_TOKENS_UNIFIED = 1000
+DEFAULT_MAX_SEQ_LENGTH = 8192
 
 ================================================================================
 File: core\eval_sampling.py
@@ -1820,6 +1821,15 @@ def normalize_boxes(raw_boxes: Optional[Union[list, None]]) -> List[List[float]]
     for b in raw_boxes:
         if isinstance(b, (list, tuple)):
             valid_boxes.append(list(b))
+        elif isinstance(b, dict):
+            # Model hallucinated a dictionary wrapper
+            if "bounding_box" in b and isinstance(b["bounding_box"], (list, tuple)):
+                valid_boxes.append(list(b["bounding_box"]))
+            elif all(k in b for k in ("xmin", "ymin", "xmax", "ymax")):
+                try:
+                    valid_boxes.append([float(b["xmin"]), float(b["ymin"]), float(b["xmax"]), float(b["ymax"])])
+                except (ValueError, TypeError):
+                    pass
     return valid_boxes
 
 
@@ -2479,7 +2489,7 @@ SYSTEM_PROMPT = "You are an expert AI construction safety inspector."
 UNIFIED_INSPECTION_PROMPT = (
     "Perform a construction safety inspection on this image. Output strictly a single JSON code block. Do not include any conversational text.\n\n"
     "1. CAPTION: A detailed description of foreground, background, workers, equipment, and conditions.\n"
-    "2. DETECTED OBJECTS: Bounding boxes [xmin, ymin, xmax, ymax] scaled from 0 to 1000 for every 'excavator', 'rebar', and 'worker_with_white_hard_hat'. Return [] if absent.\n"
+    "2. SPATIAL GROUNDING: Flat arrays [xmin, ymin, xmax, ymax] scaled from 0 to 1000 for every 'excavator', 'rebar', and 'worker_with_white_hard_hat'. Return [] if absent.\n"
     "3. SAFETY VIOLATIONS: Evaluate against the following 4 rules:\n"
     "   - Rule 1: Use of basic PPE (hard hats, proper clothing, closed-toe shoes, vests).\n"
     "   - Rule 2: Use of safety harness when working at height >3m.\n"
@@ -3199,7 +3209,7 @@ File: evaluation\metrics_captioning.py
 """
 Metrics for image captioning evaluation.
 """
-from typing import Dict, List
+from typing import Dict, List, Any
 import logging
 
 from core.logging import get_logger
@@ -3212,7 +3222,17 @@ def compute_bertscore(predictions: List[str], references: List[str]) -> Dict[str
     Requires bert-score package.
     """
     try:
+        import transformers
+        from transformers import RobertaTokenizer
         from bert_score import score
+        
+        # Suppress massive huggingface download/loading logs
+        transformers.utils.logging.set_verbosity_error()
+        
+        # Patch for bert_score incompatibility with newer transformers versions
+        if not hasattr(RobertaTokenizer, "build_inputs_with_special_tokens"):
+            RobertaTokenizer.build_inputs_with_special_tokens = lambda self, t0, t1=None: [self.cls_token_id] + t0 + [self.sep_token_id]
+            
         P, R, F1 = score(predictions, references, lang="en", verbose=False, rescale_with_baseline=True)
         return {
             "bertscore_precision": P.mean().item(),
@@ -3220,7 +3240,7 @@ def compute_bertscore(predictions: List[str], references: List[str]) -> Dict[str
             "bertscore_f1": F1.mean().item(),
         }
     except ImportError:
-        logger.warning("bert_score not installed. Skipping BERTScore.")
+        logger.warning("bert_score or transformers not installed. Skipping BERTScore.")
         return {}
 
 def compute_meteor(predictions: List[str], references: List[str]) -> Dict[str, float]:
@@ -3398,6 +3418,11 @@ def compute_grounding_metrics(predictions: List[Dict[str, Any]], references: Lis
     class_inter_exist: Dict[str, float] = {cls: 0.0 for cls in GROUNDING_CLASSES}
     class_union_exist: Dict[str, float] = {cls: 0.0 for cls in GROUNDING_CLASSES}
     
+    class_tn: Dict[str, int] = {cls: 0 for cls in GROUNDING_CLASSES}
+    class_fp: Dict[str, int] = {cls: 0 for cls in GROUNDING_CLASSES}
+    class_fn: Dict[str, int] = {cls: 0 for cls in GROUNDING_CLASSES}
+    class_exist_n: Dict[str, int] = {cls: 0 for cls in GROUNDING_CLASSES}
+    
     for pred, gt in zip(predictions, references):
         pred_objs = pred or {}
         gt_objs = gt or {}
@@ -3428,8 +3453,17 @@ def compute_grounding_metrics(predictions: List[Dict[str, Any]], references: Lis
             class_inter_total[cls] += total_inter
             class_union_total[cls] += total_union
             
+            # Record TN/FP/FN for transparency
+            if not gt_boxes_01 and not pred_boxes_01:
+                class_tn[cls] += 1
+            elif not gt_boxes_01 and pred_boxes_01:
+                class_fp[cls] += 1
+            elif gt_boxes_01 and not pred_boxes_01:
+                class_fn[cls] += 1
+            
             # Exist IoU only includes images where the ground truth object exists
             if gt_boxes_01:
+                class_exist_n[cls] += 1
                 class_ious_exist[cls].append(iou)
                 class_inter_exist[cls] += total_inter
                 class_union_exist[cls] += total_union
@@ -3469,6 +3503,12 @@ def compute_grounding_metrics(predictions: List[Dict[str, Any]], references: Lis
         metrics[f"grounding_iou_exist_micro_{cls}"] = inter_e / union_e if union_e > 0 else 0.0
         total_inter_all_e += inter_e
         total_union_all_e += union_e
+        
+        # Transparency counters
+        metrics[f"grounding_tn_count_{cls}"] = class_tn[cls]
+        metrics[f"grounding_fp_count_{cls}"] = class_fp[cls]
+        metrics[f"grounding_fn_count_{cls}"] = class_fn[cls]
+        metrics[f"grounding_exist_n_{cls}"] = class_exist_n[cls]
         
     metrics["grounding_iou_total_macro_mean"] = sum(all_ious_total) / len(all_ious_total) if all_ious_total else 0.0
     metrics["grounding_iou_total_micro_mean"] = total_inter_all_t / total_union_all_t if total_union_all_t > 0 else 0.0
@@ -3788,19 +3828,33 @@ def parse_model_output(raw_str: str) -> Optional[Dict[str, Any]]:
         parsed = json.loads(text)
         return parsed
     except json.JSONDecodeError as e:
-        logger.warning(f"Failed to parse JSON: {e}")
+        logger.debug(f"Failed to parse JSON: {e}")
         return None
+
+from core.constants import GROUNDING_CLASSES
 
 def validate_unified_output(parsed_data: Dict[str, Any]) -> Optional[UnifiedOutput]:
     """
     Validates a parsed dictionary against the UnifiedOutput schema.
+    Also rescues boxes from hallucinated 'detected_objects' arrays.
     """
     if parsed_data is None:
         return None
+        
+    # Rescue operation for hallucinated detected_objects
+    if "detected_objects" in parsed_data and isinstance(parsed_data["detected_objects"], list):
+        for obj in parsed_data["detected_objects"]:
+            if isinstance(obj, dict) and "type" in obj and "bounding_box" in obj:
+                cls = obj["type"]
+                if cls in GROUNDING_CLASSES:
+                    if not parsed_data.get(cls):
+                        parsed_data[cls] = []
+                    if isinstance(parsed_data[cls], list):
+                        parsed_data[cls].append(obj["bounding_box"])
     try:
         return UnifiedOutput(**parsed_data)
     except Exception as e:
-        logger.warning(f"Failed to validate UnifiedOutput schema: {e}")
+        logger.debug(f"Failed to validate UnifiedOutput schema: {e}")
         return None
 
 
@@ -3968,6 +4022,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--tier", default=DEFAULT_MODEL_TIER, help="Model tier (e.g., 2b, 4b, 8b)")
     parser.add_argument("--max_samples", type=int, default=None, help="Limit number of test samples")
+    parser.add_argument("--max_seq_length", type=int, default=8192, help="Max sequence length for inference")
     args = parser.parse_args()
 
     # Load dataset
@@ -3979,7 +4034,10 @@ def main():
 
     # Load base model
     logger.info(f"Loading baseline model for tier: {args.tier}...")
-    model, tokenizer, model_info = load_model_for_inference(tier=args.tier)
+    model, tokenizer, model_info = load_model_for_inference(
+        tier=args.tier,
+        max_seq_length=args.max_seq_length
+    )
 
     # Run inference
     logger.info("Running baseline inference...")
@@ -4353,6 +4411,7 @@ def generate_single(
             max_new_tokens=max_new_tokens,
             temperature=temperature,
             do_sample=do_sample,
+            repetition_penalty=1.15,
             use_cache=True,
         )
 
@@ -4448,7 +4507,7 @@ with frozen vision encoder.
 """
 from typing import Any, Dict, Optional, Tuple
 
-from core.constants import MODEL_TIERS, MODEL_BATCH_CONFIGS, DEFAULT_MODEL_TIER
+from core.constants import MODEL_TIERS, MODEL_BATCH_CONFIGS, DEFAULT_MODEL_TIER, DEFAULT_MAX_SEQ_LENGTH
 from core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -4577,6 +4636,7 @@ def load_model_for_inference(
     model_name: Optional[str] = None,
     tier: str = DEFAULT_MODEL_TIER,
     adapter_path: Optional[str] = None,
+    max_seq_length: int = DEFAULT_MAX_SEQ_LENGTH,
 ) -> Tuple:
     """Loads a model for inference (with optional LoRA adapter).
 
@@ -4584,6 +4644,7 @@ def load_model_for_inference(
         model_name: HuggingFace model path. If None, uses tier lookup.
         tier: Model tier.
         adapter_path: Path to saved LoRA adapter. If None, loads base model.
+        max_seq_length: Maximum sequence length for the model.
 
     Returns:
         Tuple of (model, tokenizer).
@@ -4593,20 +4654,20 @@ def load_model_for_inference(
     if model_name is None:
         model_name = get_model_info(tier)["hf_path"]
 
-    logger.info(f"Loading model for inference: {model_name}")
+    logger.info(f"Loading model for inference: {model_name} with max_seq_length={max_seq_length}")
 
     if adapter_path:
         logger.info(f"Loading with adapter from: {adapter_path}")
         model, tokenizer = FastVisionModel.from_pretrained(
             adapter_path,
             load_in_4bit=True,
-            max_seq_length=4096,
+            max_seq_length=max_seq_length,
         )
     else:
         model, tokenizer = FastVisionModel.from_pretrained(
             model_name,
             load_in_4bit=True,
-            max_seq_length=4096,
+            max_seq_length=max_seq_length,
         )
 
     # Set to inference mode
@@ -4756,7 +4817,7 @@ def run_sft_unified(
         metric_for_best_model=sft_cfg.get("metric_for_best_model", "eval_loss"),
         greater_is_better=sft_cfg.get("greater_is_better", False),
         bf16=sft_cfg.get("bf16", True),
-        max_seq_length=sft_cfg.get("max_seq_length", 2048),
+        max_seq_length=sft_cfg.get("max_seq_length", 4096),
         seed=base_cfg.get("seed", 42),
         report_to=["wandb"],
         run_name=run_name,
@@ -9070,14 +9131,14 @@ def _extract_gt_boxes(ground_truth: dict, cls_name: str) -> List[List[float]]:
 def compute_reward(prediction: str, ground_truth: dict) -> float:
     """Reward function for object grounding IoU.
 
-    Parses the prediction JSON, extracts detected_objects for each class,
+    Parses the prediction JSON, extracts the flat arrays for each class,
     converts predicted boxes from [0, 1000] to [0, 1], then computes
     greedy_multibox_iou against ground truth. Returns the mean IoU across
     all grounding classes.
 
     Args:
         prediction: Raw model output string (fenced JSON).
-        ground_truth: Ground truth dict with 'detected_objects' key.
+        ground_truth: Ground truth dict.
 
     Returns:
         Mean IoU across grounding classes, in [0, 1].
@@ -9090,7 +9151,7 @@ def compute_reward(prediction: str, ground_truth: dict) -> float:
     for cls_name in GROUNDING_CLASSES:
         pred_boxes = _extract_pred_boxes(parsed, cls_name)
         gt_boxes = _extract_gt_boxes(ground_truth, cls_name)
-        iou = greedy_multibox_iou(pred_boxes, gt_boxes)
+        iou, _, _ = greedy_multibox_iou(pred_boxes, gt_boxes)
         class_ious.append(iou)
 
     if not class_ious:
@@ -9633,6 +9694,121 @@ def test_build_unified_sft_dataset():
         pytest.skip(f"Skipping due to mocked image missing real vision processing: {e}")
 
 ================================================================================
+File: tests\test_evaluation\test_captioning_metrics.py
+================================================================================
+import pytest
+from unittest.mock import patch
+
+from evaluation.metrics_captioning import (
+    compute_all_caption_metrics,
+    compute_clipscore
+)
+
+def test_empty_inputs():
+    """Test that empty or mismatched inputs return safely."""
+    assert compute_all_caption_metrics([], []) == {}
+    assert compute_all_caption_metrics(["text"], []) == {} # Mismatched length
+
+@patch("evaluation.metrics_captioning.compute_clipscore")
+@patch("evaluation.metrics_captioning.compute_cider")
+@patch("evaluation.metrics_captioning.compute_meteor")
+@patch("evaluation.metrics_captioning.compute_bertscore")
+def test_all_caption_metrics_aggregation(mock_bert, mock_meteor, mock_cider, mock_clip):
+    """Test that metrics are aggregated correctly and empty strings are sanitized."""
+    mock_bert.return_value = {"bertscore_f1": 0.8}
+    mock_meteor.return_value = {"meteor": 0.7}
+    mock_cider.return_value = {"cider": 0.6}
+    mock_clip.return_value = {"clipscore": 0.5}
+    
+    preds = ["A good caption", "   ", ""] # Includes whitespace and empty string
+    refs = ["A great caption", "Also good", " "]
+    
+    # Test without images
+    res = compute_all_caption_metrics(preds, refs)
+    
+    # Check that sanitization worked before passing to the underlying functions
+    args, _ = mock_bert.call_args
+    assert args[0] == ["A good caption", "empty", "empty"]
+    assert args[1] == ["A great caption", "Also good", "empty"]
+    
+    assert res["bertscore_f1"] == 0.8
+    assert res["meteor"] == 0.7
+    assert res["cider"] == 0.6
+    assert "clipscore" not in res # Images were not provided
+    
+    # Test with images
+    res_images = compute_all_caption_metrics(preds, refs, images=["img1", "img2", "img3"])
+    assert res_images["clipscore"] == 0.5
+
+def test_clipscore_mismatched_lengths():
+    """Test CLIPScore fails safely with bad inputs."""
+    assert compute_clipscore(["text1", "text2"], ["image1"]) == {}
+    assert compute_clipscore([], []) == {}
+
+
+================================================================================
+File: tests\test_evaluation\test_evaluator.py
+================================================================================
+import pytest
+from unittest.mock import patch
+
+from evaluation.evaluator import run_full_evaluation
+
+@patch("evaluation.evaluator.compute_structural_metrics")
+@patch("evaluation.evaluator.compute_all_caption_metrics")
+@patch("evaluation.evaluator.compute_grounding_metrics")
+@patch("evaluation.evaluator.compute_violation_metrics")
+@patch("evaluation.evaluator.batch_score_reasoning")
+def test_run_full_evaluation(mock_reasoning, mock_violation, mock_grounding, mock_caption, mock_structural):
+    """Test that evaluator orchestrates all sub-modules correctly and aggregates dictionaries."""
+    
+    # Mock return values for all modules
+    mock_structural.return_value = {"json_validity_rate": 1.0}
+    mock_caption.return_value = {"bertscore_f1": 0.9}
+    mock_grounding.return_value = {"grounding_iou": 0.8}
+    mock_violation.return_value = {"violation_macro_f1": 0.7}
+    mock_reasoning.return_value = {"reasoning_macro_bertscore_f1": 0.6}
+    
+    # Inputs
+    raw_predictions = ["```json\n{\"caption\": \"safe\"}\n```"]
+    references = [{"caption": "safe_gt"}]
+    
+    # Run
+    res = run_full_evaluation(raw_predictions, references)
+    
+    # Assert all sub-modules were called
+    mock_structural.assert_called_once()
+    mock_caption.assert_called_once()
+    mock_grounding.assert_called_once()
+    mock_violation.assert_called_once()
+    mock_reasoning.assert_called_once()
+    
+    # Verify exact argument passing to the caption module (ensures the parser worked)
+    args, _ = mock_caption.call_args
+    assert args[0] == ["safe"] # Extracted caption from raw_predictions string
+    assert args[1] == ["safe_gt"] # Ground truth caption
+    
+    # Verify final aggregation structure
+    metrics = res["metrics"]
+    assert metrics["json_validity_rate"] == 1.0
+    assert metrics["bertscore_f1"] == 0.9
+    assert metrics["grounding_iou"] == 0.8
+    assert metrics["violation_macro_f1"] == 0.7
+    assert metrics["reasoning_macro_bertscore_f1"] == 0.6
+    
+    # Verify parsed outputs are returned so they can be logged
+    assert len(res["parsed_predictions"]) == 1
+    assert res["parsed_predictions"][0] == {"caption": "safe"}
+
+def test_run_full_evaluation_empty_inputs():
+    """Test that evaluator doesn't crash on empty inputs."""
+    res = run_full_evaluation([], [])
+    assert "metrics" in res
+    assert "parsed_predictions" in res
+    assert res["parsed_predictions"] == []
+
+
+================================================================================
 File: tests\test_evaluation\test_grounding_metrics.py
 ================================================================================
 import pytest
@@ -9845,32 +10021,156 @@ def test_grounding_score_no_objects_correctly_predicted_empty():
 File: tests\test_evaluation\test_output_parser.py
 ================================================================================
 import pytest
-from evaluation.output_parser import parse_model_output
 
-def test_parse_valid_json():
-    raw_output = '''Some thought process...
-```json
-{
-  "caption": "A construction site",
-  "excavator": [[0, 0, 10, 10]],
-  "rule_1_violation": {"bounding_box": [[0, 0, 10, 10]], "reason": "reason"}
-}
-```
-'''
-    parsed = parse_model_output(raw_output)
-    assert parsed is not None
-    assert parsed.get("caption") == "A construction site"
-    assert len(parsed.get("excavator", [])) == 1
-    assert parsed.get("rule_1_violation") is not None
+from evaluation.output_parser import strip_fences, parse_model_output, validate_unified_output
 
-def test_parse_invalid_json():
-    raw_output = '''```json
-{
-  "caption": "A construction site",
-  "excavator": [
-'''
-    parsed = parse_model_output(raw_output)
-    assert parsed is None
+def test_strip_fences():
+    """Test regex extraction of JSON from code fences."""
+    # Standard fence
+    assert strip_fences("```json\n{\"a\": 1}\n```") == '{"a": 1}'
+    
+    # Fence with preamble and postamble (common hallucination)
+    assert strip_fences("Here is the output:\n```json\n{\"a\": 1}\n```\nHope this helps!") == '{"a": 1}'
+    
+    # Missing json identifier
+    assert strip_fences("```\n{\"a\": 1}\n```") == '{"a": 1}'
+    
+    # No fences at all (fallback to strip)
+    assert strip_fences("  {\"a\": 1}  ") == '{"a": 1}'
+    
+    # Empty string
+    assert strip_fences("") == ""
+
+def test_parse_model_output():
+    """Test parsing of raw strings into dictionaries."""
+    # Valid fenced JSON
+    res = parse_model_output("```json\n{\"key\": \"value\"}\n```")
+    assert isinstance(res, dict)
+    assert res["key"] == "value"
+    
+    # Valid unfenced JSON
+    assert parse_model_output("{\"key\": \"value\"}") == {"key": "value"}
+    
+    # Invalid JSON (missing quotes)
+    assert parse_model_output("{key: value}") is None
+    
+    # Empty string
+    assert parse_model_output("") is None
+
+def test_validate_unified_output():
+    """Test validation of parsed dictionaries against Pydantic schema."""
+    # Valid minimal schema (UnifiedOutput usually allows empty/null for most fields)
+    res = validate_unified_output({})
+    assert res is not None # Assuming empty dict is technically valid against the schema structure
+    
+    # Valid full schema
+    full = {
+        "caption": "A construction site",
+        "rule_1_violation": {"reason": "Missing hard hat", "bounding_box": [[0,0,1,1]]},
+        "excavator": [[0,0,1,1]]
+    }
+    res = validate_unified_output(full)
+    assert res is not None
+    
+    # Passed None
+    assert validate_unified_output(None) is None
+
+
+================================================================================
+File: tests\test_evaluation\test_reasoning_metrics.py
+================================================================================
+import pytest
+from unittest.mock import patch
+
+from evaluation.metrics_reasoning import batch_score_reasoning
+
+@patch("evaluation.metrics_reasoning.compute_all_caption_metrics")
+def test_batch_score_reasoning_splitting(mock_metrics):
+    """Test that reasons are correctly split into global and rule-specific buckets."""
+    
+    mock_metrics.return_value = {"bertscore_f1": 0.9, "meteor": 0.8}
+    
+    preds = [
+        {"rule_1_violation": {"reason": "pred_r1_img1"}}, # Image 1
+        {"rule_1_violation": {"reason": "pred_r1_img2"}, "rule_2_violation": {"reason": "pred_r2_img2"}}, # Image 2
+    ]
+    refs = [
+        {"rule_1_violation": {"reason": "ref_r1_img1"}}, # Image 1
+        {"rule_1_violation": {"reason": "ref_r1_img2"}, "rule_2_violation": {"reason": "ref_r2_img2"}}, # Image 2
+    ]
+    
+    res = batch_score_reasoning(preds, refs)
+    
+    # compute_all_caption_metrics should be called exactly 3 times:
+    # 1. Global (Macro) containing all 3 matching reasons
+    # 2. Rule 1 bucket containing 2 matching reasons
+    # 3. Rule 2 bucket containing 1 matching reason
+    assert mock_metrics.call_count == 3
+    
+    # Check that the global metrics are prefixed correctly
+    assert res["reasoning_macro_bertscore_f1"] == 0.9
+    assert res["reasoning_macro_meteor"] == 0.8
+    
+    # Check that rule 1 and 2 received the mocked scores
+    assert res["reasoning_rule_1_bertscore_f1"] == 0.9
+    assert res["reasoning_rule_2_bertscore_f1"] == 0.9
+    
+    # Check that rule 3 and 4 correctly fell back to 0.0 since they had no data
+    assert res["reasoning_rule_3_bertscore_f1"] == 0.0
+    assert res["reasoning_rule_3_meteor"] == 0.0
+    assert res["reasoning_rule_4_bertscore_f1"] == 0.0
+
+def test_batch_score_reasoning_empty():
+    """Test fallback logic when there are completely empty lists or no common rules."""
+    # Case 1: Empty lists
+    res_empty = batch_score_reasoning([], [])
+    assert res_empty["reasoning_macro_bertscore_f1"] == 0.0
+    assert res_empty["reasoning_rule_1_bertscore_f1"] == 0.0
+    
+    # Case 2: No overlapping rules (e.g., 100% False Positives and False Negatives)
+    preds = [{"rule_1_violation": {"reason": "a"}}]
+    refs = [{"rule_2_violation": {"reason": "b"}}]
+    
+    res_no_overlap = batch_score_reasoning(preds, refs)
+    assert res_no_overlap["reasoning_macro_bertscore_f1"] == 0.0
+    assert res_no_overlap["reasoning_rule_1_bertscore_f1"] == 0.0
+    assert res_no_overlap["reasoning_rule_2_bertscore_f1"] == 0.0
+
+
+================================================================================
+File: tests\test_evaluation\test_structural_metrics.py
+================================================================================
+import pytest
+from evaluation.metrics_structural import compute_structural_metrics
+
+def test_empty_raw_outputs():
+    """Test that empty inputs return an empty dictionary."""
+    assert compute_structural_metrics([]) == {}
+
+def test_structural_metrics_all_valid():
+    """Test structural metrics with perfectly formatted outputs."""
+    outputs = [
+        "```json\n{\"caption\": \"safe\"}\n```",
+        "{\"rule_1_violation\": {}}"
+    ]
+    res = compute_structural_metrics(outputs)
+    assert res["json_validity_rate"] == 1.0
+    assert res["schema_adherence_rate"] == 1.0
+    assert res["total_samples"] == 2
+    assert res["valid_json_count"] == 2
+
+def test_structural_metrics_mixed():
+    """Test structural metrics with mixed valid and invalid outputs."""
+    outputs = [
+        "```json\n{\"caption\": \"safe\"}\n```", # Valid JSON
+        "This is just a conversational hallucination without JSON.", # Invalid JSON
+        "{\"another_key\": true}" # Valid JSON
+    ]
+    res = compute_structural_metrics(outputs)
+    
+    assert res["json_validity_rate"] == 2.0 / 3.0
+    assert res["valid_json_count"] == 2
+    assert res["total_samples"] == 3
 
 
 ================================================================================
