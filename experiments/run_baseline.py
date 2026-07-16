@@ -11,7 +11,7 @@ from core.logging import get_logger
 from data.loader import load_processed_dataset
 from data.preprocessor import build_ground_truth_dict
 from models.model_loader import load_model_for_inference
-from models.inference import run_inference
+from models.inference import run_inference_batched
 from evaluation.evaluator import run_full_evaluation
 
 logger = get_logger(__name__)
@@ -20,6 +20,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--tier", default=DEFAULT_MODEL_TIER, help="Model tier (e.g., 2b, 4b, 8b)")
     parser.add_argument("--max_samples", type=int, default=None, help="Limit number of test samples")
+    parser.add_argument("--batch_size", type=int, default=16, help="Batch size for batched generation")
     parser.add_argument("--max_seq_length", type=int, default=8192, help="Max sequence length for inference")
     args = parser.parse_args()
 
@@ -38,11 +39,12 @@ def main():
     )
 
     # Run inference
-    logger.info("Running baseline inference...")
-    results = run_inference(
+    logger.info(f"Running baseline batched inference (batch_size={args.batch_size})...")
+    results = run_inference_batched(
         model=model,
         tokenizer=tokenizer,
         dataset=test_data,
+        batch_size=args.batch_size,
         max_samples=args.max_samples,
     )
 

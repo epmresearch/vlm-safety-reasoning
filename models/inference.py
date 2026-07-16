@@ -162,3 +162,120 @@ def run_inference(
         f"{sum(1 for r in results if 'error' in r)} errors"
     )
     return results
+
+def generate_batch(
+    model,
+    tokenizer,
+    pil_images: list,
+    max_new_tokens: int = MAX_NEW_TOKENS_UNIFIED,
+    temperature: float = 0.0,
+    do_sample: bool = False,
+) -> List[str]:
+    """Generates responses for a batch of images using the unified prompt."""
+    from qwen_vl_utils import process_vision_info
+    import torch
+
+    # CRITICAL: left-padding for batched causal-LM generation
+    tokenizer.padding_side = "left"
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
+    batch_messages = [
+        [
+            {"role": "system", "content": [{"type": "text", "text": SYSTEM_PROMPT}]},
+            {"role": "user", "content": [
+                {"type": "image", "image": img},
+                {"type": "text", "text": UNIFIED_INSPECTION_PROMPT},
+            ]},
+        ]
+        for img in pil_images
+    ]
+
+    texts = [
+        tokenizer.apply_chat_template(m, add_generation_prompt=True, tokenize=False)
+        for m in batch_messages
+    ]
+
+    # Process vision info across all messages
+    image_inputs, video_inputs = process_vision_info(
+        [msg for conv in batch_messages for msg in conv]
+    )
+
+    inputs = tokenizer(
+        text=texts,
+        images=image_inputs,
+        videos=video_inputs,
+        return_tensors="pt",
+        padding=True,
+        truncation=True,
+    ).to(model.device)
+
+    with torch.no_grad():
+        output_ids = model.generate(
+            **inputs,
+            max_new_tokens=max_new_tokens,
+            temperature=temperature,
+            do_sample=do_sample,
+            repetition_penalty=1.15,
+            use_cache=True,
+        )
+
+    # Slice off the prompt tokens per-row
+    input_len = inputs["input_ids"].shape[1]
+    generated = output_ids[:, input_len:]
+
+    return tokenizer.batch_decode(generated, skip_special_tokens=True)
+
+
+def run_inference_batched(
+    model,
+    tokenizer,
+    dataset,
+    batch_size: int = 16,
+    max_new_tokens: int = MAX_NEW_TOKENS_UNIFIED,
+    max_samples: Optional[int] = None,
+    show_progress: bool = True,
+) -> List[Dict[str, Any]]:
+    """Runs batched inference on a dataset split."""
+    from tqdm import tqdm
+    import time
+
+    samples_to_process = dataset
+    if max_samples is not None:
+        samples_to_process = dataset.select(range(min(max_samples, len(dataset))))
+
+    results = []
+    n = len(samples_to_process)
+
+    for start in tqdm(range(0, n, batch_size), desc="Batched Inference", disable=not show_progress):
+        batch = samples_to_process.select(range(start, min(start + batch_size, n)))
+        pil_images = batch["image"]
+
+        start_time = time.time()
+        try:
+            outputs = generate_batch(model, tokenizer, pil_images, max_new_tokens=max_new_tokens)
+            elapsed = time.time() - start_time
+            per_image_latency = elapsed / len(pil_images)
+
+            for i, sample in enumerate(batch):
+                results.append({
+                    "image_id": sample.get("image_id", ""),
+                    "raw_output": outputs[i],
+                    "sample": {k: v for k, v in sample.items() if k != "image"},
+                    "latency_seconds": per_image_latency,
+                })
+        except Exception as e:
+            logger.warning(f"Batch inference failed for batch starting at {start}: {e}")
+            # Fall back to per-sample so one bad image doesn't kill the whole batch
+            for sample in batch:
+                results.append({
+                    "image_id": sample.get("image_id", ""),
+                    "raw_output": "",
+                    "sample": {k: v for k, v in sample.items() if k != "image"},
+                    "latency_seconds": 0.0,
+                    "error": str(e),
+                })
+
+    logger.info(f"Batched inference complete: {len(results)} samples, "
+                f"{sum(1 for r in results if 'error' in r)} errors")
+    return results
