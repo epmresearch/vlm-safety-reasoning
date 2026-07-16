@@ -37,9 +37,9 @@ def test_parse_model_output():
 
 def test_validate_unified_output():
     """Test validation of parsed dictionaries against Pydantic schema."""
-    # Valid minimal schema (UnifiedOutput usually allows empty/null for most fields)
-    res = validate_unified_output({})
-    assert res is not None # Assuming empty dict is technically valid against the schema structure
+    # Valid minimal schema (UnifiedOutput usually allows empty/null for most fields, but caption is required)
+    res = validate_unified_output({"caption": "test"})
+    assert res is not None # Assuming dict with caption is valid against the schema structure
     
     # Valid full schema
     full = {

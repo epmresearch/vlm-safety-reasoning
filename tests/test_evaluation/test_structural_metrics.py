@@ -9,7 +9,7 @@ def test_structural_metrics_all_valid():
     """Test structural metrics with perfectly formatted outputs."""
     outputs = [
         "```json\n{\"caption\": \"safe\"}\n```",
-        "{\"rule_1_violation\": {}}"
+        "{\"caption\": \"test\", \"rule_1_violation\": {}}"
     ]
     res = compute_structural_metrics(outputs)
     assert res["json_validity_rate"] == 1.0
