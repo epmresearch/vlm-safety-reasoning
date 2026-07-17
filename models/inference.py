@@ -243,6 +243,8 @@ def run_inference_batched(
     import time
     import json
     import os
+    import gc
+    import torch
 
     # 1. Auto-Resume logic: Check existing results
     completed_ids = set()
@@ -315,6 +317,10 @@ def run_inference_batched(
             with open(output_path, "a", encoding="utf-8") as f:
                 for res in batch_results:
                     f.write(json.dumps(res) + "\n")
+                    
+        # 4. Clear CUDA Cache to prevent memory fragmentation and OOM
+        gc.collect()
+        torch.cuda.empty_cache()
 
     logger.info(f"Batched inference complete: {len(results)} new samples processed.")
     return results
