@@ -15,7 +15,6 @@ from models.inference import run_inference_batched
 from evaluation.evaluator import run_full_evaluation
 from core.run_manifest import save_run_manifest
 from core.config import load_config
-from core.constants import MAX_NEW_TOKENS_UNIFIED
 
 # 1. Define where to save results on your Drive
 DRIVE_RESULTS_DIR = Path("/content/drive/MyDrive/Research_Results/baseline_2b")
@@ -29,7 +28,7 @@ run_config = {
     "experiment": "baseline_inference",
     "model_tier": "2b",
     "batch_size": 32,  # Easy to override here!
-    "max_new_tokens": base_config.get("max_new_tokens", MAX_NEW_TOKENS_UNIFIED),
+    "max_new_tokens": base_config.get("max_new_tokens", 1000),
     "notes": "Colab batched auto-resume run",
     # Injecting the entire YAML state so your receipt tracks everything perfectly
     "full_yaml_state": base_config 
