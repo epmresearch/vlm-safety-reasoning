@@ -1,4 +1,20 @@
 # ============================================================
+# Cell 0: Inspect Central YAML Configuration
+# ============================================================
+# Run this cell to see EXACTLY what the codebase is pulling from 
+# your base.yaml, model_registry.yaml, and unified.yaml files.
+from core.config import load_config
+import json
+
+base_config = load_config(task="unified")
+print("=== CURRENT YAML CONFIGURATION STATE ===")
+print(json.dumps(base_config, indent=2))
+print("========================================\n")
+print("If you want to change any of these permanently, edit the YAML files.")
+print("If you want to override them just for this run, do it in Cell 1 below!")
+
+
+# ============================================================
 # Cell 1: Setup and Loading
 # ============================================================
 import os
