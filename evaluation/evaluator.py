@@ -4,7 +4,7 @@ Combines all metric functions into a unified evaluation pipeline.
 """
 from typing import Dict, List, Any
 
-from evaluation.output_parser import parse_model_output
+from evaluation.output_parser import parse_model_output, validate_unified_output
 from evaluation.metrics_captioning import compute_all_caption_metrics
 from evaluation.metrics_grounding import compute_grounding_metrics
 from evaluation.metrics_violations import compute_violation_metrics
@@ -26,8 +26,36 @@ def run_full_evaluation(raw_predictions: List[str], references: List[Dict[str, A
     # 1. Structural metrics
     structural_metrics = compute_structural_metrics(raw_predictions)
     
-    # Parse predictions
-    parsed_preds = [parse_model_output(raw_str) for raw_str in raw_predictions]
+    # Parse predictions and capture failures
+    parsed_preds = []
+    failures = []
+    for i, raw_str in enumerate(raw_predictions):
+        image_id = references[i].get("image_id", f"unknown_{i}")
+        
+        # 1. JSON Parse
+        parsed = parse_model_output(raw_str)
+        if parsed is None:
+            parsed_preds.append(None)
+            failures.append({
+                "image_id": image_id,
+                "error_type": "json_parse_error",
+                "raw_prediction": raw_str
+            })
+            continue
+            
+        # 2. Schema Validation
+        validated = validate_unified_output(parsed)
+        if validated is None:
+            parsed_preds.append(None)
+            failures.append({
+                "image_id": image_id,
+                "error_type": "schema_validation_error",
+                "raw_prediction": raw_str
+            })
+            continue
+            
+        # Valid JSON and Valid Schema
+        parsed_preds.append(parsed)
     
     # Extract components
     pred_captions = [p.get("caption", "") if p else "" for p in parsed_preds]
@@ -63,9 +91,10 @@ def run_full_evaluation(raw_predictions: List[str], references: List[Dict[str, A
     all_metrics.update(violation_metrics)
     all_metrics.update(reasoning_metrics)
     
-    logger.info("Evaluation complete.")
+    logger.info(f"Evaluation complete. {len(failures)} schema failures logged.")
     
     return {
         "metrics": all_metrics,
-        "parsed_predictions": parsed_preds
+        "parsed_predictions": parsed_preds,
+        "failures": failures
     }

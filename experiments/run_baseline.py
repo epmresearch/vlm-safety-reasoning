@@ -13,6 +13,7 @@ from data.preprocessor import build_ground_truth_dict
 from models.model_loader import load_model_for_inference
 from models.inference import run_inference_batched
 from evaluation.evaluator import run_full_evaluation
+from core.run_manifest import save_run_manifest
 
 logger = get_logger(__name__)
 
@@ -23,6 +24,10 @@ def main():
     parser.add_argument("--batch_size", type=int, default=16, help="Batch size for batched generation")
     parser.add_argument("--max_seq_length", type=int, default=8192, help="Max sequence length for inference")
     args = parser.parse_args()
+
+    # Save run manifest
+    results_dir = os.path.join(RESULTS_DIR, f"baseline_{args.tier}")
+    save_run_manifest(results_dir, vars(args))
 
     # Load dataset
     logger.info("Loading unified dataset...")

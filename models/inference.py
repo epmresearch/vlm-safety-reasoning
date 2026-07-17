@@ -235,30 +235,61 @@ def run_inference_batched(
     max_new_tokens: int = MAX_NEW_TOKENS_UNIFIED,
     max_samples: Optional[int] = None,
     show_progress: bool = True,
+    output_path: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
-    """Runs batched inference on a dataset split."""
+    """Runs batched inference on a dataset split with Auto-Resume support."""
     from tqdm import tqdm
     import time
+    import json
+    import os
 
+    # 1. Auto-Resume logic: Check existing results
+    completed_ids = set()
+    if output_path and os.path.exists(output_path):
+        with open(output_path, "r") as f:
+            for line in f:
+                if line.strip():
+                    try:
+                        record = json.loads(line)
+                        if "image_id" in record:
+                            completed_ids.add(str(record["image_id"]))
+                    except json.JSONDecodeError:
+                        continue
+        if completed_ids:
+            logger.info(f"Auto-Resume: Found {len(completed_ids)} completed images in {output_path}")
+
+    # 2. Filter dataset
     samples_to_process = dataset
+    if completed_ids:
+        # Filter out images that have already been processed
+        samples_to_process = dataset.filter(lambda x: str(x.get("image_id")) not in completed_ids)
+        logger.info(f"Remaining images to process: {len(samples_to_process)}")
+
     if max_samples is not None:
-        samples_to_process = dataset.select(range(min(max_samples, len(dataset))))
+        # Adjust max_samples to account for images already processed in previous runs
+        remaining_allowed = max(0, max_samples - len(completed_ids))
+        samples_to_process = samples_to_process.select(range(min(remaining_allowed, len(samples_to_process))))
 
     results = []
     n = len(samples_to_process)
+    
+    if n == 0:
+        logger.info("No images left to process! Inference is fully complete.")
+        return results
 
     for start in tqdm(range(0, n, batch_size), desc="Batched Inference", disable=not show_progress):
         batch = samples_to_process.select(range(start, min(start + batch_size, n)))
         pil_images = batch["image"]
 
         start_time = time.time()
+        batch_results = []
         try:
             outputs = generate_batch(model, tokenizer, pil_images, max_new_tokens=max_new_tokens)
             elapsed = time.time() - start_time
             per_image_latency = elapsed / len(pil_images)
 
             for i, sample in enumerate(batch):
-                results.append({
+                batch_results.append({
                     "image_id": sample.get("image_id", ""),
                     "raw_output": outputs[i],
                     "sample": {k: v for k, v in sample.items() if k != "image"},
@@ -266,16 +297,23 @@ def run_inference_batched(
                 })
         except Exception as e:
             logger.warning(f"Batch inference failed for batch starting at {start}: {e}")
-            # Fall back to per-sample so one bad image doesn't kill the whole batch
+            # Fall back to empty output so one bad image doesn't kill the whole dataset
             for sample in batch:
-                results.append({
+                batch_results.append({
                     "image_id": sample.get("image_id", ""),
                     "raw_output": "",
                     "sample": {k: v for k, v in sample.items() if k != "image"},
                     "latency_seconds": 0.0,
                     "error": str(e),
                 })
+        
+        results.extend(batch_results)
+        
+        # 3. Incremental Save to JSONL
+        if output_path:
+            with open(output_path, "a", encoding="utf-8") as f:
+                for res in batch_results:
+                    f.write(json.dumps(res) + "\n")
 
-    logger.info(f"Batched inference complete: {len(results)} samples, "
-                f"{sum(1 for r in results if 'error' in r)} errors")
+    logger.info(f"Batched inference complete: {len(results)} new samples processed.")
     return results
