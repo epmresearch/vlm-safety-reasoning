@@ -21,7 +21,7 @@ UNIFIED_INSPECTION_PROMPT = (
     "   If violated, output {'reason':'...', 'bounding_box':[[xmin, ymin, xmax, ymax]]}. If NOT violated, output null.\n\n"
     "Respond exactly in this JSON format:\n"
     "```json\n"
-    '{"caption":"detailed description","rule_1_violation":{"bounding_box":[[100, 200, 300, 400]],"reason":"..."},"rule_2_violation":null,"rule_3_violation":null,"rule_4_violation":null,"excavator":[[10, 20, 50, 60]],"rebar":[],"worker_with_white_hard_hat":[[0, 0, 100, 100]]}\n'
+    '{"caption":"detailed description","rule_1_violation":{"bounding_box":[[xmin, ymin, xmax, ymax]],"reason":"..."},"rule_2_violation":null,"rule_3_violation":null,"rule_4_violation":null,"excavator":[[xmin, ymin, xmax, ymax]],"rebar":[],"worker_with_white_hard_hat":[[xmin, ymin, xmax, ymax]]}'
     "```"
 )
 
