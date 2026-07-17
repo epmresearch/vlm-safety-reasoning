@@ -254,7 +254,8 @@ def run_inference_batched(
                 if line.strip():
                     try:
                         record = json.loads(line)
-                        if "image_id" in record:
+                        # Only consider an image "completed" if it actually generated a valid text output
+                        if "image_id" in record and record.get("raw_output", "").strip():
                             completed_ids.add(str(record["image_id"]))
                     except json.JSONDecodeError:
                         continue
