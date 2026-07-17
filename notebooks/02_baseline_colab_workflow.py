@@ -14,20 +14,25 @@ from models.model_loader import load_model_for_inference
 from models.inference import run_inference_batched
 from evaluation.evaluator import run_full_evaluation
 from core.run_manifest import save_run_manifest
-from core.io import ensure_dir
+from core.config import load_config
+from core.constants import MAX_NEW_TOKENS_UNIFIED
 
 # 1. Define where to save results on your Drive
 DRIVE_RESULTS_DIR = Path("/content/drive/MyDrive/Research_Results/baseline_2b")
 ensure_dir(DRIVE_RESULTS_DIR)
 JSONL_OUTPUT_PATH = str(DRIVE_RESULTS_DIR / "predictions.jsonl")
 
-# 2. Define Configuration & Save Manifest
+# 2. Load Core Configuration & Define Overrides
+base_config = load_config(task="unified")
+
 run_config = {
     "experiment": "baseline_inference",
     "model_tier": "2b",
-    "batch_size": 16,
-    "max_new_tokens": 1000,
-    "notes": "Colab batched auto-resume run"
+    "batch_size": 32,  # Easy to override here!
+    "max_new_tokens": base_config.get("max_new_tokens", MAX_NEW_TOKENS_UNIFIED),
+    "notes": "Colab batched auto-resume run",
+    # Injecting the entire YAML state so your receipt tracks everything perfectly
+    "full_yaml_state": base_config 
 }
 save_run_manifest(str(DRIVE_RESULTS_DIR), run_config)
 
@@ -53,7 +58,8 @@ results = run_inference_batched(
     model=model,
     tokenizer=tokenizer,
     dataset=test_data,
-    batch_size=16,          # Adjust depending on VRAM usage (16 or 32 is optimal for A100 40GB)
+    batch_size=run_config["batch_size"],
+    max_new_tokens=run_config["max_new_tokens"],
     output_path=JSONL_OUTPUT_PATH
 )
 

@@ -15,8 +15,7 @@ import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from core.config import load_base_config, load_training_config
-from core.constants import MODEL_TIERS, DEFAULT_MODEL_TIER
+from core.config import load_base_config, load_training_config, load_config
 from core.io import get_drive_path, ensure_dir
 from core.logging import get_logger
 from core.wandb_utils import init_run, finish_run
@@ -60,7 +59,7 @@ def _find_latest_checkpoint(checkpoint_dir: Path) -> Optional[str]:
 
 
 def run_sft_unified(
-    tier: str = DEFAULT_MODEL_TIER,
+    tier: Optional[str] = None,
     variant: str = "unified-sft-v1",
     train_dataset: Optional[List[Dict[str, Any]]] = None,
     val_dataset: Optional[List[Dict[str, Any]]] = None,

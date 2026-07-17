@@ -7,7 +7,7 @@ import seaborn as sns
 import pandas as pd
 import json
 from core.io import get_drive_path, ensure_dir
-from core.constants import DEFAULT_MODEL_TIER
+from core.config import load_config
 from models.model_loader import get_model_info
 
 def load_metrics(model_short_name: str, variant: str) -> dict:
@@ -22,7 +22,9 @@ def generate_radar_chart():
     pass
 
 def generate_bar_charts(out_dir):
-    short_name = get_model_info(DEFAULT_MODEL_TIER)["short_name"]
+    config = load_config()
+    tier = config.get("active_tier", "2b")
+    short_name = get_model_info(tier)["short_name"]
     base_metrics = load_metrics(short_name, "baseline")
     sft_metrics = load_metrics(short_name, "unified-sft-v1")
     
@@ -53,7 +55,7 @@ def generate_bar_charts(out_dir):
 
     plt.figure(figsize=(10, 6))
     sns.barplot(data=df_melted, x="Metric", y="Score", hue="Model", palette="viridis")
-    plt.title(f"Baseline vs SFT Performance ({DEFAULT_MODEL_TIER.upper()})")
+    plt.title(f"Baseline vs SFT Performance ({tier.upper()})")
     plt.ylim(0, 100)
     plt.xticks(rotation=45)
     plt.tight_layout()

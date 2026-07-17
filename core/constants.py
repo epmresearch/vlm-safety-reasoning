@@ -62,36 +62,7 @@ METADATA_VALUES = {
     "quality_of_info": ["rich", "average", "poor"],
 }
 
-# ---------------------------------------------------------------------------
-# Model Registry
-# ---------------------------------------------------------------------------
-MODEL_TIERS = {
-    "2b": {
-        "hf_path": "unsloth/Qwen3-VL-2B-Instruct",
-        "short_name": "qwen3vl-2b",
-        "size_label": "Small (2B)",
-    },
-    "4b": {
-        "hf_path": "unsloth/Qwen3-VL-4B-Instruct",
-        "short_name": "qwen3vl-4b",
-        "size_label": "Mid (4B)",
-    },
-    "8b": {
-        "hf_path": "unsloth/Qwen3-VL-8B-Instruct",
-        "short_name": "qwen3vl-8b",
-        "size_label": "Large (8B)",
-    },
-}
 
-# Per-model training batch sizes (tuned for A100 40GB, 4-bit, gradient checkpointing)
-MODEL_BATCH_CONFIGS = {
-    "2b": {"per_device_train_batch_size": 4, "gradient_accumulation_steps": 4},
-    "4b": {"per_device_train_batch_size": 2, "gradient_accumulation_steps": 4},
-    "8b": {"per_device_train_batch_size": 1, "gradient_accumulation_steps": 8},
-}
-
-# Default model for Phase 1
-DEFAULT_MODEL_TIER = "2b"
 
 # ---------------------------------------------------------------------------
 # Bounding Box
@@ -109,5 +80,5 @@ VALIDATION_SPLIT_SEED = 42
 # ---------------------------------------------------------------------------
 # Generation
 # ---------------------------------------------------------------------------
-MAX_NEW_TOKENS_UNIFIED = 1000
+
 DEFAULT_MAX_SEQ_LENGTH = 8192

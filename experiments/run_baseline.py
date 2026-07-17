@@ -4,8 +4,9 @@ Usage: python experiments/run_baseline.py --tier 2b
 """
 import argparse
 import json
+import os
 
-from core.constants import DEFAULT_MODEL_TIER
+from core.config import load_config
 from core.io import get_drive_path, ensure_dir
 from core.logging import get_logger
 from data.loader import load_processed_dataset
@@ -18,11 +19,14 @@ from core.run_manifest import save_run_manifest
 logger = get_logger(__name__)
 
 def main():
+    config = load_config()
+    default_tier = config.get("active_tier", "2b")
+    
     parser = argparse.ArgumentParser()
-    parser.add_argument("--tier", default=DEFAULT_MODEL_TIER, help="Model tier (e.g., 2b, 4b, 8b)")
+    parser.add_argument("--tier", default=default_tier, help="Model tier (e.g., 2b, 4b, 8b)")
     parser.add_argument("--max_samples", type=int, default=None, help="Limit number of test samples")
     parser.add_argument("--batch_size", type=int, default=16, help="Batch size for batched generation")
-    parser.add_argument("--max_seq_length", type=int, default=8192, help="Max sequence length for inference")
+    parser.add_argument("--max_seq_length", type=int, default=config.get("max_seq_length", 8192), help="Max sequence length for inference")
     args = parser.parse_args()
 
     # Save run manifest

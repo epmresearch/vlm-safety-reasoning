@@ -7,18 +7,19 @@ evaluation pipeline's output_parser module).
 """
 from typing import Any, Dict, List, Optional
 
-from core.constants import MAX_NEW_TOKENS_UNIFIED
+from core.config import load_config
 from core.logging import get_logger
 from data.prompt_templates import SYSTEM_PROMPT, UNIFIED_INSPECTION_PROMPT
 
 logger = get_logger(__name__)
+DEFAULT_MAX_NEW_TOKENS = load_config(task="unified").get("max_new_tokens", 1000)
 
 
 def generate_single(
     model,
     tokenizer,
     pil_image,
-    max_new_tokens: int = MAX_NEW_TOKENS_UNIFIED,
+    max_new_tokens: int = DEFAULT_MAX_NEW_TOKENS,
     temperature: float = 0.0,
     do_sample: bool = False,
 ) -> str:
@@ -95,7 +96,7 @@ def run_inference(
     model,
     tokenizer,
     dataset,
-    max_new_tokens: int = MAX_NEW_TOKENS_UNIFIED,
+    max_new_tokens: int = DEFAULT_MAX_NEW_TOKENS,
     max_samples: Optional[int] = None,
     show_progress: bool = True,
 ) -> List[Dict[str, Any]]:
@@ -167,7 +168,7 @@ def generate_batch(
     model,
     tokenizer,
     pil_images: list,
-    max_new_tokens: int = MAX_NEW_TOKENS_UNIFIED,
+    max_new_tokens: int = DEFAULT_MAX_NEW_TOKENS,
     temperature: float = 0.0,
     do_sample: bool = False,
 ) -> List[str]:
@@ -232,7 +233,7 @@ def run_inference_batched(
     tokenizer,
     dataset,
     batch_size: int = 16,
-    max_new_tokens: int = MAX_NEW_TOKENS_UNIFIED,
+    max_new_tokens: int = DEFAULT_MAX_NEW_TOKENS,
     max_samples: Optional[int] = None,
     show_progress: bool = True,
     output_path: Optional[str] = None,

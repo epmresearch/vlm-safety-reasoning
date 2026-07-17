@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 import pandas as pd
 
-from core.constants import DEFAULT_MODEL_TIER
+from core.config import load_config
 from core.io import get_drive_path, ensure_dir
 from core.logging import get_logger
 from models.model_loader import get_model_info
@@ -49,8 +49,11 @@ def flatten_metrics(metrics: dict, label: str) -> dict:
     return flat
 
 def main():
+    config = load_config()
+    default_tier = config.get("active_tier", "2b")
+
     parser = argparse.ArgumentParser()
-    parser.add_argument("--tier", default=DEFAULT_MODEL_TIER, help="Model tier (e.g., 2b, 4b, 8b)")
+    parser.add_argument("--tier", default=default_tier, help="Model tier (e.g., 2b, 4b, 8b)")
     args = parser.parse_args()
 
     model_info = get_model_info(args.tier)

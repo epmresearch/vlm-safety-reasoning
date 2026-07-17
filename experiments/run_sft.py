@@ -4,7 +4,7 @@ Usage: python experiments/run_sft.py --tier 2b --variant unified-sft-v1
 """
 import argparse
 
-from core.constants import DEFAULT_MODEL_TIER
+from core.config import load_config
 from core.logging import get_logger
 from data.loader import load_dataset_splits
 from data.preprocessor import build_unified_sft_dataset
@@ -13,8 +13,11 @@ from models.sft_trainer import run_sft_unified
 logger = get_logger(__name__)
 
 def main():
+    config = load_config()
+    default_tier = config.get("active_tier", "2b")
+    
     parser = argparse.ArgumentParser()
-    parser.add_argument("--tier", default=DEFAULT_MODEL_TIER, help="Model tier (e.g., 2b, 4b, 8b)")
+    parser.add_argument("--tier", default=default_tier, help="Model tier (e.g., 2b, 4b, 8b)")
     parser.add_argument("--variant", default="unified-sft-v1", help="Variant name for SFT")
     parser.add_argument("--no-resume", action="store_true", help="Do not resume from checkpoint")
     args = parser.parse_args()

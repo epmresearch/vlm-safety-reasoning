@@ -24,7 +24,7 @@ def load_base_config() -> Dict[str, Any]:
 
 
 def load_model_strategy() -> Dict[str, Any]:
-    return _load_yaml(CONFIG_ROOT / "model_strategy.yaml")
+    return _load_yaml(CONFIG_ROOT / "model_registry.yaml")
 
 
 def load_task_config(task: str) -> Dict[str, Any]:
