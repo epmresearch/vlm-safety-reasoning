@@ -57,7 +57,7 @@ def batch_score_reasoning(
     # 1. Compute global (macro) reasoning metrics
     if all_pred_reasons:
         logger.info(f"Computing global reasoning metrics over {len(all_pred_reasons)} valid reasons...")
-        caption_res = compute_all_caption_metrics(all_pred_reasons, all_gt_reasons)
+        caption_res = compute_all_caption_metrics(all_pred_reasons, all_gt_reasons, include_spice=False)
         for k, v in caption_res.items():
             result[f"reasoning_macro_{k}"] = v
     else:
@@ -71,7 +71,8 @@ def batch_score_reasoning(
             logger.info(f"Computing reasoning metrics for {r} over {len(rule_pred_reasons[r])} valid reasons...")
             rule_res = compute_all_caption_metrics(
                 rule_pred_reasons[r], 
-                rule_gt_reasons[r]
+                rule_gt_reasons[r],
+                include_spice=False
             )
             for k, v in rule_res.items():
                 result[f"reasoning_{r}_{k}"] = v
