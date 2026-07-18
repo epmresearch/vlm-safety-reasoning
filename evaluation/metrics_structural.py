@@ -29,9 +29,9 @@ def compute_structural_metrics(raw_outputs: List[str]) -> Dict[str, float]:
                 valid_schema_count += 1
                 
     return {
-        "json_validity_rate": valid_json_count / total,
-        "schema_adherence_rate": valid_schema_count / total,
-        "valid_json_count": valid_json_count,
-        "valid_schema_count": valid_schema_count,
-        "total_samples": total,
+        "structural_json_validity_rate": valid_json_count / total,
+        "structural_schema_adherence_rate": valid_schema_count / total,
+        "structural_valid_json_count": valid_json_count,
+        "structural_valid_schema_count": valid_schema_count,
+        "structural_total_samples_count": total,
     }

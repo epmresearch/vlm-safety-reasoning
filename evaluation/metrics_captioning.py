@@ -125,7 +125,7 @@ def compute_cider(predictions: List[str], references: List[str]) -> Dict[str, fl
         res, gts = _ptb_tokenize_pairs(predictions, references)
         scorer = Cider()
         score, _ = scorer.compute_score(gts, res)
-        return {"cider": float(score)}
+        return {"ciderd": float(score)}
     except Exception as e:
         logger.warning(f"Failed to compute official CIDEr-D: {e}")
         return {}
@@ -234,6 +234,7 @@ def compute_all_caption_metrics(
     references: List[str],
     images: List[Any] = None,
     include_spice: bool = True,
+    prefix: str = "",
 ) -> Dict[str, float]:
     """Computes all captioning metrics: BERTScore, METEOR, CIDEr-D, SPICE,
     and optionally CLIPScore.
@@ -259,5 +260,8 @@ def compute_all_caption_metrics(
 
     if images:
         results.update(compute_clipscore(clean_preds, images))
+
+    if prefix:
+        results = {f"{prefix}{k}": v for k, v in results.items()}
 
     return results

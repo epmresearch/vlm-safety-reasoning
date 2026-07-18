@@ -109,9 +109,9 @@ def compute_violation_metrics(predictions: List[Dict[str, Any]], references: Lis
     recall = global_tp / (global_tp + global_fn) if (global_tp + global_fn) > 0 else 0.0
     f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
     
-    metrics["violation_macro_precision"] = precision
-    metrics["violation_macro_recall"] = recall
-    metrics["violation_macro_f1"] = f1
+    metrics["violation_identification_precision_macro"] = precision
+    metrics["violation_identification_recall_macro"] = recall
+    metrics["violation_identification_f1_macro"] = f1
     
     # Per-rule metrics
     for r in ALL_RULES:
@@ -120,17 +120,17 @@ def compute_violation_metrics(predictions: List[Dict[str, Any]], references: Lis
         rec = tp / (tp + fn) if (tp + fn) > 0 else 0.0
         r_f1 = 2 * p * rec / (p + rec) if (p + rec) > 0 else 0.0
         
-        metrics[f"violation_{r}_precision"] = p
-        metrics[f"violation_{r}_recall"] = rec
-        metrics[f"violation_{r}_f1"] = r_f1
+        metrics[f"violation_identification_precision_{r}"] = p
+        metrics[f"violation_identification_recall_{r}"] = rec
+        metrics[f"violation_identification_f1_{r}"] = r_f1
         
     # Grounding IoU per rule
     all_ious = []
     for r in RULES:
         ious = rule_iou_scores[r]
-        metrics[f"violation_iou_{r}"] = sum(ious) / len(ious) if ious else 0.0
+        metrics[f"violation_grounding_iou_{r}"] = sum(ious) / len(ious) if ious else 0.0
         all_ious.extend(ious)
         
-    metrics["violation_grounding_iou"] = sum(all_ious) / len(all_ious) if all_ious else 0.0
+    metrics["violation_grounding_iou_macro"] = sum(all_ious) / len(all_ious) if all_ious else 0.0
     
     return metrics

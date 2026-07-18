@@ -69,7 +69,7 @@ def run_full_evaluation(raw_predictions: List[str], references: List[Dict[str, A
     
     # 2. Captioning metrics
     logger.info("Computing captioning metrics...")
-    caption_metrics = compute_all_caption_metrics(pred_captions, gt_captions, images=images)
+    caption_metrics = compute_all_caption_metrics(pred_captions, gt_captions, images=images, prefix="captioning_")
     
     # 3. Grounding metrics
     logger.info("Computing grounding metrics...")
