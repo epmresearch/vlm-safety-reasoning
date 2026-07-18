@@ -169,7 +169,7 @@ def load_model_for_inference(
         model_name = get_model_info(tier)["hf_path"]
         
     if max_seq_length is None:
-        max_seq_length = load_config().get("max_seq_length", 8192)
+        max_seq_length = load_config().get("max_seq_length", 4096)
 
     logger.info(f"Loading model for inference: {model_name} with max_seq_length={max_seq_length}")
 
@@ -203,25 +203,22 @@ def load_model_for_inference(
 
 def apply_pixel_bounds(
     tokenizer,
-    min_pixels: Optional[int] = None,
-    max_pixels: Optional[int] = None,
+    min_pixels: int = None,
+    max_pixels: int = None,
 ) -> None:
-    """Caps the resolution actually fed to the vision encoder.
-
-    This is the single most important OOM guard for training: it neutralizes
-    the ~8% of images above ~3M pixels (up to 14.6M px / 4416x3312 outliers
-    you found in the resolution audit) by having Qwen's own image processor
-    downscale them before they ever hit the model, regardless of batching.
-    """
     image_processor = getattr(tokenizer, "image_processor", None)
     if image_processor is None:
-        logger.warning("No image_processor on tokenizer — cannot apply pixel bounds.")
+        print("Warning: No image_processor on tokenizer — cannot apply pixel bounds.")
         return
-    if min_pixels is not None:
-        image_processor.min_pixels = min_pixels
-    if max_pixels is not None:
-        image_processor.max_pixels = max_pixels
-    logger.info(f"Applied image pixel bounds: min={min_pixels}, max={max_pixels}")
+
+    # Fallback to existing values if None are provided
+    current_min = min_pixels if min_pixels is not None else getattr(image_processor, "min_pixels", 200704)
+    current_max = max_pixels if max_pixels is not None else getattr(image_processor, "max_pixels", 1204224)
+
+    # Overwrite the size dictionary directly with the area bounds
+    image_processor.size = {"min_pixels": current_min, "max_pixels": current_max}
+
+    print(f"Applied image pixel bounds via size dict: min={current_min}, max={current_max}")
 
 
 def log_gpu_memory(tag: str = "") -> None:

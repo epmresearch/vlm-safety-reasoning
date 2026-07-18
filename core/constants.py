@@ -81,4 +81,4 @@ VALIDATION_SPLIT_SEED = 42
 # Generation
 # ---------------------------------------------------------------------------
 
-DEFAULT_MAX_SEQ_LENGTH = 8192
+DEFAULT_MAX_SEQ_LENGTH = 4096
