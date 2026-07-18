@@ -300,7 +300,11 @@ def run_inference_batched(
                     "latency_seconds": per_image_latency,
                 })
         except Exception as e:
-            logger.warning(f"Batch inference failed for batch starting at {start}: {e}")
+            error_msg = f"Batch inference failed for batch starting at {start}: {e}"
+            logger.info(error_msg)      # downgraded from warning -> info
+            tqdm.write(f"⚠️  {error_msg}") 
+
+            # logger.warning(f"Batch inference failed for batch starting at {start}: {e}")
             # Fall back to empty output so one bad image doesn't kill the whole dataset
             for sample in batch:
                 batch_results.append({

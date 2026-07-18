@@ -133,6 +133,16 @@ def load_model_for_training(
         else "all-linear",
     )
 
+    # Cap image resolution fed to the vision encoder (training memory safety)
+    apply_pixel_bounds(
+        tokenizer,
+        min_pixels=sft_cfg.get("image_min_pixels") if sft_cfg else None,
+        max_pixels=sft_cfg.get("image_max_pixels") if sft_cfg else None,
+    )
+
+    # CRITICAL: Unsloth requires this explicit flip into training mode.
+    FastVisionModel.for_training(model)
+
     return model, tokenizer, get_model_info(tier)
 
 
@@ -177,7 +187,56 @@ def load_model_for_inference(
             max_seq_length=max_seq_length,
         )
 
+    # Cap image resolution for inference memory safety
+    sft_cfg = load_config(training_kind="sft")
+    apply_pixel_bounds(
+        tokenizer,
+        min_pixels=sft_cfg.get("image_min_pixels"),
+        max_pixels=sft_cfg.get("image_max_pixels"),
+    )
+
     # Set to inference mode
     FastVisionModel.for_inference(model)
 
     return model, tokenizer, get_model_info(tier)
+
+
+def apply_pixel_bounds(
+    tokenizer,
+    min_pixels: Optional[int] = None,
+    max_pixels: Optional[int] = None,
+) -> None:
+    """Caps the resolution actually fed to the vision encoder.
+
+    This is the single most important OOM guard for training: it neutralizes
+    the ~8% of images above ~3M pixels (up to 14.6M px / 4416x3312 outliers
+    you found in the resolution audit) by having Qwen's own image processor
+    downscale them before they ever hit the model, regardless of batching.
+    """
+    image_processor = getattr(tokenizer, "image_processor", None)
+    if image_processor is None:
+        logger.warning("No image_processor on tokenizer — cannot apply pixel bounds.")
+        return
+    if min_pixels is not None:
+        image_processor.min_pixels = min_pixels
+    if max_pixels is not None:
+        image_processor.max_pixels = max_pixels
+    logger.info(f"Applied image pixel bounds: min={min_pixels}, max={max_pixels}")
+
+
+def log_gpu_memory(tag: str = "") -> None:
+    """One-shot GPU memory printout, useful right after model load and right
+    before trainer.train() to sanity-check headroom."""
+    try:
+        import torch
+        if not torch.cuda.is_available():
+            return
+        allocated = torch.cuda.memory_allocated() / 1e9
+        reserved = torch.cuda.memory_reserved() / 1e9
+        total = torch.cuda.get_device_properties(0).total_memory / 1e9
+        logger.info(
+            f"[GPU MEM{' ' + tag if tag else ''}] allocated={allocated:.2f}GB "
+            f"reserved={reserved:.2f}GB total={total:.2f}GB free~={total - reserved:.2f}GB"
+        )
+    except Exception as e:
+        logger.warning(f"Could not read GPU memory: {e}")

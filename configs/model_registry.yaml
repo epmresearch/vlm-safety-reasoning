@@ -1,5 +1,32 @@
-# Model registry for VLM experiments.
-# Switch models by changing `active_tier`. No code changes needed.
+# # Model registry for VLM experiments.
+# # Switch models by changing `active_tier`. No code changes needed.
+
+# active_tier: "2b"
+
+# models:
+#   2b:
+#     hf_path: "unsloth/Qwen3-VL-2B-Instruct"
+#     short_name: "qwen3vl-2b"
+#     size_label: "Small (2B)"
+#     per_device_train_batch_size: 4
+#     gradient_accumulation_steps: 4
+#   4b:
+#     hf_path: "unsloth/Qwen3-VL-4B-Instruct"
+#     short_name: "qwen3vl-4b"
+#     size_label: "Mid (4B)"
+#     per_device_train_batch_size: 2
+#     gradient_accumulation_steps: 4
+#   8b:
+#     hf_path: "unsloth/Qwen3-VL-8B-Instruct"
+#     short_name: "qwen3vl-8b"
+#     size_label: "Large (8B)"
+#     per_device_train_batch_size: 1
+#     gradient_accumulation_steps: 8
+
+
+
+
+# Normalize effective batch size across tiers (=16) so ablations are comparable, and drop per-device batch sizes to something that survives the 1.2M-pixel cap with room to spare:
 
 active_tier: "2b"
 
@@ -8,17 +35,17 @@ models:
     hf_path: "unsloth/Qwen3-VL-2B-Instruct"
     short_name: "qwen3vl-2b"
     size_label: "Small (2B)"
-    per_device_train_batch_size: 4
-    gradient_accumulation_steps: 4
+    per_device_train_batch_size: 2
+    gradient_accumulation_steps: 8      # effective batch = 16
   4b:
     hf_path: "unsloth/Qwen3-VL-4B-Instruct"
     short_name: "qwen3vl-4b"
     size_label: "Mid (4B)"
-    per_device_train_batch_size: 2
-    gradient_accumulation_steps: 4
+    per_device_train_batch_size: 1
+    gradient_accumulation_steps: 16     # effective batch = 16
   8b:
     hf_path: "unsloth/Qwen3-VL-8B-Instruct"
     short_name: "qwen3vl-8b"
     size_label: "Large (8B)"
     per_device_train_batch_size: 1
-    gradient_accumulation_steps: 8
+    gradient_accumulation_steps: 16    
