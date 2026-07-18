@@ -72,8 +72,7 @@ def compute_meteor(predictions: List[str], references: List[str]) -> Dict[str, f
 
 def compute_cider(predictions: List[str], references: List[str]) -> Dict[str, float]:
     """
-    Computes CIDEr score.
-    Requires pycocoevalcap package.
+    Computes CIDEr-D score using pycocoevalcap (which uses CIDEr-D under the hood).
     """
     try:
         from pycocoevalcap.cider.cider import Cider

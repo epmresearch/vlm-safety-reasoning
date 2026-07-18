@@ -5,7 +5,8 @@ accelerate>=0.34.0
 peft>=0.13.0
 trl>=0.11.0
 
-unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git
+# unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git
+unsloth[colab-new]==2026.7.3
 
 # Qwen-VL specific
 qwen-vl-utils>=0.0.8
