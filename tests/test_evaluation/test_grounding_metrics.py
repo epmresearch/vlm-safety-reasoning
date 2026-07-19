@@ -143,10 +143,10 @@ def test_compute_grounding_metrics():
     # Exist Macro: Img 1 only -> 1.0
     # Exist Micro: Img 1 only -> 0.25 / 0.25 = 1.0
     
-    assert res["grounding_iou_total_macro_excavator"] == 0.5
-    assert math.isclose(res["grounding_iou_total_micro_excavator"], 0.2)
-    assert res["grounding_iou_exist_macro_excavator"] == 1.0
-    assert res["grounding_iou_exist_micro_excavator"] == 1.0
+    assert res["grounding_iou_all_macro_excavator"] == 0.5
+    assert math.isclose(res["grounding_iou_all_micro_excavator"], 0.2)
+    assert res["grounding_iou_existing_macro_excavator"] == 1.0
+    assert res["grounding_iou_existing_micro_excavator"] == 1.0
     
     # --- Rebar Math Analysis ---
     # Img 1: TN, IoU=1.0, inter=0, union=0. GT Exists=False
@@ -156,10 +156,10 @@ def test_compute_grounding_metrics():
     # Exist Macro: Img 2 only -> 0.0
     # Exist Micro: Img 2 only -> 0.0 / 0.26 = 0.0
     
-    assert res["grounding_iou_total_macro_rebar"] == 0.5
-    assert res["grounding_iou_total_micro_rebar"] == 0.0
-    assert res["grounding_iou_exist_macro_rebar"] == 0.0
-    assert res["grounding_iou_exist_micro_rebar"] == 0.0
+    assert res["grounding_iou_all_macro_rebar"] == 0.5
+    assert res["grounding_iou_all_micro_rebar"] == 0.0
+    assert res["grounding_iou_existing_macro_rebar"] == 0.0
+    assert res["grounding_iou_existing_micro_rebar"] == 0.0
     
     # Check that empty edge cases don't crash
     empty_res = compute_grounding_metrics([], [])

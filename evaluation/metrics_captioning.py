@@ -179,33 +179,72 @@ def compute_spice(predictions: List[str], references: List[str]) -> Dict[str, fl
 # CLIPScore
 # ---------------------------------------------------------------------------
 
-def compute_clipscore(predictions: List[str], images: List[Any]) -> Dict[str, float]:
+_clip_model = None
+_clip_processor = None
+
+def _get_clip_model():
+    global _clip_model, _clip_processor
+    if _clip_model is None:
+        from transformers import CLIPProcessor, CLIPModel
+        import torch
+        model_id = "openai/clip-vit-base-patch32"
+        _clip_processor = CLIPProcessor.from_pretrained(model_id)
+        _clip_model = CLIPModel.from_pretrained(model_id)
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        _clip_model = _clip_model.to(device).eval()
+    return _clip_model, _clip_processor
+
+def compute_clipscore(predictions: List[str], images: List[Any], batch_size: int = 32) -> Dict[str, float]:
+    """Computes CLIPScore between predictions and images.
+
+    Uses the standard 2.5 * max(cos_sim, 0) scaling from Hessel et al. 2021.
+    Text-image pairs are validated and aligned before batching to guarantee
+    that no indexing mismatch can occur if an image fails to load.
+
+    Args:
+        predictions: List of caption strings.
+        images: List of PIL Images, file paths, or other image-like objects.
+        batch_size: Number of pairs to process per forward pass.
+
+    Returns:
+        Dict with 'clipscore' key, or empty dict on failure.
+    """
     if not images or len(predictions) != len(images):
         return {}
 
     try:
         import torch
-        from transformers import CLIPProcessor, CLIPModel
         from PIL import Image
 
-        logger.info("Loading CLIP model for CLIPScore...")
-        model_id = "openai/clip-vit-base-patch32"
-        processor = CLIPProcessor.from_pretrained(model_id)
-        model = CLIPModel.from_pretrained(model_id)
+        logger.info("Computing CLIPScore (batched)...")
+        model, processor = _get_clip_model()
+        device = model.device
 
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        model = model.to(device)
-        model.eval()
-
-        scores = []
-        for p, img in zip(predictions, images):
+        # Pre-validate and pair predictions with images upfront.
+        # This guarantees text[i] always corresponds to image[i] even
+        # when invalid images are dropped.
+        valid_pairs = []
+        for pred, img in zip(predictions, images):
             if not isinstance(img, Image.Image):
                 if isinstance(img, str):
-                    img = Image.open(img).convert("RGB")
+                    try:
+                        img = Image.open(img).convert("RGB")
+                    except Exception:
+                        continue
                 else:
                     continue
+            valid_pairs.append((pred, img))
 
-            inputs = processor(text=[p], images=img, return_tensors="pt", padding=True, truncation=True)
+        if not valid_pairs:
+            return {"clipscore": 0.0}
+
+        scores = []
+        for i in range(0, len(valid_pairs), batch_size):
+            batch = valid_pairs[i:i + batch_size]
+            batch_preds = [p for p, _ in batch]
+            batch_imgs = [img for _, img in batch]
+
+            inputs = processor(text=batch_preds, images=batch_imgs, return_tensors="pt", padding=True, truncation=True)
             inputs = {k: v.to(device) for k, v in inputs.items()}
 
             with torch.no_grad():
@@ -216,8 +255,13 @@ def compute_clipscore(predictions: List[str], images: List[Any]) -> Dict[str, fl
             image_embeds = image_embeds / image_embeds.norm(p=2, dim=-1, keepdim=True)
             text_embeds = text_embeds / text_embeds.norm(p=2, dim=-1, keepdim=True)
 
-            cos_sim = torch.matmul(image_embeds, text_embeds.t()).item()
-            scores.append(max(0.0, 2.5 * cos_sim))
+            # Element-wise dot product: text_embeds[i] · image_embeds[i]
+            # This is correct because CLIP encodes text and images independently
+            # through separate encoders, so the i-th text embed corresponds to
+            # the i-th image embed as long as inputs are aligned (guaranteed above).
+            cos_sims = torch.sum(image_embeds * text_embeds, dim=-1)
+            for cos_sim in cos_sims:
+                scores.append(max(0.0, 2.5 * cos_sim.item()))
 
         return {"clipscore": sum(scores) / len(scores) if scores else 0.0}
     except Exception as e:

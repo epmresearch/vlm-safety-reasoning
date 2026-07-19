@@ -5,6 +5,7 @@ Usage: python experiments/run_baseline.py --tier 2b
 import argparse
 import json
 import os
+from pathlib import Path
 
 from core.config import load_config
 from core.io import get_drive_path, ensure_dir
@@ -30,7 +31,7 @@ def main():
     args = parser.parse_args()
 
     # Save run manifest
-    results_dir = os.path.join(RESULTS_DIR, f"baseline_{args.tier}")
+    results_dir = str(get_drive_path("results", f"baseline_{args.tier}"))
     save_run_manifest(results_dir, vars(args))
 
     # Load dataset
@@ -49,12 +50,15 @@ def main():
 
     # Run inference
     logger.info(f"Running baseline batched inference (batch_size={args.batch_size})...")
+    output_path = str(get_drive_path("results", model_info["short_name"], "baseline", "inference_raw.jsonl"))
+    ensure_dir(Path(output_path).parent)
     results = run_inference_batched(
         model=model,
         tokenizer=tokenizer,
         dataset=test_data,
         batch_size=args.batch_size,
         max_samples=args.max_samples,
+        output_path=output_path,
     )
 
     raw_predictions = [res["raw_output"] for res in results]

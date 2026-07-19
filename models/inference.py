@@ -7,12 +7,12 @@ evaluation pipeline's output_parser module).
 """
 from typing import Any, Dict, List, Optional
 
-from core.config import load_config
+from core.config import load_task_config
 from core.logging import get_logger
 from data.prompt_templates import SYSTEM_PROMPT, UNIFIED_INSPECTION_PROMPT
 
 logger = get_logger(__name__)
-DEFAULT_MAX_NEW_TOKENS = load_config(task="unified").get("max_new_tokens", 1000)
+DEFAULT_MAX_NEW_TOKENS = load_task_config("unified").get("max_new_tokens", 1000)
 
 
 def generate_single(
@@ -198,9 +198,16 @@ def generate_batch(
     ]
 
     # Process vision info across all messages
-    image_inputs, video_inputs = process_vision_info(
-        [msg for conv in batch_messages for msg in conv]
-    )
+    all_image_inputs = []
+    all_video_inputs = []
+    for conv in batch_messages:
+        img_in, vid_in = process_vision_info(conv)
+        if img_in:
+            all_image_inputs.extend(img_in if isinstance(img_in, list) else [img_in])
+        if vid_in:
+            all_video_inputs.extend(vid_in if isinstance(vid_in, list) else [vid_in])
+    image_inputs = all_image_inputs if all_image_inputs else None
+    video_inputs = all_video_inputs if all_video_inputs else None
 
     inputs = tokenizer(
         text=texts,

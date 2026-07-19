@@ -27,30 +27,30 @@ def test_batch_score_reasoning_splitting(mock_metrics):
     assert mock_metrics.call_count == 3
     
     # Check that the global metrics are prefixed correctly
-    assert res["reasoning_macro_bertscore_f1"] == 0.9
-    assert res["reasoning_macro_meteor"] == 0.8
+    assert res["reasoning_bertscore_f1_macro"] == 0.9
+    assert res["reasoning_meteor_macro"] == 0.8
     
     # Check that rule 1 and 2 received the mocked scores
-    assert res["reasoning_rule_1_bertscore_f1"] == 0.9
-    assert res["reasoning_rule_2_bertscore_f1"] == 0.9
+    assert res["reasoning_bertscore_f1_rule_1"] == 0.9
+    assert res["reasoning_bertscore_f1_rule_2"] == 0.9
     
     # Check that rule 3 and 4 correctly fell back to 0.0 since they had no data
-    assert res["reasoning_rule_3_bertscore_f1"] == 0.0
-    assert res["reasoning_rule_3_meteor"] == 0.0
-    assert res["reasoning_rule_4_bertscore_f1"] == 0.0
+    assert res["reasoning_bertscore_f1_rule_3"] == 0.0
+    assert res["reasoning_meteor_rule_3"] == 0.0
+    assert res["reasoning_bertscore_f1_rule_4"] == 0.0
 
 def test_batch_score_reasoning_empty():
     """Test fallback logic when there are completely empty lists or no common rules."""
     # Case 1: Empty lists
     res_empty = batch_score_reasoning([], [])
-    assert res_empty["reasoning_macro_bertscore_f1"] == 0.0
-    assert res_empty["reasoning_rule_1_bertscore_f1"] == 0.0
+    assert res_empty["reasoning_bertscore_f1_macro"] == 0.0
+    assert res_empty["reasoning_bertscore_f1_rule_1"] == 0.0
     
     # Case 2: No overlapping rules (e.g., 100% False Positives and False Negatives)
     preds = [{"rule_1_violation": {"reason": "a"}}]
     refs = [{"rule_2_violation": {"reason": "b"}}]
     
     res_no_overlap = batch_score_reasoning(preds, refs)
-    assert res_no_overlap["reasoning_macro_bertscore_f1"] == 0.0
-    assert res_no_overlap["reasoning_rule_1_bertscore_f1"] == 0.0
-    assert res_no_overlap["reasoning_rule_2_bertscore_f1"] == 0.0
+    assert res_no_overlap["reasoning_bertscore_f1_macro"] == 0.0
+    assert res_no_overlap["reasoning_bertscore_f1_rule_1"] == 0.0
+    assert res_no_overlap["reasoning_bertscore_f1_rule_2"] == 0.0

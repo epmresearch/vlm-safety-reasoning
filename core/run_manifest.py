@@ -4,7 +4,7 @@ Captures configuration and environment state to ensure reproducibility.
 """
 import os
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, Any
 
 from core.logging import get_logger
@@ -28,13 +28,13 @@ def save_run_manifest(output_dir: str, config_dict: Dict[str, Any], filename: st
     manifest_path = os.path.join(output_dir, filename)
     
     manifest = {
-        "timestamp_utc": datetime.utcnow().isoformat() + "Z",
+        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
         "configuration": config_dict
     }
     
     try:
         with open(manifest_path, "w", encoding="utf-8") as f:
-            json.dump(manifest, f, indent=2)
+            json.dump(manifest, f, indent=2, default=str)
         logger.info(f"Run manifest saved to {manifest_path}")
     except Exception as e:
         logger.error(f"Failed to save run manifest to {manifest_path}: {e}")

@@ -12,11 +12,11 @@ def test_run_full_evaluation(mock_reasoning, mock_violation, mock_grounding, moc
     """Test that evaluator orchestrates all sub-modules correctly and aggregates dictionaries."""
     
     # Mock return values for all modules
-    mock_structural.return_value = {"json_validity_rate": 1.0}
-    mock_caption.return_value = {"bertscore_f1": 0.9}
-    mock_grounding.return_value = {"grounding_iou": 0.8}
-    mock_violation.return_value = {"violation_macro_f1": 0.7}
-    mock_reasoning.return_value = {"reasoning_macro_bertscore_f1": 0.6}
+    mock_structural.return_value = {"structural_json_validity_rate": 1.0}
+    mock_caption.return_value = {"captioning_bertscore_f1": 0.9}
+    mock_grounding.return_value = {"grounding_iou_all_macro_mean": 0.8}
+    mock_violation.return_value = {"violation_identification_f1_macro": 0.7}
+    mock_reasoning.return_value = {"reasoning_bertscore_f1_macro": 0.6}
     
     # Inputs
     raw_predictions = ["```json\n{\"caption\": \"safe\"}\n```"]
@@ -39,11 +39,11 @@ def test_run_full_evaluation(mock_reasoning, mock_violation, mock_grounding, moc
     
     # Verify final aggregation structure
     metrics = res["metrics"]
-    assert metrics["json_validity_rate"] == 1.0
-    assert metrics["bertscore_f1"] == 0.9
-    assert metrics["grounding_iou"] == 0.8
-    assert metrics["violation_macro_f1"] == 0.7
-    assert metrics["reasoning_macro_bertscore_f1"] == 0.6
+    assert metrics["structural_json_validity_rate"] == 1.0
+    assert metrics["captioning_bertscore_f1"] == 0.9
+    assert metrics["grounding_iou_all_macro_mean"] == 0.8
+    assert metrics["violation_identification_f1_macro"] == 0.7
+    assert metrics["reasoning_bertscore_f1_macro"] == 0.6
     
     # Verify parsed outputs are returned so they can be logged
     assert len(res["parsed_predictions"]) == 1

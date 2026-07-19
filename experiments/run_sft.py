@@ -33,6 +33,13 @@ def main():
     train_ds = build_unified_sft_dataset(splits["train"])
     val_ds = build_unified_sft_dataset(splits["val"])
 
+    if train_resolutions is not None and len(train_resolutions) != len(train_ds):
+        logger.warning(
+            f"Resolution count ({len(train_resolutions)}) != training samples ({len(train_ds)}). "
+            f"Disabling resolution bucketing for safety."
+        )
+        train_resolutions = None
+
     logger.info(f"Starting SFT for tier: {args.tier}, variant: {args.variant}...")
     checkpoint_dir = run_sft_unified(
         tier=args.tier,

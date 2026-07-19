@@ -151,6 +151,8 @@ def load_model_for_inference(
     tier: Optional[str] = None,
     adapter_path: Optional[str] = None,
     max_seq_length: Optional[int] = None,
+    image_min_pixels: Optional[int] = None,
+    image_max_pixels: Optional[int] = None,
 ) -> Tuple:
     """Loads a model for inference (with optional LoRA adapter).
 
@@ -164,12 +166,22 @@ def load_model_for_inference(
         Tuple of (model, tokenizer).
     """
     from unsloth import FastVisionModel
+    from core.config import load_config
+
+    # Auto-load defaults from SFT config to ensure inference matches training constraints
+    cfg = load_config(training_kind="sft")
 
     if model_name is None:
         model_name = get_model_info(tier)["hf_path"]
         
     if max_seq_length is None:
-        max_seq_length = load_config().get("max_seq_length", 4096)
+        max_seq_length = cfg.get("max_seq_length", 4096)
+
+    if image_min_pixels is None:
+        image_min_pixels = cfg.get("image_min_pixels")
+        
+    if image_max_pixels is None:
+        image_max_pixels = cfg.get("image_max_pixels")
 
     logger.info(f"Loading model for inference: {model_name} with max_seq_length={max_seq_length}")
 
@@ -188,11 +200,10 @@ def load_model_for_inference(
         )
 
     # Cap image resolution for inference memory safety
-    sft_cfg = load_config(training_kind="sft")
     apply_pixel_bounds(
         tokenizer,
-        min_pixels=sft_cfg.get("image_min_pixels"),
-        max_pixels=sft_cfg.get("image_max_pixels"),
+        min_pixels=image_min_pixels,
+        max_pixels=image_max_pixels,
     )
 
     # Set to inference mode
@@ -208,7 +219,7 @@ def apply_pixel_bounds(
 ) -> None:
     image_processor = getattr(tokenizer, "image_processor", None)
     if image_processor is None:
-        print("Warning: No image_processor on tokenizer — cannot apply pixel bounds.")
+        logger.warning("No image_processor on tokenizer — cannot apply pixel bounds.")
         return
 
     # Fallback to existing values if None are provided
@@ -218,7 +229,7 @@ def apply_pixel_bounds(
     # Overwrite the size dictionary directly with the area bounds
     image_processor.size = {"min_pixels": current_min, "max_pixels": current_max}
 
-    print(f"Applied image pixel bounds via size dict: min={current_min}, max={current_max}")
+    logger.info(f"Applied image pixel bounds via size dict: min={current_min}, max={current_max}")
 
 
 def log_gpu_memory(tag: str = "") -> None:

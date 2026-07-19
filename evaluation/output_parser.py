@@ -48,5 +48,5 @@ def validate_unified_output(parsed_data: Dict[str, Any]) -> Optional[UnifiedOutp
     try:
         return UnifiedOutput(**parsed_data)
     except Exception as e:
-        logger.debug(f"Failed to validate UnifiedOutput schema: {e}")
+        logger.warning(f"Failed to validate UnifiedOutput schema: {e}")
         return None

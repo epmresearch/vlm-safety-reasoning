@@ -181,16 +181,14 @@ def run_sft_unified(
 
     # --- W&B: init BEFORE training, persist run_id IMMEDIATELY ---
     import wandb
-    wandb_kwargs = {
-        "project": base_cfg["wandb_project"],
-        "entity": base_cfg.get("wandb_entity"),
-        "name": run_name,
-        "config": {**sft_cfg, **batch_cfg, "model": model_info["hf_path"], "variant": variant},
-    }
-    if wandb_run_id:
-        wandb_kwargs["id"] = wandb_run_id
-        wandb_kwargs["resume"] = "must"
-    run = wandb.init(**wandb_kwargs)
+    from core.wandb_utils import init_run
+    run = init_run(
+        study_name="sft",
+        run_name=run_name,
+        config={**sft_cfg, **batch_cfg, "model": model_info["hf_path"], "variant": variant},
+        run_id=wandb_run_id,
+        resume="must" if wandb_run_id else None,
+    )
 
     static_manifest_fields = {
         "hf_path": model_info["hf_path"],

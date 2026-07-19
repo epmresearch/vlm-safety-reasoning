@@ -35,9 +35,9 @@ def test_rule_0_metrics():
     # Rule 0 Precision = 1 TP / (1 TP + 1 FP) = 0.5
     # Rule 0 Recall = 1 TP / (1 TP + 1 FN) = 0.5
     
-    assert res["violation_rule_0_precision"] == 0.5
-    assert res["violation_rule_0_recall"] == 0.5
-    assert res["violation_rule_0_f1"] == 0.5
+    assert res["violation_identification_precision_rule_0"] == 0.5
+    assert res["violation_identification_recall_rule_0"] == 0.5
+    assert res["violation_identification_f1_rule_0"] == 0.5
 
 def test_standard_rule_metrics():
     """Test standard TP, FP, FN calculation for Rules 1-4."""
@@ -56,16 +56,16 @@ def test_standard_rule_metrics():
     res = compute_violation_metrics(preds, refs)
     
     # Rule 1: 1 TP, 0 FP, 0 FN -> P=1.0, R=1.0
-    assert res["violation_rule_1_precision"] == 1.0
-    assert res["violation_rule_1_recall"] == 1.0
+    assert res["violation_identification_precision_rule_1"] == 1.0
+    assert res["violation_identification_recall_rule_1"] == 1.0
     
     # Rule 2: 0 TP, 0 FP, 1 FN -> P=0.0, R=0.0
-    assert res["violation_rule_2_precision"] == 0.0
-    assert res["violation_rule_2_recall"] == 0.0
+    assert res["violation_identification_precision_rule_2"] == 0.0
+    assert res["violation_identification_recall_rule_2"] == 0.0
     
     # Rule 3: 0 TP, 1 FP, 0 FN -> P=0.0, R=0.0
-    assert res["violation_rule_3_precision"] == 0.0
-    assert res["violation_rule_3_recall"] == 0.0
+    assert res["violation_identification_precision_rule_3"] == 0.0
+    assert res["violation_identification_recall_rule_3"] == 0.0
 
 def test_global_macro_metrics():
     """Test that global precision/recall accurately aggregates all rules."""
@@ -87,9 +87,9 @@ def test_global_macro_metrics():
     
     res = compute_violation_metrics(preds, refs)
     
-    assert res["violation_macro_precision"] == 0.5
-    assert res["violation_macro_recall"] == 0.5
-    assert res["violation_macro_f1"] == 0.5
+    assert res["violation_identification_precision_macro"] == 0.5
+    assert res["violation_identification_recall_macro"] == 0.5
+    assert res["violation_identification_f1_macro"] == 0.5
 
 def test_grounding_iou_separation():
     """Test that grounding IoU is computed correctly and separated by rule."""
@@ -111,16 +111,16 @@ def test_grounding_iou_separation():
     res = compute_violation_metrics(preds, refs)
     
     # Rule 1 IoU: Two instances (1.0 and 0.0) -> Average 0.5
-    assert res["violation_iou_rule_1"] == 0.5
+    assert res["violation_grounding_iou_rule_1"] == 0.5
     
     # Rule 4 IoU: One instance (0.5) -> Average 0.5
-    assert res["violation_iou_rule_4"] == 0.5
+    assert res["violation_grounding_iou_rule_4"] == 0.5
     
     # Rule 2 IoU: No instances -> 0.0
-    assert res["violation_iou_rule_2"] == 0.0
+    assert res["violation_grounding_iou_rule_2"] == 0.0
     
     # Global IoU: Three instances (1.0, 0.0, 0.5) -> Average 0.5
-    assert res["violation_grounding_iou"] == 0.5
+    assert res["violation_grounding_iou_macro"] == 0.5
 
 def test_flat_box_handling():
     """Test that flat boxes are correctly parsed to compute IoU (the bug we fixed)."""
@@ -139,4 +139,4 @@ def test_flat_box_handling():
     
     res = compute_violation_metrics(preds, refs)
     
-    assert res["violation_iou_rule_1"] == 0.5
+    assert res["violation_grounding_iou_rule_1"] == 0.5

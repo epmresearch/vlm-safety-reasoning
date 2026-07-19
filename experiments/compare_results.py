@@ -25,27 +25,24 @@ def load_eval_json(model_short_name: str, variant: str) -> dict:
 def flatten_metrics(metrics: dict, label: str) -> dict:
     if not metrics:
         return {"Model": label}
-    
     flat = {"Model": label}
     # Caption metrics
-    cap = metrics.get("captioning", {})
-    flat["BERTScore_F1"] = cap.get("bert_f1", None)
-    flat["CLIPScore"] = cap.get("clip_score", None)
-    
+    flat["BERTScore_F1"] = metrics.get("captioning_bertscore_f1")
+    flat["CLIPScore"] = metrics.get("captioning_clipscore")
+    flat["METEOR"] = metrics.get("captioning_meteor")
+    flat["CIDEr-D"] = metrics.get("captioning_ciderd")
     # Grounding metrics
-    grnd = metrics.get("grounding", {})
-    flat["Grounding_IoU"] = grnd.get("mean_iou", None)
-    flat["Grounding_F1"] = grnd.get("f1", None)
-    
+    flat["Grounding_IoU_Macro"] = metrics.get("grounding_iou_all_macro_mean")
+    flat["Grounding_IoU_Micro"] = metrics.get("grounding_iou_all_micro_mean")
     # Violation metrics
-    viol = metrics.get("violations", {})
-    flat["Violation_F1"] = viol.get("f1", None)
-    
+    flat["Violation_F1"] = metrics.get("violation_identification_f1_macro")
+    flat["Violation_Precision"] = metrics.get("violation_identification_precision_macro")
+    flat["Violation_Recall"] = metrics.get("violation_identification_recall_macro")
     # Structural metrics
-    struct = metrics.get("structural", {})
-    flat["Valid_JSON_%"] = struct.get("valid_json_ratio", 0.0) * 100
-    flat["Complete_Format_%"] = struct.get("complete_format_ratio", 0.0) * 100
-    
+    flat["Valid_JSON_%"] = (metrics.get("structural_json_validity_rate", 0.0)) * 100
+    flat["Schema_Adherence_%"] = (metrics.get("structural_schema_adherence_rate", 0.0)) * 100
+    # Reasoning metrics
+    flat["Reasoning_BERTScore_F1"] = metrics.get("reasoning_bertscore_f1_macro")
     return flat
 
 def main():

@@ -58,7 +58,8 @@ class SaveBestModelCallback(TrainerCallback):
         if tokenizer is not None:
             tokenizer.save_pretrained(str(self.best_dir))
 
-        with open(self.best_dir / "best_info.json", "w") as f:
+        tmp_path = self.best_dir / "best_info.tmp"
+        with open(tmp_path, "w") as f:
             json.dump({
                 "metric_name": self.metric_name,
                 "metric_value": current,
@@ -66,6 +67,7 @@ class SaveBestModelCallback(TrainerCallback):
                 "epoch": state.epoch,
                 "saved_at_utc": datetime.now(timezone.utc).isoformat(),
             }, f, indent=2)
+        os.replace(str(tmp_path), str(self.best_dir / "best_info.json"))
 
 
 class ManifestUpdateCallback(TrainerCallback):
@@ -91,8 +93,11 @@ class ManifestUpdateCallback(TrainerCallback):
             "updated_at_utc": datetime.now(timezone.utc).isoformat(),
         })
         self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
-        with open(self.state_path, "w") as f:
+        import tempfile
+        tmp_path = self.state_path.with_suffix(".tmp")
+        with open(tmp_path, "w") as f:
             json.dump(payload, f, indent=2, default=str)
+        os.replace(str(tmp_path), str(self.state_path))
 
     def on_train_begin(self, args, state, control, **kwargs):
         self._write(state, status="in_progress")

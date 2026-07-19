@@ -5,26 +5,12 @@ Returns 1.0 if the model output is valid, parseable JSON (after stripping
 code fences), 0.0 otherwise.
 """
 import json
-import re
 from typing import Any, Dict, Optional
 
 from core.logging import get_logger
+from evaluation.output_parser import strip_fences
 
 logger = get_logger(__name__)
-
-
-def strip_fences(text: str) -> str:
-    """Strip ```json ... ``` code fences from model output.
-
-    Uses regex to extract content between fences, ignoring any pre-text.
-    """
-    match = re.search(r"```(?:json)?(.*?)```", text, flags=re.DOTALL | re.IGNORECASE)
-    if match:
-        return match.group(1).strip()
-    
-    # Fallback if no fences are found
-    return text.strip()
-
 
 def try_parse_json(text: str) -> Optional[Dict[str, Any]]:
     """Attempt to parse model output as JSON, stripping fences first.

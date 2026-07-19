@@ -33,11 +33,11 @@ def _compute_stratum(sample: Dict[str, Any]) -> int:
         return 2
     if sample.get("rule_1_violation") is not None:
         return 3
-    if len(sample.get("worker_with_white_hard_hat", [])) > 0:
+    if len(sample.get("worker_with_white_hard_hat") or []) > 0:
         return 4
-    if len(sample.get("rebar", [])) > 0:
+    if len(sample.get("rebar") or []) > 0:
         return 5
-    if len(sample.get("excavator", [])) > 0:
+    if len(sample.get("excavator") or []) > 0:
         return 6
     return 7
 

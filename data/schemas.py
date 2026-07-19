@@ -7,13 +7,13 @@ Covers:
   - Evaluation result container
 """
 from typing import Any, Dict, List, Optional, Union
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, conlist
 
 
 # ---------------------------------------------------------------------------
 # Bounding box type alias
 # ---------------------------------------------------------------------------
-BBox = List[float]  # [xmin, ymin, xmax, ymax], 4 elements
+BBox = conlist(float, min_length=4, max_length=4)  # [xmin, ymin, xmax, ymax]
 
 
 # ---------------------------------------------------------------------------
