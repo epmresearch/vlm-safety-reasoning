@@ -42,7 +42,7 @@ def flatten_metrics(metrics: dict, label: str) -> dict:
     flat["Valid_JSON_%"] = (metrics.get("structural_json_validity_rate", 0.0)) * 100
     flat["Schema_Adherence_%"] = (metrics.get("structural_schema_adherence_rate", 0.0)) * 100
     # Reasoning metrics
-    flat["Reasoning_BERTScore_F1"] = metrics.get("reasoning_bertscore_f1_macro")
+    flat["Reasoning_BERTScore_F1"] = metrics.get("reasoning_text_similarity_bertscore_f1_macro")
     return flat
 
 def main():

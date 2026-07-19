@@ -59,11 +59,11 @@ def batch_score_reasoning(
         logger.info(f"Computing global reasoning metrics over {len(all_pred_reasons)} valid reasons...")
         caption_res = compute_all_caption_metrics(all_pred_reasons, all_gt_reasons, include_spice=False)
         for k, v in caption_res.items():
-            result[f"reasoning_{k}_macro"] = v
+            result[f"reasoning_text_similarity_{k}_macro"] = v
     else:
-        result["reasoning_bertscore_f1_macro"] = 0.0
-        result["reasoning_meteor_macro"] = 0.0
-        result["reasoning_ciderd_macro"] = 0.0
+        result["reasoning_text_similarity_bertscore_f1_macro"] = 0.0
+        result["reasoning_text_similarity_meteor_macro"] = 0.0
+        result["reasoning_text_similarity_ciderd_macro"] = 0.0
         
     # 2. Compute per-rule reasoning metrics
     for r in RULES:
@@ -75,10 +75,10 @@ def batch_score_reasoning(
                 include_spice=False
             )
             for k, v in rule_res.items():
-                result[f"reasoning_{k}_{r}"] = v
+                result[f"reasoning_text_similarity_{k}_{r}"] = v
         else:
-            result[f"reasoning_bertscore_f1_{r}"] = 0.0
-            result[f"reasoning_meteor_{r}"] = 0.0
-            result[f"reasoning_ciderd_{r}"] = 0.0
+            result[f"reasoning_text_similarity_bertscore_f1_{r}"] = 0.0
+            result[f"reasoning_text_similarity_meteor_{r}"] = 0.0
+            result[f"reasoning_text_similarity_ciderd_{r}"] = 0.0
             
     return result

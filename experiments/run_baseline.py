@@ -63,8 +63,15 @@ def main():
 
     raw_predictions = [res["raw_output"] for res in results]
     references = [build_ground_truth_dict(res["sample"]) for res in results]
-    # inference.py strips the image to save RAM, so we pull it directly from the dataset split
-    images = test_data["image"] if "image" in test_data.column_names else None
+    
+    # Ensure 1-to-1 alignment between results and images.
+    # Auto-resume can cause the `results` list to be in a different order 
+    # than the original `test_data`. We must map them safely by image_id.
+    if "image" in test_data.column_names:
+        image_map = {str(sample["image_id"]): sample["image"] for sample in test_data}
+        images = [image_map.get(str(res.get("image_id"))) for res in results]
+    else:
+        images = None
     
     # Run evaluation
     logger.info("Running evaluation...")

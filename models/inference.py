@@ -255,6 +255,8 @@ def run_inference_batched(
 
     # 1. Auto-Resume logic: Check existing results
     completed_ids = set()
+    results = []  # Initialize early to hold both previously completed and new records
+    
     if output_path and os.path.exists(output_path):
         with open(output_path, "r") as f:
             for line in f:
@@ -264,10 +266,11 @@ def run_inference_batched(
                         # Only consider an image "completed" if it actually generated a valid text output
                         if "image_id" in record and record.get("raw_output", "").strip():
                             completed_ids.add(str(record["image_id"]))
+                            results.append(record)  # <-- FIX: Reload prior predictions into memory
                     except json.JSONDecodeError:
                         continue
         if completed_ids:
-            logger.info(f"Auto-Resume: Found {len(completed_ids)} completed images in {output_path}")
+            logger.info(f"Auto-Resume: Loaded {len(completed_ids)} completed images into memory from {output_path}")
 
     # 2. Filter dataset
     samples_to_process = dataset
@@ -281,7 +284,6 @@ def run_inference_batched(
         remaining_allowed = max(0, max_samples - len(completed_ids))
         samples_to_process = samples_to_process.select(range(min(remaining_allowed, len(samples_to_process))))
 
-    results = []
     n = len(samples_to_process)
     
     if n == 0:
