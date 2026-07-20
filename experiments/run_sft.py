@@ -2,6 +2,7 @@
 Entry point: runs SFT training for the unified task.
 Usage: python experiments/run_sft.py --tier 2b --variant unified-sft-v1
 """
+import unsloth
 import argparse
 
 from core.config import load_config
