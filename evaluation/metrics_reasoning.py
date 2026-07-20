@@ -17,6 +17,16 @@ def batch_score_reasoning(
     gt_violations: List[Dict[str, Any]]
 ) -> Dict[str, float]:
     """Batched reasoning evaluation using the captioning metrics suite, broken down per rule."""
+    if not pred_violations or not gt_violations:
+        raise ValueError(
+            "batch_score_reasoning requires non-empty predictions and references lists."
+        )
+    if len(pred_violations) != len(gt_violations):
+        raise ValueError(
+            f"batch_score_reasoning: length mismatch — "
+            f"{len(pred_violations)} predictions vs {len(gt_violations)} references."
+        )
+
     from core.constants import RULES
     
     # Track globally for macro averages
@@ -54,16 +64,16 @@ def batch_score_reasoning(
             
     result = {}
     
-    # 1. Compute global (macro) reasoning metrics
+    # 1. Compute global (micro/pooled) reasoning metrics
     if all_pred_reasons:
         logger.info(f"Computing global reasoning metrics over {len(all_pred_reasons)} valid reasons...")
         caption_res = compute_all_caption_metrics(all_pred_reasons, all_gt_reasons, include_spice=False)
         for k, v in caption_res.items():
-            result[f"reasoning_text_similarity_{k}_macro"] = v
+            result[f"reasoning_text_similarity_{k}_micro"] = v
     else:
-        result["reasoning_text_similarity_bertscore_f1_macro"] = 0.0
-        result["reasoning_text_similarity_meteor_macro"] = 0.0
-        result["reasoning_text_similarity_ciderd_macro"] = 0.0
+        result["reasoning_text_similarity_bertscore_f1_micro"] = 0.0
+        result["reasoning_text_similarity_meteor_micro"] = 0.0
+        result["reasoning_text_similarity_ciderd_micro"] = 0.0
         
     # 2. Compute per-rule reasoning metrics
     for r in RULES:
@@ -80,5 +90,11 @@ def batch_score_reasoning(
             result[f"reasoning_text_similarity_bertscore_f1_{r}"] = 0.0
             result[f"reasoning_text_similarity_meteor_{r}"] = 0.0
             result[f"reasoning_text_similarity_ciderd_{r}"] = 0.0
+            
+    # 3. Compute true macro reasoning metrics
+    metrics_keys = ["bertscore_f1", "meteor", "ciderd"]
+    for k in metrics_keys:
+        rule_scores = [result.get(f"reasoning_text_similarity_{k}_{r}", 0.0) for r in RULES]
+        result[f"reasoning_text_similarity_{k}_macro"] = sum(rule_scores) / len(rule_scores)
             
     return result

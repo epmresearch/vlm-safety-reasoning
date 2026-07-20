@@ -41,8 +41,8 @@ def _build_target_json(raw: Dict[str, Any]) -> str:
             raw_boxes = v.get("bounding_box") if isinstance(v, dict) else None
             boxes = clean_boxes(normalize_boxes(raw_boxes))
             target_dict[f"rule_{i}_violation"] = {
-                "reason": (v.get("reason", "") if isinstance(v, dict) else "") or "",
                 "bounding_box": [scale_01_to_1000(b) for b in boxes],
+                "reason": (v.get("reason", "") if isinstance(v, dict) else "") or "",
             }
             
     for cls in GROUNDING_CLASSES:
@@ -147,8 +147,8 @@ def build_ground_truth_dict(raw: Dict[str, Any]) -> Dict[str, Any]:
             raw_boxes = v.get("bounding_box") if isinstance(v, dict) else None
             boxes = clean_boxes(normalize_boxes(raw_boxes))
             gt[f"rule_{i}_violation"] = {
-                "reason": (v.get("reason", "") if isinstance(v, dict) else "") or "",
                 "bounding_box": [list(b) for b in boxes],
+                "reason": (v.get("reason", "") if isinstance(v, dict) else "") or "",
             }
             
     for cls in GROUNDING_CLASSES:

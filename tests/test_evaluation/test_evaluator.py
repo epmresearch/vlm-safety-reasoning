@@ -3,20 +3,21 @@ from unittest.mock import patch
 
 from evaluation.evaluator import run_full_evaluation
 
+@patch("evaluation.metrics_captioning._check_java_available", return_value=True)
 @patch("evaluation.evaluator.compute_structural_metrics")
 @patch("evaluation.evaluator.compute_all_caption_metrics")
 @patch("evaluation.evaluator.compute_grounding_metrics")
 @patch("evaluation.evaluator.compute_violation_metrics")
 @patch("evaluation.evaluator.batch_score_reasoning")
-def test_run_full_evaluation(mock_reasoning, mock_violation, mock_grounding, mock_caption, mock_structural):
+def test_run_full_evaluation(mock_reasoning, mock_violation, mock_grounding, mock_caption, mock_structural, mock_java):
     """Test that evaluator orchestrates all sub-modules correctly and aggregates dictionaries."""
     
     # Mock return values for all modules
     mock_structural.return_value = {"structural_json_validity_rate": 1.0}
     mock_caption.return_value = {"captioning_bertscore_f1": 0.9}
-    mock_grounding.return_value = {"grounding_iou_all_macro_mean": 0.8}
-    mock_violation.return_value = {"violation_identification_f1_macro": 0.7}
-    mock_reasoning.return_value = {"reasoning_bertscore_f1_macro": 0.6}
+    mock_grounding.return_value = {"grounding_iou_all_macro_mean_tn0": 0.8}
+    mock_violation.return_value = {"violation_identification_f1_micro": 0.7, "violation_identification_f1_macro": 0.65, "violation_grounding_iou_macro_tn0": 0.5}
+    mock_reasoning.return_value = {"reasoning_text_similarity_bertscore_f1_macro": 0.6}
     
     # Inputs
     raw_predictions = ["```json\n{\"caption\": \"safe\"}\n```"]
@@ -41,17 +42,17 @@ def test_run_full_evaluation(mock_reasoning, mock_violation, mock_grounding, moc
     metrics = res["metrics"]
     assert metrics["structural_json_validity_rate"] == 1.0
     assert metrics["captioning_bertscore_f1"] == 0.9
-    assert metrics["grounding_iou_all_macro_mean"] == 0.8
-    assert metrics["violation_identification_f1_macro"] == 0.7
-    assert metrics["reasoning_bertscore_f1_macro"] == 0.6
+    assert metrics["grounding_iou_all_macro_mean_tn0"] == 0.8
+    assert metrics["violation_identification_f1_micro"] == 0.7
+    assert metrics["violation_identification_f1_macro"] == 0.65
+    assert metrics["reasoning_text_similarity_bertscore_f1_macro"] == 0.6
     
     # Verify parsed outputs are returned so they can be logged
     assert len(res["parsed_predictions"]) == 1
     assert res["parsed_predictions"][0] == {"caption": "safe"}
 
 def test_run_full_evaluation_empty_inputs():
-    """Test that evaluator doesn't crash on empty inputs."""
-    res = run_full_evaluation([], [])
-    assert "metrics" in res
-    assert "parsed_predictions" in res
-    assert res["parsed_predictions"] == []
+    """Test that evaluator raises ValueError on empty inputs (N4 fail-fast)."""
+    with patch("evaluation.metrics_captioning._check_java_available", return_value=True):
+        with pytest.raises(ValueError):
+            run_full_evaluation([], [])

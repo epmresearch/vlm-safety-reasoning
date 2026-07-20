@@ -7,9 +7,11 @@ from evaluation.metrics_captioning import (
 )
 
 def test_empty_inputs():
-    """Test that empty or mismatched inputs return safely."""
-    assert compute_all_caption_metrics([], []) == {}
-    assert compute_all_caption_metrics(["text"], []) == {} # Mismatched length
+    """Test that empty/invalid inputs raise ValueError (fail-fast, N4 fix)."""
+    with pytest.raises(ValueError, match="non-empty"):
+        compute_all_caption_metrics([], [])
+    with pytest.raises(ValueError, match="length mismatch"):
+        compute_all_caption_metrics(["text1", "text2"], ["ref1"]) # Mismatched length
 
 @patch("evaluation.metrics_captioning.compute_clipscore")
 @patch("evaluation.metrics_captioning.compute_cider")

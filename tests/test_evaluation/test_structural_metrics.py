@@ -2,8 +2,9 @@ import pytest
 from evaluation.metrics_structural import compute_structural_metrics
 
 def test_empty_raw_outputs():
-    """Test that empty inputs return an empty dictionary."""
-    assert compute_structural_metrics([]) == {}
+    """Test that empty inputs raise ValueError."""
+    with pytest.raises(ValueError, match="non-empty"):
+        compute_structural_metrics([])
 
 def test_structural_metrics_all_valid():
     """Test structural metrics with perfectly formatted outputs."""

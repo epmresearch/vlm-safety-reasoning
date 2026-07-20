@@ -30,6 +30,17 @@ def run_full_evaluation(
     """
     logger.info("Starting full evaluation pipeline...")
     
+    # C2 fail-fast: METEOR, CIDEr-D, and SPICE require Java.
+    # Detect missing Java upfront instead of silently producing metrics.json
+    # with missing keys that are indistinguishable from zero-score metrics.
+    from evaluation.metrics_captioning import _check_java_available
+    if not _check_java_available():
+        raise RuntimeError(
+            "Java is required for METEOR/CIDEr-D/SPICE evaluation but was "
+            "not found on PATH. Install a JRE before running evaluation "
+            "(e.g., `apt-get install -y default-jre` on Colab/Linux)."
+        )
+    
     if len(raw_predictions) != len(references):
         raise ValueError(
             f"Length mismatch: {len(raw_predictions)} predictions vs {len(references)} references"

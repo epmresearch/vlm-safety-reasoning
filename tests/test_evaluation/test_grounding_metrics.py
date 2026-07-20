@@ -82,7 +82,7 @@ def test_greedy_multibox_iou():
     """Test greedy matching logic and True Negative/FP/FN edge cases."""
     # True Negative (Neither model nor GT have boxes)
     iou, inter, union = greedy_multibox_iou([], [])
-    assert iou == 1.0
+    assert iou == 0.0
     assert inter == 0.0
     assert union == 0.0
     
@@ -143,24 +143,77 @@ def test_compute_grounding_metrics():
     # Exist Macro: Img 1 only -> 1.0
     # Exist Micro: Img 1 only -> 0.25 / 0.25 = 1.0
     
-    assert res["grounding_iou_all_macro_excavator"] == 0.5
+    assert res["grounding_iou_all_macro_excavator_tn0"] == 0.5
     assert math.isclose(res["grounding_iou_all_micro_excavator"], 0.2)
-    assert res["grounding_iou_existing_macro_excavator"] == 1.0
+    assert res["grounding_iou_existing_macro_excavator_tn0"] == 1.0
     assert res["grounding_iou_existing_micro_excavator"] == 1.0
     
     # --- Rebar Math Analysis ---
-    # Img 1: TN, IoU=1.0, inter=0, union=0. GT Exists=False
+    # Img 1: TN, IoU=0.0 (N3 fixed), inter=0, union=0. GT Exists=False
     # Img 2: TP but IoU=0, inter=0, union=0.26 (0.01 + 0.25). GT Exists=True
-    # Total Macro: (1.0 + 0.0) / 2 = 0.5
+    # Total Macro: (0.0 + 0.0) / 2 = 0.0
     # Total Micro: inter(0+0) / union(0+0.26) = 0.0
     # Exist Macro: Img 2 only -> 0.0
     # Exist Micro: Img 2 only -> 0.0 / 0.26 = 0.0
     
-    assert res["grounding_iou_all_macro_rebar"] == 0.5
+    assert res["grounding_iou_all_macro_rebar_tn0"] == 0.0
     assert res["grounding_iou_all_micro_rebar"] == 0.0
-    assert res["grounding_iou_existing_macro_rebar"] == 0.0
+    assert res["grounding_iou_existing_macro_rebar_tn0"] == 0.0
     assert res["grounding_iou_existing_micro_rebar"] == 0.0
     
-    # Check that empty edge cases don't crash
-    empty_res = compute_grounding_metrics([], [])
-    assert empty_res == {}
+    # Check that empty edge cases raise ValueError
+    with pytest.raises(ValueError, match="non-empty"):
+        compute_grounding_metrics([], [])
+
+def test_n1_macro_vs_pooled_divergence():
+    """Test that true macro and occurrence-weighted pooled metrics diverge
+    under class imbalance, proving the N1 fix.
+    """
+    from core.constants import GROUNDING_CLASSES
+    
+    # Simulate a dataset heavily imbalanced toward "excavator"
+    # Image 1-3: Have excavator, model predicts perfectly (IoU = 1.0)
+    # Image 4: Has rebar, model fails completely (IoU = 0.0)
+    # No other classes exist in the dataset.
+    
+    refs = [
+        {"excavator": [[0, 0, 1, 1]]},
+        {"excavator": [[0, 0, 1, 1]]},
+        {"excavator": [[0, 0, 1, 1]]},
+        {"rebar": [[0, 0, 1, 1]]},
+    ]
+    
+    preds = [
+        {"excavator": [[0, 0, 1000, 1000]]},
+        {"excavator": [[0, 0, 1000, 1000]]},
+        {"excavator": [[0, 0, 1000, 1000]]},
+        {}, # Failed to detect rebar
+    ]
+    
+    res = compute_grounding_metrics(preds, refs)
+    
+    # --- "Existing" metrics analysis (occurrence-weighted lengths) ---
+    # excavator exists in 3 images. IoUs = [1.0, 1.0, 1.0]
+    # rebar exists in 1 image. IoUs = [0.0]
+    # other classes exist in 0 images. IoUs = []
+    
+    # Class macros:
+    # Excavator macro: 1.0
+    # Rebar macro: 0.0
+    # Others: 0.0 (default)
+    
+    # True Macro Average: (1.0 + 0.0 + 0.0 + ...) / len(GROUNDING_CLASSES)
+    num_classes = len(GROUNDING_CLASSES)
+    expected_macro = 1.0 / num_classes
+    
+    # Pooled Average (old behavior):
+    # Pool all existing IoUs together: [1.0, 1.0, 1.0, 0.0]
+    # Pooled mean: 3.0 / 4 = 0.75
+    
+    assert res["grounding_iou_existing_macro_excavator_tn0"] == 1.0
+    assert res["grounding_iou_existing_macro_rebar_tn0"] == 0.0
+    
+    assert res["grounding_iou_existing_pooled_mean_tn0"] == 0.75
+    assert res["grounding_iou_existing_macro_mean_tn0"] == expected_macro
+    assert res["grounding_iou_existing_pooled_mean_tn0"] != res["grounding_iou_existing_macro_mean_tn0"]
+

@@ -14,7 +14,9 @@ def compute_structural_metrics(raw_outputs: List[str]) -> Dict[str, float]:
     raw_outputs: list of raw string responses from the model.
     """
     if not raw_outputs:
-        return {}
+        raise ValueError(
+            "compute_structural_metrics requires a non-empty list of raw outputs."
+        )
         
     total = len(raw_outputs)
     valid_json_count = 0

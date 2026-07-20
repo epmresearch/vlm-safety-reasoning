@@ -134,7 +134,9 @@ def greedy_multibox_iou(pred_boxes: List[BBox], gt_boxes: List[BBox]) -> Tuple[f
         (mean_iou, total_inter_area, total_union_area)
     """
     if not gt_boxes and not pred_boxes:
-        return 1.0, 0.0, 0.0
+        # N3 Fix: Return 0.0 IoU for True Negatives (no object, no prediction)
+        # to avoid inflating the average IoU.
+        return 0.0, 0.0, 0.0
     if not gt_boxes:
         # False Positives
         union_sum = sum(max(0.0, b[2]-b[0]) * max(0.0, b[3]-b[1]) for b in pred_boxes)

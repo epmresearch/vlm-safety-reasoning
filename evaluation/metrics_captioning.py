@@ -289,8 +289,15 @@ def compute_all_caption_metrics(
             parsing is designed for full descriptive captions and is both
             slow (extra JVM spin-up) and not meaningful on short phrases.
     """
-    if not predictions or not references or len(predictions) != len(references):
-        return {}
+    if not predictions or not references:
+        raise ValueError(
+            "compute_all_caption_metrics requires non-empty predictions and references lists."
+        )
+    if len(predictions) != len(references):
+        raise ValueError(
+            f"compute_all_caption_metrics: length mismatch — "
+            f"{len(predictions)} predictions vs {len(references)} references."
+        )
 
     clean_preds = [p if p and str(p).strip() else "empty" for p in predictions]
     clean_refs = [r if r and str(r).strip() else "empty" for r in references]

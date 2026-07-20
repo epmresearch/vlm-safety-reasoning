@@ -140,7 +140,7 @@ def load_model_for_training(
         max_pixels=sft_cfg.get("image_max_pixels") if sft_cfg else None,
     )
 
-    # CRITICAL: Unsloth requires this explicit flip into training mode.
+    # Unsloth requires this explicit flip into training mode.
     FastVisionModel.for_training(model)
 
     return model, tokenizer, get_model_info(tier)

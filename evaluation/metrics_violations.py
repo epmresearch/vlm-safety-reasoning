@@ -16,18 +16,26 @@ def compute_violation_metrics(predictions: List[Dict[str, Any]], references: Lis
     predictions: List of flat output dictionaries.
     references: List of flat output dictionaries.
     """
-    if not predictions or not references or len(predictions) != len(references):
-        return {}
+    if not predictions or not references:
+        raise ValueError(
+            "compute_violation_metrics requires non-empty predictions and references lists."
+        )
+    if len(predictions) != len(references):
+        raise ValueError(
+            f"compute_violation_metrics: length mismatch — "
+            f"{len(predictions)} predictions vs {len(references)} references."
+        )
 
-    global_tp = 0
-    global_fp = 0
-    global_fn = 0
-    
     # We add rule_0 (no violation) for explicit tracking
     ALL_RULES = RULES + ["rule_0"]
+    global_tp, global_fp, global_fn = 0, 0, 0
     rule_counts = {r: {"tp": 0, "fp": 0, "fn": 0} for r in ALL_RULES}
     
-    rule_iou_scores = {r: [] for r in RULES}
+    # Trackers for the three TN variants and TN counts
+    rule_iou_tn0 = {r: [] for r in RULES}
+    rule_iou_tn1 = {r: [] for r in RULES}
+    rule_iou_excl = {r: [] for r in RULES}
+    rule_tn_count = {r: 0 for r in RULES}
     
     for pred_dict, gt_dict in zip(predictions, references):
         pred_dict = pred_dict or {}
@@ -94,26 +102,37 @@ def compute_violation_metrics(predictions: List[Dict[str, Any]], references: Lis
             pred_boxes_01 = [scale_1000_to_01(b) for b in pred_boxes_1000]
             
             if not pred_boxes_01 and not gt_boxes_01:
-                iou = 1.0
+                # True Negative
+                rule_iou_tn0[r].append(0.0)
+                rule_iou_tn1[r].append(1.0)
+                # _excl omits it entirely
+                rule_tn_count[r] += 1
             elif not pred_boxes_01 or not gt_boxes_01:
-                iou = 0.0
+                # False Positive or False Negative
+                rule_iou_tn0[r].append(0.0)
+                rule_iou_tn1[r].append(0.0)
+                rule_iou_excl[r].append(0.0)
             else:
                 iou, _, _ = greedy_multibox_iou(pred_boxes_01, gt_boxes_01)
-                
-            rule_iou_scores[r].append(iou)
+                rule_iou_tn0[r].append(iou)
+                rule_iou_tn1[r].append(iou)
+                rule_iou_excl[r].append(iou)
 
     metrics = {}
     
-    # Global F1
+    # Global (pooled) precision/recall/F1 — this is MICRO-averaging:
+    # pool all TP/FP/FN across images and rules, then compute one ratio.
     precision = global_tp / (global_tp + global_fp) if (global_tp + global_fp) > 0 else 0.0
     recall = global_tp / (global_tp + global_fn) if (global_tp + global_fn) > 0 else 0.0
     f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
     
-    metrics["violation_identification_precision_macro"] = precision
-    metrics["violation_identification_recall_macro"] = recall
-    metrics["violation_identification_f1_macro"] = f1
+    metrics["violation_identification_precision_micro"] = precision
+    metrics["violation_identification_recall_micro"] = recall
+    metrics["violation_identification_f1_micro"] = f1
     
-    # Per-rule metrics
+    # Per-rule metrics (computed for ALL_RULES including rule_0)
+    # Also collect per-violation-rule values for macro-averaging below.
+    rule_precisions, rule_recalls, rule_f1s = [], [], []
     for r in ALL_RULES:
         tp, fp, fn = rule_counts[r]["tp"], rule_counts[r]["fp"], rule_counts[r]["fn"]
         p = tp / (tp + fp) if (tp + fp) > 0 else 0.0
@@ -124,13 +143,51 @@ def compute_violation_metrics(predictions: List[Dict[str, Any]], references: Lis
         metrics[f"violation_identification_recall_{r}"] = rec
         metrics[f"violation_identification_f1_{r}"] = r_f1
         
-    # Grounding IoU per rule
-    all_ious = []
-    for r in RULES:
-        ious = rule_iou_scores[r]
-        metrics[f"violation_grounding_iou_{r}"] = sum(ious) / len(ious) if ious else 0.0
-        all_ious.extend(ious)
+        # Collect per-rule values for macro, excluding rule_0.
+        # rule_0 ("no violation") is semantically different from the four
+        # safety-rule classes and the paper (Table 7) treats it separately.
+        # Macro-average is over Rules 1–4 only.
+        if r in RULES:
+            rule_precisions.append(p)
+            rule_recalls.append(rec)
+            rule_f1s.append(r_f1)
+    
+    # True MACRO-average: unweighted mean of per-rule precision/recall/F1
+    # over Rules 1–4 only (excludes rule_0). This gives each violation
+    # rule equal weight regardless of occurrence frequency.
+    metrics["violation_identification_precision_macro"] = (
+        sum(rule_precisions) / len(rule_precisions) if rule_precisions else 0.0
+    )
+    metrics["violation_identification_recall_macro"] = (
+        sum(rule_recalls) / len(rule_recalls) if rule_recalls else 0.0
+    )
+    metrics["violation_identification_f1_macro"] = (
+        sum(rule_f1s) / len(rule_f1s) if rule_f1s else 0.0
+    )
         
-    metrics["violation_grounding_iou_macro"] = sum(all_ious) / len(all_ious) if all_ious else 0.0
+    # Grounding IoU per rule and global macro
+    tn0_macros, tn1_macros, excl_macros = [], [], []
+    for r in RULES:
+        metrics[f"violation_grounding_tn_count_{r}"] = rule_tn_count[r]
+        
+        # _tn0
+        tn0_val = sum(rule_iou_tn0[r]) / len(rule_iou_tn0[r]) if rule_iou_tn0[r] else 0.0
+        metrics[f"violation_grounding_iou_{r}_tn0"] = tn0_val
+        tn0_macros.append(tn0_val)
+        
+        # _tn1
+        tn1_val = sum(rule_iou_tn1[r]) / len(rule_iou_tn1[r]) if rule_iou_tn1[r] else 0.0
+        metrics[f"violation_grounding_iou_{r}_tn1"] = tn1_val
+        tn1_macros.append(tn1_val)
+        
+        # _excl
+        excl_val = sum(rule_iou_excl[r]) / len(rule_iou_excl[r]) if rule_iou_excl[r] else 0.0
+        metrics[f"violation_grounding_iou_{r}_excl"] = excl_val
+        excl_macros.append(excl_val)
+        
+    metrics["violation_grounding_iou_macro_tn0"] = sum(tn0_macros) / len(tn0_macros) if tn0_macros else 0.0
+    metrics["violation_grounding_iou_macro_tn1"] = sum(tn1_macros) / len(tn1_macros) if tn1_macros else 0.0
+    metrics["violation_grounding_iou_macro_excl"] = sum(excl_macros) / len(excl_macros) if excl_macros else 0.0
     
     return metrics
+

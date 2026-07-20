@@ -6,7 +6,7 @@ import argparse
 
 from core.config import load_config
 from core.logging import get_logger
-from data.loader import load_dataset_splits
+from data.loader import load_processed_dataset
 from data.preprocessor import build_unified_sft_dataset
 from data.samplers import get_resolutions
 from models.sft_trainer import run_sft_unified
@@ -24,10 +24,13 @@ def main():
     parser.add_argument("--no-resume", action="store_true")
     args = parser.parse_args()
 
-    logger.info("Loading dataset splits...")
-    splits = load_dataset_splits()
+    logger.info("Loading fully processed and sorted dataset splits...")
+    splits = load_processed_dataset()
 
-    train_resolutions = get_resolutions(splits["train"])
+    if "resolution" in splits["train"].column_names:
+        train_resolutions = splits["train"]["resolution"]
+    else:
+        train_resolutions = get_resolutions(splits["train"])
 
     logger.info("Preprocessing datasets for unified SFT...")
     train_ds = build_unified_sft_dataset(splits["train"])
