@@ -26,14 +26,29 @@ def main():
 
     logger.info("Loading fully processed and sorted dataset splits...")
     splits = load_processed_dataset()
+    
+    from core.config import load_training_config
+    from data.oversampling import build_oversampled_indices, build_rare_mask
+    sft_cfg = load_training_config("sft")
 
-    if "resolution" in splits["train"].column_names:
-        train_resolutions = splits["train"]["resolution"]
+    logger.info("Building oversampled dataset...")
+    oversample_indices, _ = build_oversampled_indices(
+        splits["train"],
+        rule24_multiplier=sft_cfg.get("oversample_rule24_multiplier", 4),
+        rule3_multiplier=sft_cfg.get("oversample_rule3_multiplier", 2),
+    )
+    train_raw_oversampled = splits["train"].select(oversample_indices)
+    
+    logger.info("Building rare mask for stratified sampling...")
+    rare_mask = build_rare_mask(train_raw_oversampled)
+
+    if "resolution" in train_raw_oversampled.column_names:
+        train_resolutions = train_raw_oversampled["resolution"]
     else:
-        train_resolutions = get_resolutions(splits["train"])
+        train_resolutions = get_resolutions(train_raw_oversampled)
 
     logger.info("Preprocessing datasets for unified SFT...")
-    train_ds = build_unified_sft_dataset(splits["train"])
+    train_ds = build_unified_sft_dataset(train_raw_oversampled)
     val_ds = build_unified_sft_dataset(splits["val"])
 
     if train_resolutions is not None and len(train_resolutions) != len(train_ds):
@@ -49,6 +64,7 @@ def main():
         variant=args.variant,
         train_dataset=list(train_ds),
         val_dataset=list(val_ds),
+        rare_mask=rare_mask,
         train_resolutions=train_resolutions,
         resume=not args.no_resume,
     )

@@ -62,7 +62,7 @@ def _build_stratified_trainer_class(sampler_batch_size: int, rare_mask: List[boo
             )
             sampler.set_epoch(int(self.state.epoch or 0))
             dataloader_params = {
-                "batch_size": sampler_batch_size,
+                "batch_size": self.args.train_batch_size,
                 "collate_fn": self.data_collator,
                 "num_workers": self.args.dataloader_num_workers,
                 "pin_memory": self.args.dataloader_pin_memory,
@@ -91,7 +91,7 @@ def _build_bucketed_trainer_class(sampler_batch_size: int, resolutions: List[flo
             )
             sampler.set_epoch(int(self.state.epoch or 0))
             dataloader_params = {
-                "batch_size": sampler_batch_size,
+                "batch_size": self.args.train_batch_size,
                 "collate_fn": self.data_collator,
                 "num_workers": self.args.dataloader_num_workers,
                 "pin_memory": self.args.dataloader_pin_memory,
@@ -189,7 +189,6 @@ def run_sft_unified(
         metric_for_best_model=sft_cfg.get("metric_for_best_model", "eval_loss"),
         greater_is_better=sft_cfg.get("greater_is_better", False),
         bf16=sft_cfg.get("bf16", True),
-        max_seq_length=sft_cfg.get("max_seq_length", 4096),
         seed=base_cfg.get("seed", 42),
         report_to=["wandb"],
         run_name=run_name,
@@ -261,6 +260,7 @@ def run_sft_unified(
         "data_collator": data_collator,
         "args": training_args,
         "callbacks": callbacks,
+        "max_seq_length": sft_cfg.get("max_seq_length", 2048),
     }
     if val_dataset:
         trainer_kwargs["eval_dataset"] = val_dataset

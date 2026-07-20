@@ -138,17 +138,15 @@ class StratifiedRareClassSampler(Sampler[int]):
 
         # Evenly-spaced (jittered) target slots for rare indices across [0, n)
         stride = n / len(rare)
-        positions = sorted({
-            min(int((i + rng.uniform(0.0, 1.0)) * stride), n - 1)
-            for i in range(len(rare))
-        })
-        while len(positions) < len(rare):
-            for p in range(n):
-                if p not in positions:
-                    positions.append(p)
-                    if len(positions) == len(rare):
-                        break
-            positions = sorted(positions)
+        positions_set = set()
+        
+        for i in range(len(rare)):
+            pos = min(int((i + rng.uniform(0.0, 1.0)) * stride), n - 1)
+            while pos in positions_set:
+                pos = (pos + 1) % n
+            positions_set.add(pos)
+            
+        positions = sorted(list(positions_set))
 
         slots: List[Optional[int]] = [None] * n
         for pos, idx in zip(positions, rare):
