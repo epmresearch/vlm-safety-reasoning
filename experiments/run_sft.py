@@ -28,15 +28,25 @@ def main():
     splits = load_processed_dataset()
     
     from core.config import load_training_config
+    from core.io import get_drive_path, ensure_dir
+    import json
     from data.oversampling import build_oversampled_indices, build_rare_mask
     sft_cfg = load_training_config("sft")
 
     logger.info("Building oversampled dataset...")
-    oversample_indices, _ = build_oversampled_indices(
+    oversample_indices, oversample_manifest = build_oversampled_indices(
         splits["train"],
         rule24_multiplier=sft_cfg.get("oversample_rule24_multiplier", 4),
         rule3_multiplier=sft_cfg.get("oversample_rule3_multiplier", 2),
     )
+    
+    # Save the manifest for reproducibility
+    manifest_dir = ensure_dir(get_drive_path("datasets", "stats"))
+    manifest_path = manifest_dir / f"oversample_manifest_{args.tier}.json"
+    with open(manifest_path, "w") as f:
+        json.dump(oversample_manifest, f, indent=2)
+    logger.info(f"Saved oversample manifest to {manifest_path}")
+
     train_raw_oversampled = splits["train"].select(oversample_indices)
     
     logger.info("Building rare mask for stratified sampling...")
@@ -45,6 +55,7 @@ def main():
     if "resolution" in train_raw_oversampled.column_names:
         train_resolutions = train_raw_oversampled["resolution"]
     else:
+        logger.info("No 'resolution' column found in training dataset. Attempting to compute resolutions...")
         train_resolutions = get_resolutions(train_raw_oversampled)
 
     logger.info("Preprocessing datasets for unified SFT...")
