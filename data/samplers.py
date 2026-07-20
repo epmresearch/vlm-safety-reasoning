@@ -87,3 +87,78 @@ def get_resolutions(dataset) -> Optional[List[float]]:
     except Exception as e:
         logger.warning(f"Could not compute resolutions: {e}. Bucketing disabled.")
         return None
+    
+
+class StratifiedRareClassSampler(Sampler[int]):
+    """Full random shuffle every epoch (unlike ResolutionBucketSampler's
+    static buckets), while guaranteeing 'rare' rows (rare_mask[i]=True,
+    i.e. any Rule 2/3/4 violation) land at roughly evenly-spaced positions
+    across the epoch instead of being left to chance.
+
+    Use this INSTEAD OF ResolutionBucketSampler now that OOM safety is
+    handled by image_min_pixels/image_max_pixels capping rather than
+    resolution-sorted bucketing.
+    """
+
+    def __init__(
+        self,
+        rare_mask: Sequence[bool],
+        shuffle: bool = True,
+        seed: int = 42,
+    ):
+        self.rare_mask = list(rare_mask)
+        self.rare_indices = [i for i, r in enumerate(self.rare_mask) if r]
+        self.common_indices = [i for i, r in enumerate(self.rare_mask) if not r]
+        self.shuffle = shuffle
+        self.seed = seed
+        self.epoch = 0
+        logger.info(
+            f"StratifiedRareClassSampler: {len(self.rare_mask)} samples -> "
+            f"{len(self.rare_indices)} rare, {len(self.common_indices)} common"
+        )
+
+    def set_epoch(self, epoch: int) -> None:
+        self.epoch = epoch
+
+    def __iter__(self) -> Iterator[int]:
+        rng = np.random.RandomState(self.seed + self.epoch)
+        rare = list(self.rare_indices)
+        common = list(self.common_indices)
+        if self.shuffle:
+            rng.shuffle(rare)
+            rng.shuffle(common)
+
+        n = len(rare) + len(common)
+        if not rare:
+            order = common
+            if self.shuffle:
+                perm = rng.permutation(len(order))
+                order = [order[i] for i in perm]
+            return iter(order)
+
+        # Evenly-spaced (jittered) target slots for rare indices across [0, n)
+        stride = n / len(rare)
+        positions = sorted({
+            min(int((i + rng.uniform(0.0, 1.0)) * stride), n - 1)
+            for i in range(len(rare))
+        })
+        while len(positions) < len(rare):
+            for p in range(n):
+                if p not in positions:
+                    positions.append(p)
+                    if len(positions) == len(rare):
+                        break
+            positions = sorted(positions)
+
+        slots: List[Optional[int]] = [None] * n
+        for pos, idx in zip(positions, rare):
+            slots[pos] = idx
+        common_iter = iter(common)
+        for i in range(n):
+            if slots[i] is None:
+                slots[i] = next(common_iter)
+
+        return iter(int(x) for x in slots)
+
+    def __len__(self) -> int:
+        return len(self.rare_mask)

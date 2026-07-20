@@ -6,7 +6,7 @@ with frozen vision encoder.
 """
 from typing import Any, Dict, Optional, Tuple
 
-from core.config import load_config
+from core.config import load_config, load_task_config
 from core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -71,10 +71,10 @@ def load_model_for_training(
 
     # Defaults if sft_cfg not provided
     load_in_4bit = True
-    max_seq_length = 4096
+    max_seq_length = 2048
     lora_r = 16
     lora_alpha = 16
-    lora_dropout = 0
+    lora_dropout = 0.05
     use_gradient_checkpointing = "unsloth"
     finetune_vision_layers = False
     finetune_language_layers = True
