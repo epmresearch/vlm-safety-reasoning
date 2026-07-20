@@ -170,12 +170,13 @@ def load_model_for_inference(
 
     # Auto-load defaults from SFT config to ensure inference matches training constraints
     cfg = load_config(training_kind="sft")
+    task_cfg = load_task_config("unified")
 
     if model_name is None:
         model_name = get_model_info(tier)["hf_path"]
-        
+
     if max_seq_length is None:
-        max_seq_length = cfg.get("max_seq_length", 4096)
+        max_seq_length = task_cfg.get("inference_max_seq_length", 2816)
 
     if image_min_pixels is None:
         image_min_pixels = cfg.get("image_min_pixels")

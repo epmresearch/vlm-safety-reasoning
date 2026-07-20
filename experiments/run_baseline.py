@@ -16,18 +16,20 @@ from models.model_loader import load_model_for_inference
 from models.inference import run_inference_batched
 from evaluation.evaluator import run_full_evaluation
 from core.run_manifest import save_run_manifest
+from core.config import load_task_config
 
 logger = get_logger(__name__)
 
 def main():
     config = load_config()
+    task_cfg_default = load_task_config("unified")
     default_tier = config.get("active_tier", "2b")
     
     parser = argparse.ArgumentParser()
     parser.add_argument("--tier", default=default_tier, help="Model tier (e.g., 2b, 4b, 8b)")
     parser.add_argument("--max_samples", type=int, default=None, help="Limit number of test samples")
     parser.add_argument("--batch_size", type=int, default=16, help="Batch size for batched generation")
-    parser.add_argument("--max_seq_length", type=int, default=config.get("max_seq_length", 8192), help="Max sequence length for inference")
+    parser.add_argument("--max_seq_length", type=int, default=task_cfg_default.get("inference_max_seq_length", 2816), help="Max sequence length for inference")
     args = parser.parse_args()
 
     # Save run manifest
