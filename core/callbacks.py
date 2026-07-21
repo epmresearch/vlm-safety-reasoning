@@ -23,10 +23,11 @@ class SaveBestModelCallback(TrainerCallback):
     last eval (e.g. step 900) is already sitting in `best/` on Drive.
     """
 
-    def __init__(self, best_dir: str, metric_name: str = "eval_loss", greater_is_better: bool = False):
+    def __init__(self, best_dir: str, metric_name: str = "eval_loss", greater_is_better: bool = False, improvement_threshold: float = 0.0):
         self.best_dir = Path(best_dir)
         self.metric_name = metric_name
         self.greater_is_better = greater_is_better
+        self.improvement_threshold = improvement_threshold
         self.best_value: Optional[float] = None
 
     def on_evaluate(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs):
@@ -35,11 +36,15 @@ class SaveBestModelCallback(TrainerCallback):
         if current is None:
             return
 
-        improved = (
-            self.best_value is None
-            or (self.greater_is_better and current > self.best_value)
-            or (not self.greater_is_better and current < self.best_value)
-        )
+        improved = False
+        if self.best_value is None:
+            improved = True
+        else:
+            if self.greater_is_better:
+                improved = current > (self.best_value + self.improvement_threshold)
+            else:
+                improved = current < (self.best_value - self.improvement_threshold)
+                
         if not improved:
             return
 

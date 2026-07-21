@@ -272,6 +272,7 @@ def run_sft_unified(
             best_dir=str(best_dir),
             metric_name=sft_cfg.get("metric_for_best_model", "eval_loss"),
             greater_is_better=sft_cfg.get("greater_is_better", False),
+            improvement_threshold=sft_cfg.get("best_model_threshold", 0.0),
         ),
         ManifestUpdateCallback(checkpoint_dir=str(checkpoint_dir), static_fields=static_manifest_fields),
         GPUMemoryLoggingCallback(every_n_steps=sft_cfg.get("log_gpu_memory_every_n_steps", 20)),
