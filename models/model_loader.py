@@ -45,6 +45,8 @@ def get_batch_config(tier: Optional[str] = None) -> Dict[str, int]:
     model_info = get_model_info(tier)
     return {
         "per_device_train_batch_size": model_info.get("per_device_train_batch_size", 1),
+        "per_device_eval_batch_size": model_info.get("per_device_eval_batch_size", 4),
+        "eval_accumulation_steps": model_info.get("eval_accumulation_steps"),
         "gradient_accumulation_steps": model_info.get("gradient_accumulation_steps", 1),
     }
 

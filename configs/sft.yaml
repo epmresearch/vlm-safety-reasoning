@@ -1,7 +1,7 @@
 # SFT training hyperparameters.
-num_train_epochs: 3
-learning_rate: 1.0e-4
-warmup_ratio: 0.1
+num_train_epochs: 2
+learning_rate: 3.0e-5
+warmup_ratio: 0.10
 weight_decay: 0.01
 max_seq_length: 2048   # was 4096. Verified: full sweep of train(6308)+val(701), max=1865, 0 truncations
 load_in_4bit: true
@@ -19,17 +19,18 @@ save_total_limit: 3
 load_best_model_at_end: true
 metric_for_best_model: "eval_loss"
 greater_is_better: false
-early_stopping_patience: 4
+early_stopping_patience: 3
+early_stopping_threshold: 0.005
 
 # LoRA configuration
 lora:
-  r: 16
-  alpha: 16
+  r: 64
+  alpha: 64
   dropout: 0.05
   target_modules: "all-linear"
 
 # Vision-specific
-finetune_vision_layers: false
+finetune_vision_layers: true
 finetune_language_layers: true
 finetune_attention_modules: true
 finetune_mlp_modules: true
@@ -55,3 +56,4 @@ image_max_pixels: 1204224             # ~1097x1097 cap -> neutralizes the 4K/14M
 # --- Crash-safety additions (new) ---
 best_model_subdir: "best"             # saved incrementally on every eval improvement, not just at the end
 log_gpu_memory_every_n_steps: 20
+dataloader_drop_last: true

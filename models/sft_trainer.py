@@ -172,6 +172,7 @@ def run_sft_unified(
     training_args = SFTConfig(
         output_dir=str(checkpoint_dir),
         per_device_train_batch_size=batch_cfg["per_device_train_batch_size"],
+        per_device_eval_batch_size=batch_cfg.get("per_device_eval_batch_size", 4),
         gradient_accumulation_steps=batch_cfg["gradient_accumulation_steps"],
         num_train_epochs=sft_cfg.get("num_train_epochs", 3),
         learning_rate=sft_cfg.get("learning_rate", 2e-4),
@@ -183,6 +184,7 @@ def run_sft_unified(
         logging_steps=sft_cfg.get("logging_steps", 10),
         save_steps=sft_cfg.get("save_steps", 100),
         eval_steps=sft_cfg.get("eval_steps", 100),
+        eval_accumulation_steps=batch_cfg.get("eval_accumulation_steps"),
         eval_strategy=sft_cfg.get("eval_strategy", "steps"),
         save_total_limit=sft_cfg.get("save_total_limit", 3),
         load_best_model_at_end=sft_cfg.get("load_best_model_at_end", True),
@@ -193,6 +195,7 @@ def run_sft_unified(
         report_to=["wandb"],
         run_name=run_name,
         auto_find_batch_size=sft_cfg.get("auto_find_batch_size", False),
+        dataloader_drop_last=sft_cfg.get("dataloader_drop_last", False),
         remove_unused_columns=False,
         dataset_kwargs={"skip_prepare_dataset": True},
     )
@@ -226,6 +229,30 @@ def run_sft_unified(
     ensure_dir(checkpoint_dir)
     with open(checkpoint_dir / "training_state.json", "w") as f:
         json.dump({**static_manifest_fields, "status": "starting"}, f, indent=2)
+        
+    # Dump the full merged configuration for local reproducibility
+    from data.prompt_templates import SYSTEM_PROMPT, UNIFIED_INSPECTION_PROMPT
+    from core.config import load_task_config
+    try:
+        task_cfg = load_task_config("unified")
+    except FileNotFoundError:
+        task_cfg = {}
+        
+    full_config = {
+        "base_cfg": base_cfg,
+        "sft_cfg": sft_cfg,
+        "batch_cfg": batch_cfg,
+        "task_cfg": task_cfg,
+        "model_info": model_info,
+        "tier": tier,
+        "variant": variant,
+        "prompts": {
+            "SYSTEM_PROMPT": SYSTEM_PROMPT,
+            "UNIFIED_INSPECTION_PROMPT": UNIFIED_INSPECTION_PROMPT
+        }
+    }
+    with open(checkpoint_dir / "run_config.json", "w") as f:
+        json.dump(full_config, f, indent=2)
 
     # --- Callbacks ---
     callbacks = [
@@ -240,7 +267,11 @@ def run_sft_unified(
     patience = sft_cfg.get("early_stopping_patience")
     if patience:
         from transformers import EarlyStoppingCallback
-        callbacks.append(EarlyStoppingCallback(early_stopping_patience=patience))
+        threshold = sft_cfg.get("early_stopping_threshold", 0.0)
+        callbacks.append(EarlyStoppingCallback(
+            early_stopping_patience=patience,
+            early_stopping_threshold=threshold
+        ))
 
     # --- Trainer selection ---
     use_stratified = sft_cfg.get("use_stratified_rare_sampling", True) and rare_mask is not None

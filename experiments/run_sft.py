@@ -25,6 +25,16 @@ def main():
     parser.add_argument("--no-resume", action="store_true")
     args = parser.parse_args()
 
+    from core.logging import attach_file_logger
+    from core.io import get_drive_path, ensure_dir
+    import time
+    
+    # Set up unique txt log file in the logs directory
+    logs_dir = ensure_dir(get_drive_path(config.get("paths", {}).get("logs_subdir", "logs")))
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    log_file = logs_dir / f"run_{args.tier}_{args.variant}_{timestamp}.txt"
+    attach_file_logger(str(log_file))
+
     logger.info("Loading fully processed and sorted dataset splits...")
     splits = load_processed_dataset()
     
@@ -43,7 +53,7 @@ def main():
     
     # Save the manifest for reproducibility
     manifest_dir = ensure_dir(get_drive_path("datasets", "stats"))
-    manifest_path = manifest_dir / f"oversample_manifest_{args.tier}.json"
+    manifest_path = manifest_dir / f"oversample_manifest_{args.tier}_{args.variant}.json"
     with open(manifest_path, "w") as f:
         json.dump(oversample_manifest, f, indent=2)
     logger.info(f"Saved oversample manifest to {manifest_path}")
