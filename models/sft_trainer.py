@@ -238,6 +238,16 @@ def run_sft_unified(
     except FileNotFoundError:
         task_cfg = {}
         
+    # Capture Git metadata
+    import subprocess
+    git_commit = "unknown"
+    git_is_dirty = False
+    try:
+        git_commit = subprocess.check_output(["git", "rev-parse", "HEAD"], stderr=subprocess.STDOUT).decode("utf-8").strip()
+        git_is_dirty = bool(subprocess.check_output(["git", "status", "--porcelain"], stderr=subprocess.STDOUT).decode("utf-8").strip())
+    except Exception:
+        pass
+        
     full_config = {
         "base_cfg": base_cfg,
         "sft_cfg": sft_cfg,
@@ -246,6 +256,8 @@ def run_sft_unified(
         "model_info": model_info,
         "tier": tier,
         "variant": variant,
+        "git_commit": git_commit,
+        "git_is_dirty": git_is_dirty,
         "prompts": {
             "SYSTEM_PROMPT": SYSTEM_PROMPT,
             "UNIFIED_INSPECTION_PROMPT": UNIFIED_INSPECTION_PROMPT
