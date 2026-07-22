@@ -113,6 +113,7 @@ def run_sft_unified(
     sft_cfg: Optional[Dict[str, Any]] = None,
     resume: bool = True,
     run_name: Optional[str] = None,
+    start_adapter_path: Optional[str] = None,   # <-- NEW
 ) -> str:
     """Runs unified SFT training with full checkpointing, resume, and best-model saving.
 
@@ -159,7 +160,7 @@ def run_sft_unified(
 
     # --- Load model ---
     model, tokenizer, model_info = load_model_for_training(
-        model_name=model_info["hf_path"], tier=tier, sft_cfg=sft_cfg,
+        model_name=model_info["hf_path"], tier=tier, sft_cfg=sft_cfg, adapter_path=start_adapter_path,
     )
     log_gpu_memory("after model load")
 

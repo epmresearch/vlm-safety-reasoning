@@ -55,6 +55,7 @@ def load_model_for_training(
     model_name: Optional[str] = None,
     tier: Optional[str] = None,
     sft_cfg: Optional[Dict[str, Any]] = None,
+    adapter_path: Optional[str] = None,
 ) -> Tuple:
     """Loads a model with LoRA adapters for SFT training.
 
@@ -62,9 +63,12 @@ def load_model_for_training(
         model_name: HuggingFace model path. If None, uses tier lookup.
         tier: Model tier for batch config lookup. If None, uses default config tier.
         sft_cfg: SFT config dict (from configs/sft.yaml). If None, uses defaults.
+        adapter_path: If set, loads an EXISTING trained LoRA adapter from this
+            path and continues training it (cooldown/continuation runs), instead
+            of initializing a fresh LoRA adapter on top of the base model.
 
     Returns:
-        Tuple of (model, tokenizer).
+        Tuple of (model, tokenizer, model_info).
     """
     from unsloth import FastVisionModel
 
@@ -106,34 +110,56 @@ def load_model_for_training(
         lora_alpha = lora_cfg.get("alpha", lora_alpha)
         lora_dropout = lora_cfg.get("dropout", lora_dropout)
 
-    logger.info(f"Loading model: {model_name} (4-bit={load_in_4bit})")
-    model, tokenizer = FastVisionModel.from_pretrained(
-        model_name,
-        load_in_4bit=load_in_4bit,
-        use_gradient_checkpointing=use_gradient_checkpointing,
-        max_seq_length=max_seq_length,
-    )
+    if adapter_path:
+        # --- Continue training an EXISTING trained adapter ---
+        logger.info(f"Loading EXISTING adapter for cooldown training: {adapter_path}")
+        model, tokenizer = FastVisionModel.from_pretrained(
+            adapter_path,
+            load_in_4bit=load_in_4bit,
+            use_gradient_checkpointing=use_gradient_checkpointing,
+            max_seq_length=max_seq_length,
+        )
+        # Adapter already has trained LoRA weights attached — no get_peft_model()
+        # call needed. Just confirm it's actually a PEFT model and re-enable grads,
+        # since FastVisionModel.from_pretrained on an adapter dir can load it in
+        # a frozen/inference-oriented state.
+        from peft import PeftModel
+        if not isinstance(model, PeftModel):
+            raise ValueError(
+                f"{adapter_path} does not look like a saved LoRA adapter "
+                f"(no PEFT config found). Did you pass the base model path by mistake?"
+            )
+        for name, param in model.named_parameters():
+            if "lora" in name.lower():
+                param.requires_grad = True
+    else:
+        # --- Fresh model + fresh LoRA init (original path) ---
+        logger.info(f"Loading BASE model: {model_name} (4-bit={load_in_4bit})")
+        model, tokenizer = FastVisionModel.from_pretrained(
+            model_name,
+            load_in_4bit=load_in_4bit,
+            use_gradient_checkpointing=use_gradient_checkpointing,
+            max_seq_length=max_seq_length,
+        )
 
-    logger.info(
-        f"Applying LoRA: r={lora_r}, alpha={lora_alpha}, dropout={lora_dropout}, "
-        f"vision_frozen={not finetune_vision_layers}"
-    )
-    model = FastVisionModel.get_peft_model(
-        model,
-        finetune_vision_layers=finetune_vision_layers,
-        finetune_language_layers=finetune_language_layers,
-        finetune_attention_modules=finetune_attention_modules,
-        finetune_mlp_modules=finetune_mlp_modules,
-        r=lora_r,
-        lora_alpha=lora_alpha,
-        lora_dropout=lora_dropout,
-        bias="none",
-        random_state=42,
-        use_rslora=False,
-        target_modules=sft_cfg.get("lora", {}).get("target_modules", "all-linear")
-        if sft_cfg
-        else "all-linear",
-    )
+        logger.info(
+            f"Applying LoRA: r={lora_r}, alpha={lora_alpha}, dropout={lora_dropout}, "
+            f"vision_frozen={not finetune_vision_layers}"
+        )
+        model = FastVisionModel.get_peft_model(
+            model,
+            finetune_vision_layers=finetune_vision_layers,
+            finetune_language_layers=finetune_language_layers,
+            finetune_attention_modules=finetune_attention_modules,
+            finetune_mlp_modules=finetune_mlp_modules,
+            r=lora_r,
+            lora_alpha=lora_alpha,
+            lora_dropout=lora_dropout,
+            bias="none",
+            random_state=42,
+            use_rslora=False,
+            target_modules=(sft_cfg or {}).get("lora", {}).get("target_modules", "all-linear"),
+        )
 
     # Cap image resolution fed to the vision encoder (training memory safety)
     apply_pixel_bounds(
