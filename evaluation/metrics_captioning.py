@@ -53,13 +53,9 @@ def _check_java_available() -> bool:
 def compute_bertscore(predictions: List[str], references: List[str]) -> Dict[str, float]:
     try:
         import transformers
-        from transformers import RobertaTokenizer
         from bert_score import score
 
         transformers.utils.logging.set_verbosity_error()
-
-        if not hasattr(RobertaTokenizer, "build_inputs_with_special_tokens"):
-            RobertaTokenizer.build_inputs_with_special_tokens = lambda self, t0, t1=None: [self.cls_token_id] + t0 + [self.sep_token_id]
 
         P, R, F1 = score(predictions, references, lang="en", verbose=False, rescale_with_baseline=True)
         return {
@@ -270,6 +266,23 @@ def compute_clipscore(predictions: List[str], images: List[Any], batch_size: int
 
 
 # ---------------------------------------------------------------------------
+# Caption Length Stats
+# ---------------------------------------------------------------------------
+
+def compute_caption_length_stats(predictions: List[str]) -> Dict[str, float]:
+    """Average word count of generated captions (predictions only)."""
+    if not predictions:
+        return {}
+    word_counts = [len(str(p).split()) for p in predictions]
+    if not word_counts:
+        return {}
+    return {
+        "avg_words_per_caption": sum(word_counts) / len(word_counts),
+        "min_words": min(word_counts),
+        "max_words": max(word_counts),
+    }
+
+# ---------------------------------------------------------------------------
 # Aggregate
 # ---------------------------------------------------------------------------
 
@@ -309,8 +322,12 @@ def compute_all_caption_metrics(
     if include_spice:
         results.update(compute_spice(clean_preds, clean_refs))
 
+    results.update(compute_caption_length_stats(clean_preds))
+
     if images:
         results.update(compute_clipscore(clean_preds, images))
+    else:
+        logger.warning(">>>>>>>>> No 'images' list provided to the evaluator! CLIPScore will be completely skipped.")
 
     if prefix:
         results = {f"{prefix}{k}": v for k, v in results.items()}
