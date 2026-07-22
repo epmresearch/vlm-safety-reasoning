@@ -5,7 +5,7 @@ from typing import Dict, List, Any, Set
 import pandas as pd
 
 from core.constants import RULES
-from data.box_utils import greedy_multibox_iou, scale_1000_to_01, clean_boxes, normalize_boxes
+from data.box_utils import compute_mask_union_iou, scale_1000_to_01, clean_boxes, normalize_boxes
 from core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -36,6 +36,8 @@ def compute_violation_metrics(predictions: List[Dict[str, Any]], references: Lis
     rule_iou_tn1 = {r: [] for r in RULES}
     rule_iou_excl = {r: [] for r in RULES}
     rule_tn_count = {r: 0 for r in RULES}
+    rule_inter_total = {r: 0.0 for r in RULES}
+    rule_union_total = {r: 0.0 for r in RULES}
     
     for pred_dict, gt_dict in zip(predictions, references):
         pred_dict = pred_dict or {}
@@ -84,39 +86,47 @@ def compute_violation_metrics(predictions: List[Dict[str, Any]], references: Lis
             elif not in_pred and in_gt:
                 rule_counts[r]["fn"] += 1
                 
-        # Grounding IoU for correctly identified rules
+        # Grounding IoU for correctly identified rules — same whole-image
+        # union-region IoU used by compute_grounding_metrics, so object
+        # grounding and rule-violation grounding share one IoU definition
         common_rules = pred_rules & gt_rules
         for r in common_rules:
             pred_boxes_1000 = pred_by_rule[r].get("bounding_box", [])
             gt_boxes_01 = gt_by_rule[r].get("bounding_box", [])
-            
+
             # Normalize first to handle flat lists
             pred_boxes_1000 = normalize_boxes(pred_boxes_1000)
             gt_boxes_01 = normalize_boxes(gt_boxes_01)
-            
+
             # Then clean
             pred_boxes_1000 = clean_boxes(pred_boxes_1000)
             gt_boxes_01 = clean_boxes(gt_boxes_01)
-            
+
             # Scale pred to [0, 1]
             pred_boxes_01 = [scale_1000_to_01(b) for b in pred_boxes_1000]
-            
+
+            result = compute_mask_union_iou(pred_boxes_01, gt_boxes_01)
+            iou = result["iou"]  # None only when both lists are empty (TN)
+
             if not pred_boxes_01 and not gt_boxes_01:
                 # True Negative
                 rule_iou_tn0[r].append(0.0)
                 rule_iou_tn1[r].append(1.0)
-                # _excl omits it entirely
+                # _excl omits it entirely, by design
                 rule_tn_count[r] += 1
-            elif not pred_boxes_01 or not gt_boxes_01:
-                # False Positive or False Negative
-                rule_iou_tn0[r].append(0.0)
-                rule_iou_tn1[r].append(0.0)
-                rule_iou_excl[r].append(0.0)
             else:
-                iou, _, _ = greedy_multibox_iou(pred_boxes_01, gt_boxes_01)
+                # FP (pred only), FN (gt only), and genuine matches all
+                # fall through to compute_mask_union_iou's iou value —
+                # 0.0 for FP/FN, the real union-IoU otherwise. This also
+                # correctly handles multi-box violations: every predicted
+                # box that doesn't overlap the GT union inflates the
+                # denominator and drags the score down.
                 rule_iou_tn0[r].append(iou)
                 rule_iou_tn1[r].append(iou)
                 rule_iou_excl[r].append(iou)
+
+            rule_inter_total[r] += result["intersection"]
+            rule_union_total[r] += result["union"]
 
     metrics = {}
     
@@ -145,7 +155,6 @@ def compute_violation_metrics(predictions: List[Dict[str, Any]], references: Lis
         
         # Collect per-rule values for macro, excluding rule_0.
         # rule_0 ("no violation") is semantically different from the four
-        # safety-rule classes and the paper (Table 7) treats it separately.
         # Macro-average is over Rules 1–4 only.
         if r in RULES:
             rule_precisions.append(p)
@@ -153,8 +162,7 @@ def compute_violation_metrics(predictions: List[Dict[str, Any]], references: Lis
             rule_f1s.append(r_f1)
     
     # True MACRO-average: unweighted mean of per-rule precision/recall/F1
-    # over Rules 1–4 only (excludes rule_0). This gives each violation
-    # rule equal weight regardless of occurrence frequency.
+    # over Rules 1–4 only (excludes rule_0).
     metrics["violation_identification_precision_macro"] = (
         sum(rule_precisions) / len(rule_precisions) if rule_precisions else 0.0
     )
@@ -165,8 +173,10 @@ def compute_violation_metrics(predictions: List[Dict[str, Any]], references: Lis
         sum(rule_f1s) / len(rule_f1s) if rule_f1s else 0.0
     )
         
-    # Grounding IoU per rule and global macro
+    # Grounding IoU per rule and global macro/micro
     tn0_macros, tn1_macros, excl_macros = [], [], []
+    total_inter, total_union = 0.0, 0.0
+    
     for r in RULES:
         metrics[f"violation_grounding_tn_count_{r}"] = rule_tn_count[r]
         
@@ -185,9 +195,16 @@ def compute_violation_metrics(predictions: List[Dict[str, Any]], references: Lis
         metrics[f"violation_grounding_iou_{r}_excl"] = excl_val
         excl_macros.append(excl_val)
         
+        # micro (pooled intersection/union)
+        inter_r = rule_inter_total[r]
+        union_r = rule_union_total[r]
+        metrics[f"violation_grounding_iou_{r}_micro"] = inter_r / union_r if union_r > 0 else 0.0
+        total_inter += inter_r
+        total_union += union_r
+        
     metrics["violation_grounding_iou_macro_tn0"] = sum(tn0_macros) / len(tn0_macros) if tn0_macros else 0.0
     metrics["violation_grounding_iou_macro_tn1"] = sum(tn1_macros) / len(tn1_macros) if tn1_macros else 0.0
     metrics["violation_grounding_iou_macro_excl"] = sum(excl_macros) / len(excl_macros) if excl_macros else 0.0
+    metrics["violation_grounding_iou_micro_mean"] = total_inter / total_union if total_union > 0 else 0.0
     
     return metrics
-
