@@ -8,7 +8,7 @@ Two scales:
     Dataset native : normalized [0, 1]
     Qwen3-VL native: integer    [0, 1000]
 """
-from typing import List, Optional, Tuple, Union
+from typing import List, Optional, Tuple, Union, Dict
 
 BBox = List[float]  # [xmin, ymin, xmax, ymax], 4 elements
 
@@ -174,3 +174,58 @@ def greedy_multibox_iou(pred_boxes: List[BBox], gt_boxes: List[BBox]) -> Tuple[f
         total_union += area_p
 
     return sum(matched_ious) / len(matched_ious), total_inter, total_union
+
+
+def compute_mask_union_iou(pred_boxes: List[BBox], gt_boxes: List[BBox]) -> Dict[str, Optional[float]]:
+    """Computes whole-image union-region IoU for ONE class in ONE image:
+        - ALL predicted boxes for this class are collapsed into a single
+          region via geometric union (X_hat).
+        - ALL ground-truth boxes for this class are collapsed into a single
+          region via geometric union (X).
+        - IoU = area(intersection(X_hat, X)) / area(union(X_hat, X))
+
+    Uses exact polygon union via Shapely.
+
+    Both pred_boxes and gt_boxes MUST already be in the SAME coordinate
+    scale (this pipeline always calls it with both already converted to
+    [0,1] dataset scale).
+
+    Returns:
+        {
+          "iou": float in [0,1], or None if both pred_boxes and gt_boxes
+                 are empty (true negative - caller decides how to score this),
+          "intersection": float area,
+          "union": float area,
+        }
+    """
+    from shapely.geometry import box as shapely_box
+    from shapely.ops import unary_union
+
+    if not pred_boxes and not gt_boxes:
+        return {"iou": None, "intersection": 0.0, "union": 0.0}
+
+    def _union_geom(boxes: List[BBox]):
+        rects = [shapely_box(b[0], b[1], b[2], b[3]) for b in boxes]
+        if not rects:
+            return None
+        return unary_union(rects)
+
+    pred_geom = _union_geom(pred_boxes)
+    gt_geom = _union_geom(gt_boxes)
+
+    if pred_geom is None and gt_geom is None:
+        return {"iou": None, "intersection": 0.0, "union": 0.0}
+    if pred_geom is None:
+        # False Negative: GT exists, nothing predicted
+        return {"iou": 0.0, "intersection": 0.0, "union": gt_geom.area}
+    if gt_geom is None:
+        # False Positive: predicted something, no GT
+        return {"iou": 0.0, "intersection": 0.0, "union": pred_geom.area}
+
+    intersection = pred_geom.intersection(gt_geom).area
+    union = pred_geom.union(gt_geom).area
+
+    if union <= 0:
+        return {"iou": 0.0, "intersection": 0.0, "union": 0.0}
+
+    return {"iou": intersection / union, "intersection": intersection, "union": union}
