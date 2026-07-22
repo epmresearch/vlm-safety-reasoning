@@ -215,12 +215,21 @@ def load_model_for_inference(
     logger.info(f"Loading model for inference: {model_name} with max_seq_length={max_seq_length}")
 
     if adapter_path:
-        logger.info(f"Loading with adapter from: {adapter_path}")
+        logger.info(f"Loading base model + processor from: {model_name}, adapter from: {adapter_path}")
         model, tokenizer = FastVisionModel.from_pretrained(
-            adapter_path,
+            model_name,
             load_in_4bit=True,
             max_seq_length=max_seq_length,
         )
+        from peft import PeftModel
+        model = PeftModel.from_pretrained(model, adapter_path)
+    # if adapter_path:
+    #     logger.info(f"Loading with adapter from: {adapter_path}")
+    #     model, tokenizer = FastVisionModel.from_pretrained(
+    #         adapter_path,
+    #         load_in_4bit=True,
+    #         max_seq_length=max_seq_length,
+    #     )
     else:
         model, tokenizer = FastVisionModel.from_pretrained(
             model_name,
