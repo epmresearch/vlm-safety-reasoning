@@ -12,7 +12,7 @@ Reports both:
   - IoU-ObjectExist  : only images where GT is non-empty
   - IoU-Total        : all images; the paper's text
     explicitly states FP cases (pred present, no GT) and FN cases (GT
-    present, no pred) score 0. Default to `_tn0` if want use `_excl`.
+    present, no pred) score 0. Use `_tn0` if want use `_excl`.
 """
 from typing import Dict, List, Any
 import numpy as np

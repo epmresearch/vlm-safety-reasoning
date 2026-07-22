@@ -289,12 +289,12 @@ def compute_caption_length_stats(predictions: List[str]) -> Dict[str, float]:
 def compute_all_caption_metrics(
     predictions: List[str],
     references: List[str],
-    images: List[Any] = None,
+    images: List[Any],
     include_spice: bool = True,
     prefix: str = "",
 ) -> Dict[str, float]:
     """Computes all captioning metrics: BERTScore, METEOR, CIDEr-D, SPICE,
-    and optionally CLIPScore.
+    and CLIPScore.
 
     Args:
         include_spice: Set False for short, non-descriptive text (e.g. one-line
@@ -311,6 +311,10 @@ def compute_all_caption_metrics(
             f"compute_all_caption_metrics: length mismatch — "
             f"{len(predictions)} predictions vs {len(references)} references."
         )
+    if images is None:
+        raise ValueError(
+            "CLIPScore requires images. You explicitly passed images=None to the caption metrics suite."
+        )
 
     clean_preds = [p if p and str(p).strip() else "empty" for p in predictions]
     clean_refs = [r if r and str(r).strip() else "empty" for r in references]
@@ -324,10 +328,7 @@ def compute_all_caption_metrics(
 
     results.update(compute_caption_length_stats(clean_preds))
 
-    if images:
-        results.update(compute_clipscore(clean_preds, images))
-    else:
-        logger.warning(">>>>>>>>> No 'images' list provided to the evaluator! CLIPScore will be completely skipped.")
+    results.update(compute_clipscore(clean_preds, images))
 
     if prefix:
         results = {f"{prefix}{k}": v for k, v in results.items()}
