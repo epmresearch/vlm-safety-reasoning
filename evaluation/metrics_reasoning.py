@@ -78,10 +78,15 @@ def batch_score_reasoning(
         for k, v in caption_res.items():
             result[f"reasoning_text_similarity_{k}_micro"] = v
     else:
+        result["reasoning_text_similarity_bertscore_precision_micro"] = 0.0
+        result["reasoning_text_similarity_bertscore_recall_micro"] = 0.0
         result["reasoning_text_similarity_bertscore_f1_micro"] = 0.0
         result["reasoning_text_similarity_meteor_micro"] = 0.0
         result["reasoning_text_similarity_ciderd_micro"] = 0.0
-        result["reasoning_text_similarity_clipscore_micro"] = 0.0  # <-- ADDED
+        result["reasoning_text_similarity_clipscore_micro"] = 0.0
+        result["reasoning_text_similarity_avg_words_per_caption_micro"] = 0.0
+        result["reasoning_text_similarity_min_words_micro"] = 0.0
+        result["reasoning_text_similarity_max_words_micro"] = 0.0
         
     # 2. Compute per-rule reasoning metrics
     for r in RULES:
@@ -96,10 +101,15 @@ def batch_score_reasoning(
             for k, v in rule_res.items():
                 result[f"reasoning_text_similarity_{k}_{r}"] = v
         else:
+            result[f"reasoning_text_similarity_bertscore_precision_{r}"] = 0.0
+            result[f"reasoning_text_similarity_bertscore_recall_{r}"] = 0.0
             result[f"reasoning_text_similarity_bertscore_f1_{r}"] = 0.0
             result[f"reasoning_text_similarity_meteor_{r}"] = 0.0
             result[f"reasoning_text_similarity_ciderd_{r}"] = 0.0
-            result[f"reasoning_text_similarity_clipscore_{r}"] = 0.0  
+            result[f"reasoning_text_similarity_clipscore_{r}"] = 0.0
+            result[f"reasoning_text_similarity_avg_words_per_caption_{r}"] = 0.0
+            result[f"reasoning_text_similarity_min_words_{r}"] = 0.0
+            result[f"reasoning_text_similarity_max_words_{r}"] = 0.0
             
     # 3. Compute true macro reasoning metrics
     metrics_keys = ["bertscore_f1", "meteor", "ciderd", "clipscore"]  
