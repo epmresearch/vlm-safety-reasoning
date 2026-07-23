@@ -23,11 +23,12 @@ class SaveBestModelCallback(TrainerCallback):
     last eval (e.g. step 900) is already sitting in `best/` on Drive.
     """
 
-    def __init__(self, best_dir: str, metric_name: str = "eval_loss", greater_is_better: bool = False, improvement_threshold: float = 0.0):
+    def __init__(self, best_dir: str, metric_name: str = "eval_loss", greater_is_better: bool = False, improvement_threshold: float = 0.0, base_model_name: Optional[str] = None):
         self.best_dir = Path(best_dir)
         self.metric_name = metric_name
         self.greater_is_better = greater_is_better
         self.improvement_threshold = improvement_threshold
+        self.base_model_name = base_model_name
         self.best_value: Optional[float] = None
 
     def on_evaluate(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs):
@@ -62,6 +63,7 @@ class SaveBestModelCallback(TrainerCallback):
         model.save_pretrained(str(self.best_dir))
         if tokenizer is not None:
             tokenizer.save_pretrained(str(self.best_dir))
+            _ensure_preprocessor_config(str(self.best_dir), self.base_model_name)
 
         tmp_path = self.best_dir / "best_info.tmp"
         with open(tmp_path, "w") as f:
@@ -73,6 +75,22 @@ class SaveBestModelCallback(TrainerCallback):
                 "saved_at_utc": datetime.now(timezone.utc).isoformat(),
             }, f, indent=2)
         os.replace(str(tmp_path), str(self.best_dir / "best_info.json"))
+
+
+def _ensure_preprocessor_config(save_dir: str, base_model_name: Optional[str]) -> None:
+    """Backfills preprocessor_config.json if tokenizer.save_pretrained() didn't
+    write it (observed Unsloth/Qwen3-VL quirk — see checkpoint save discussion)."""
+    if base_model_name is None:
+        return
+    path = Path(save_dir) / "preprocessor_config.json"
+    if path.exists():
+        return
+    try:
+        from transformers import AutoImageProcessor
+        AutoImageProcessor.from_pretrained(base_model_name).save_pretrained(save_dir)
+        logger.info(f"Backfilled preprocessor_config.json in {save_dir} from {base_model_name}")
+    except Exception as e:
+        logger.warning(f"Could not backfill preprocessor_config.json in {save_dir}: {e}")
 
 
 class ManifestUpdateCallback(TrainerCallback):

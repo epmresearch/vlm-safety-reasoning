@@ -111,24 +111,16 @@ def load_model_for_training(
         lora_dropout = lora_cfg.get("dropout", lora_dropout)
 
     if adapter_path:
-        # --- Continue training an EXISTING trained adapter ---
         logger.info(f"Loading EXISTING adapter for cooldown training: {adapter_path}")
+        logger.info(f"Loading base model + processor from: {model_name}")
         model, tokenizer = FastVisionModel.from_pretrained(
-            adapter_path,
+            model_name,                          # <-- base repo, not adapter_path
             load_in_4bit=load_in_4bit,
             use_gradient_checkpointing=use_gradient_checkpointing,
             max_seq_length=max_seq_length,
         )
-        # Adapter already has trained LoRA weights attached — no get_peft_model()
-        # call needed. Just confirm it's actually a PEFT model and re-enable grads,
-        # since FastVisionModel.from_pretrained on an adapter dir can load it in
-        # a frozen/inference-oriented state.
         from peft import PeftModel
-        if not isinstance(model, PeftModel):
-            raise ValueError(
-                f"{adapter_path} does not look like a saved LoRA adapter "
-                f"(no PEFT config found). Did you pass the base model path by mistake?"
-            )
+        model = PeftModel.from_pretrained(model, adapter_path, is_trainable=True)
         for name, param in model.named_parameters():
             if "lora" in name.lower():
                 param.requires_grad = True
@@ -223,13 +215,6 @@ def load_model_for_inference(
         )
         from peft import PeftModel
         model = PeftModel.from_pretrained(model, adapter_path)
-    # if adapter_path:
-    #     logger.info(f"Loading with adapter from: {adapter_path}")
-    #     model, tokenizer = FastVisionModel.from_pretrained(
-    #         adapter_path,
-    #         load_in_4bit=True,
-    #         max_seq_length=max_seq_length,
-    #     )
     else:
         model, tokenizer = FastVisionModel.from_pretrained(
             model_name,

@@ -19,7 +19,7 @@ from typing import Any, Dict, List, Optional
 from core.config import load_base_config, load_training_config
 from core.io import get_drive_path, ensure_dir
 from core.logging import get_logger
-from core.callbacks import SaveBestModelCallback, ManifestUpdateCallback, GPUMemoryLoggingCallback
+from core.callbacks import SaveBestModelCallback, ManifestUpdateCallback, GPUMemoryLoggingCallback, _ensure_preprocessor_config
 from models.model_loader import load_model_for_training, get_model_info, get_batch_config, log_gpu_memory
 
 logger = get_logger(__name__)
@@ -274,6 +274,7 @@ def run_sft_unified(
             metric_name=sft_cfg.get("metric_for_best_model", "eval_loss"),
             greater_is_better=sft_cfg.get("greater_is_better", False),
             improvement_threshold=sft_cfg.get("best_model_threshold", 0.0),
+            base_model_name=model_info["hf_path"],
         ),
         ManifestUpdateCallback(checkpoint_dir=str(checkpoint_dir), static_fields=static_manifest_fields),
         GPUMemoryLoggingCallback(every_n_steps=sft_cfg.get("log_gpu_memory_every_n_steps", 20)),
@@ -357,6 +358,7 @@ def run_sft_unified(
             ensure_dir(final_dir)
             model.save_pretrained(str(final_dir))
             tokenizer.save_pretrained(str(final_dir))
+            _ensure_preprocessor_config(str(final_dir), model_info["hf_path"])
             logger.info(f"Saved final adapter snapshot to {final_dir}")
         except Exception as e:
             logger.warning(f"Could not save final snapshot: {e}")
