@@ -25,6 +25,12 @@ def run_full_evaluation(
     references: list of ground truth UnifiedOutput dictionaries.
     images: list of PIL Images (for CLIPScore).
     """
+    if images is None:
+        raise ValueError(
+            "run_full_evaluation requires `images` (aligned list of PIL Images) "
+            "for CLIPScore-based caption/reasoning metrics. Pass images=..., "
+            "or drop CLIPScore from the pipeline if you truly want text-only eval."
+        )
     logger.info("Starting full evaluation pipeline...")
     
     # C2 fail-fast: METEOR, CIDEr-D, and SPICE require Java.

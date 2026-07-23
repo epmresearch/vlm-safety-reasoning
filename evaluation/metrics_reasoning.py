@@ -22,6 +22,11 @@ def batch_score_reasoning(
         raise ValueError(
             "batch_score_reasoning requires non-empty predictions and references lists."
         )
+    if images is None:
+        raise ValueError(
+            "batch_score_reasoning requires `images`; pass the image list aligned "
+            "with pred_violations/gt_violations."
+        )
     # ADDED: Ensure images match predictions and ground truth
     if len(pred_violations) != len(gt_violations) or len(pred_violations) != len(images):
         raise ValueError(
