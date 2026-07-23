@@ -5,7 +5,7 @@ from typing import Dict, List, Any, Set
 import pandas as pd
 
 from core.constants import RULES
-from data.box_utils import compute_mask_union_iou, scale_1000_to_01, clean_boxes, normalize_boxes
+from data.box_utils import compute_mask_union_iou, greedy_multibox_iou, scale_1000_to_01, clean_boxes, normalize_boxes
 from core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -31,13 +31,17 @@ def compute_violation_metrics(predictions: List[Dict[str, Any]], references: Lis
     global_tp, global_fp, global_fn = 0, 0, 0
     rule_counts = {r: {"tp": 0, "fp": 0, "fn": 0} for r in ALL_RULES}
     
-    # Trackers for the three TN variants and TN counts
-    rule_iou_tn0 = {r: [] for r in RULES}
-    rule_iou_tn1 = {r: [] for r in RULES}
-    rule_iou_excl = {r: [] for r in RULES}
+    # Mask Trackers
+    rule_iou_tn0_mask = {r: [] for r in RULES}
+    rule_inter_total_mask = {r: 0.0 for r in RULES}
+    rule_union_total_mask = {r: 0.0 for r in RULES}
+
+    # Greedy Trackers
+    rule_iou_tn0_greedy = {r: [] for r in RULES}
+    rule_inter_total_greedy = {r: 0.0 for r in RULES}
+    rule_union_total_greedy = {r: 0.0 for r in RULES}
+
     rule_tn_count = {r: 0 for r in RULES}
-    rule_inter_total = {r: 0.0 for r in RULES}
-    rule_union_total = {r: 0.0 for r in RULES}
     
     for pred_dict, gt_dict in zip(predictions, references):
         pred_dict = pred_dict or {}
@@ -86,9 +90,6 @@ def compute_violation_metrics(predictions: List[Dict[str, Any]], references: Lis
             elif not in_pred and in_gt:
                 rule_counts[r]["fn"] += 1
                 
-        # Grounding IoU for correctly identified rules — same whole-image
-        # union-region IoU used by compute_grounding_metrics, so object
-        # grounding and rule-violation grounding share one IoU definition
         common_rules = pred_rules & gt_rules
         for r in common_rules:
             pred_boxes_1000 = pred_by_rule[r].get("bounding_box", [])
@@ -98,40 +99,38 @@ def compute_violation_metrics(predictions: List[Dict[str, Any]], references: Lis
             pred_boxes_1000 = normalize_boxes(pred_boxes_1000)
             gt_boxes_01 = normalize_boxes(gt_boxes_01)
 
-            # Then clean
-            pred_boxes_1000 = clean_boxes(pred_boxes_1000)
-            gt_boxes_01 = clean_boxes(gt_boxes_01)
-
-            # Scale pred to [0, 1]
+            # Scale pred to [0, 1] FIRST
             pred_boxes_01 = [scale_1000_to_01(b) for b in pred_boxes_1000]
 
-            result = compute_mask_union_iou(pred_boxes_01, gt_boxes_01)
-            iou = result["iou"]  # None only when both lists are empty (TN)
+            # Then clean both using the exact same [0, 1] scale threshold
+            pred_boxes_01 = clean_boxes(pred_boxes_01)
+            gt_boxes_01 = clean_boxes(gt_boxes_01)
+
+            # 1. Mask-Union IoU
+            mask_result = compute_mask_union_iou(pred_boxes_01, gt_boxes_01)
+            mask_iou = mask_result["iou"]
+
+            # 2. Greedy IoU
+            greedy_iou_val, greedy_inter, greedy_union = greedy_multibox_iou(pred_boxes_01, gt_boxes_01)
 
             if not pred_boxes_01 and not gt_boxes_01:
                 # True Negative
-                rule_iou_tn0[r].append(0.0)
-                rule_iou_tn1[r].append(1.0)
-                # _excl omits it entirely, by design
+                rule_iou_tn0_mask[r].append(0.0)
+                rule_iou_tn0_greedy[r].append(0.0)
                 rule_tn_count[r] += 1
             else:
-                # FP (pred only), FN (gt only), and genuine matches all
-                # fall through to compute_mask_union_iou's iou value —
-                # 0.0 for FP/FN, the real union-IoU otherwise. This also
-                # correctly handles multi-box violations: every predicted
-                # box that doesn't overlap the GT union inflates the
-                # denominator and drags the score down.
-                rule_iou_tn0[r].append(iou)
-                rule_iou_tn1[r].append(iou)
-                rule_iou_excl[r].append(iou)
+                rule_iou_tn0_mask[r].append(mask_iou)
+                rule_iou_tn0_greedy[r].append(greedy_iou_val)
 
-            rule_inter_total[r] += result["intersection"]
-            rule_union_total[r] += result["union"]
+            rule_inter_total_mask[r] += mask_result["intersection"]
+            rule_union_total_mask[r] += mask_result["union"]
+
+            rule_inter_total_greedy[r] += greedy_inter
+            rule_union_total_greedy[r] += greedy_union
 
     metrics = {}
     
-    # Global (pooled) precision/recall/F1 — this is MICRO-averaging:
-    # pool all TP/FP/FN across images and rules, then compute one ratio.
+    # Global (pooled) precision/recall/F1 — this is MICRO-averaging
     precision = global_tp / (global_tp + global_fp) if (global_tp + global_fp) > 0 else 0.0
     recall = global_tp / (global_tp + global_fn) if (global_tp + global_fn) > 0 else 0.0
     f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
@@ -140,8 +139,6 @@ def compute_violation_metrics(predictions: List[Dict[str, Any]], references: Lis
     metrics["violation_identification_recall_micro"] = recall
     metrics["violation_identification_f1_micro"] = f1
     
-    # Per-rule metrics (computed for ALL_RULES including rule_0)
-    # Also collect per-violation-rule values for macro-averaging below.
     rule_precisions, rule_recalls, rule_f1s = [], [], []
     for r in ALL_RULES:
         tp, fp, fn = rule_counts[r]["tp"], rule_counts[r]["fp"], rule_counts[r]["fn"]
@@ -153,16 +150,11 @@ def compute_violation_metrics(predictions: List[Dict[str, Any]], references: Lis
         metrics[f"violation_identification_recall_{r}"] = rec
         metrics[f"violation_identification_f1_{r}"] = r_f1
         
-        # Collect per-rule values for macro, excluding rule_0.
-        # rule_0 ("no violation") is semantically different from the four
-        # Macro-average is over Rules 1–4 only.
         if r in RULES:
             rule_precisions.append(p)
             rule_recalls.append(rec)
             rule_f1s.append(r_f1)
     
-    # True MACRO-average: unweighted mean of per-rule precision/recall/F1
-    # over Rules 1–4 only (excludes rule_0).
     metrics["violation_identification_precision_macro"] = (
         sum(rule_precisions) / len(rule_precisions) if rule_precisions else 0.0
     )
@@ -174,37 +166,39 @@ def compute_violation_metrics(predictions: List[Dict[str, Any]], references: Lis
     )
         
     # Grounding IoU per rule and global macro/micro
-    tn0_macros, tn1_macros, excl_macros = [], [], []
-    total_inter, total_union = 0.0, 0.0
+    tn0_macros_mask, tn0_macros_greedy = [], []
+    total_inter_mask, total_union_mask = 0.0, 0.0
+    total_inter_greedy, total_union_greedy = 0.0, 0.0
     
     for r in RULES:
         metrics[f"violation_grounding_tn_count_{r}"] = rule_tn_count[r]
         
-        # _tn0
-        tn0_val = sum(rule_iou_tn0[r]) / len(rule_iou_tn0[r]) if rule_iou_tn0[r] else 0.0
-        metrics[f"violation_grounding_iou_{r}_tn0"] = tn0_val
-        tn0_macros.append(tn0_val)
+        # Mask
+        tn0_val_mask = sum(rule_iou_tn0_mask[r]) / len(rule_iou_tn0_mask[r]) if rule_iou_tn0_mask[r] else 0.0
+        metrics[f"violation_grounding_mask_iou_{r}_tn0"] = tn0_val_mask
+        tn0_macros_mask.append(tn0_val_mask)
         
-        # _tn1
-        tn1_val = sum(rule_iou_tn1[r]) / len(rule_iou_tn1[r]) if rule_iou_tn1[r] else 0.0
-        metrics[f"violation_grounding_iou_{r}_tn1"] = tn1_val
-        tn1_macros.append(tn1_val)
+        inter_r_mask = rule_inter_total_mask[r]
+        union_r_mask = rule_union_total_mask[r]
+        metrics[f"violation_grounding_mask_iou_{r}_micro"] = inter_r_mask / union_r_mask if union_r_mask > 0 else 0.0
+        total_inter_mask += inter_r_mask
+        total_union_mask += union_r_mask
+
+        # Greedy
+        tn0_val_greedy = sum(rule_iou_tn0_greedy[r]) / len(rule_iou_tn0_greedy[r]) if rule_iou_tn0_greedy[r] else 0.0
+        metrics[f"violation_grounding_greedy_iou_{r}_tn0"] = tn0_val_greedy
+        tn0_macros_greedy.append(tn0_val_greedy)
         
-        # _excl
-        excl_val = sum(rule_iou_excl[r]) / len(rule_iou_excl[r]) if rule_iou_excl[r] else 0.0
-        metrics[f"violation_grounding_iou_{r}_excl"] = excl_val
-        excl_macros.append(excl_val)
+        inter_r_greedy = rule_inter_total_greedy[r]
+        union_r_greedy = rule_union_total_greedy[r]
+        metrics[f"violation_grounding_greedy_iou_{r}_micro"] = inter_r_greedy / union_r_greedy if union_r_greedy > 0 else 0.0
+        total_inter_greedy += inter_r_greedy
+        total_union_greedy += union_r_greedy
         
-        # micro (pooled intersection/union)
-        inter_r = rule_inter_total[r]
-        union_r = rule_union_total[r]
-        metrics[f"violation_grounding_iou_{r}_micro"] = inter_r / union_r if union_r > 0 else 0.0
-        total_inter += inter_r
-        total_union += union_r
-        
-    metrics["violation_grounding_iou_macro_tn0"] = sum(tn0_macros) / len(tn0_macros) if tn0_macros else 0.0
-    metrics["violation_grounding_iou_macro_tn1"] = sum(tn1_macros) / len(tn1_macros) if tn1_macros else 0.0
-    metrics["violation_grounding_iou_macro_excl"] = sum(excl_macros) / len(excl_macros) if excl_macros else 0.0
-    metrics["violation_grounding_iou_micro_mean"] = total_inter / total_union if total_union > 0 else 0.0
+    metrics["violation_grounding_mask_iou_macro_tn0"] = sum(tn0_macros_mask) / len(tn0_macros_mask) if tn0_macros_mask else 0.0
+    metrics["violation_grounding_mask_iou_micro_mean"] = total_inter_mask / total_union_mask if total_union_mask > 0 else 0.0
+
+    metrics["violation_grounding_greedy_iou_macro_tn0"] = sum(tn0_macros_greedy) / len(tn0_macros_greedy) if tn0_macros_greedy else 0.0
+    metrics["violation_grounding_greedy_iou_micro_mean"] = total_inter_greedy / total_union_greedy if total_union_greedy > 0 else 0.0
     
     return metrics

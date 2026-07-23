@@ -31,10 +31,11 @@ def flatten_metrics(metrics: dict, label: str) -> dict:
     flat["CLIPScore"] = metrics.get("captioning_clipscore")
     flat["METEOR"] = metrics.get("captioning_meteor")
     flat["CIDEr-D"] = metrics.get("captioning_ciderd")
+    
     # Grounding metrics (using _tn0 as default per object-level grounding convention)
-    flat["Grounding_IoU_Macro"] = metrics.get("grounding_iou_all_macro_mean_tn0")
-    flat["Grounding_IoU_Pooled"] = metrics.get("grounding_iou_all_pooled_mean_tn0")
-    flat["Grounding_IoU_Micro"] = metrics.get("grounding_iou_all_micro_mean")
+    flat["Grounding_IoU_Macro_Mask"] = metrics.get("grounding_mask_iou_all_macro_mean_tn0")
+    flat["Grounding_IoU_Macro_Greedy"] = metrics.get("grounding_greedy_iou_all_macro_mean_tn0")
+    
     # Violation metrics
     flat["Violation_F1_Micro"] = metrics.get("violation_identification_f1_micro")
     flat["Violation_Precision_Micro"] = metrics.get("violation_identification_precision_micro")
@@ -42,6 +43,8 @@ def flatten_metrics(metrics: dict, label: str) -> dict:
     flat["Violation_F1_Macro"] = metrics.get("violation_identification_f1_macro")
     flat["Violation_Precision_Macro"] = metrics.get("violation_identification_precision_macro")
     flat["Violation_Recall_Macro"] = metrics.get("violation_identification_recall_macro")
+    flat["Violation_Grounding_IoU_Mask"] = metrics.get("violation_grounding_mask_iou_macro_tn0")
+    flat["Violation_Grounding_IoU_Greedy"] = metrics.get("violation_grounding_greedy_iou_macro_tn0")
     # Structural metrics
     flat["Valid_JSON_%"] = (metrics.get("structural_json_validity_rate", 0.0)) * 100
     flat["Schema_Adherence_%"] = (metrics.get("structural_schema_adherence_rate", 0.0)) * 100
