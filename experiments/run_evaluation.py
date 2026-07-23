@@ -171,9 +171,8 @@ def main():
 
     # --- Run evaluation ---
     logger.info("Running full evaluation pipeline...")
-    checkpoint_path = str(output_dir / "eval_checkpoint.json")
     eval_results = run_full_evaluation(
-        raw_predictions, references, images=images, checkpoint_path=checkpoint_path
+        raw_predictions, references, images=images
     )
 
     # --- Save outputs ---

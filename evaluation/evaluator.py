@@ -2,9 +2,7 @@
 Main evaluator orchestrator.
 Combines all metric functions into a unified evaluation pipeline.
 """
-from typing import Dict, List, Any, Optional
-import json
-import os
+from typing import Dict, List, Any
 
 from evaluation.output_parser import parse_model_output, validate_unified_output
 from evaluation.metrics_captioning import compute_all_caption_metrics
@@ -20,7 +18,6 @@ def run_full_evaluation(
     raw_predictions: List[str],
     references: List[Dict[str, Any]],
     images: List[Any] = None,
-    checkpoint_path: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     Runs the complete evaluation pipeline.
@@ -45,71 +42,40 @@ def run_full_evaluation(
         raise ValueError(
             f"Length mismatch: {len(raw_predictions)} predictions vs {len(references)} references"
         )
-        
-    # Checkpoint state
-    ckpt = {
-        "structural_metrics": None,
-        "caption_metrics": None,
-        "grounding_metrics": None,
-        "violation_metrics": None,
-        "reasoning_metrics": None,
-        "parsed_predictions": None,
-        "failures": None
-    }
-    
-    if checkpoint_path and os.path.exists(checkpoint_path):
-        logger.info(f"Loading checkpoint from {checkpoint_path}")
-        with open(checkpoint_path, 'r') as f:
-            ckpt.update(json.load(f))
-            
-    def save_checkpoint():
-        if checkpoint_path:
-            with open(checkpoint_path, 'w') as f:
-                json.dump(ckpt, f, indent=2)
     
     # 1. Structural metrics & Parsing
-    if ckpt["structural_metrics"] is None:
-        structural_metrics = compute_structural_metrics(raw_predictions)
+    structural_metrics = compute_structural_metrics(raw_predictions)
         
-        # Parse predictions and capture failures
-        parsed_preds = []
-        failures = []
-        for i, raw_str in enumerate(raw_predictions):
-            image_id = references[i].get("image_id", f"unknown_{i}")
+    # Parse predictions and capture failures
+    parsed_preds = []
+    failures = []
+    for i, raw_str in enumerate(raw_predictions):
+        image_id = references[i].get("image_id", f"unknown_{i}")
             
-            # 1. JSON Parse
-            parsed = parse_model_output(raw_str)
-            if parsed is None:
-                parsed_preds.append(None)
-                failures.append({
-                    "image_id": image_id,
-                    "error_type": "json_parse_error",
-                    "raw_prediction": raw_str
-                })
-                continue
+        # 1. JSON Parse
+        parsed = parse_model_output(raw_str)
+        if parsed is None:
+            parsed_preds.append(None)
+            failures.append({
+                "image_id": image_id,
+                "error_type": "json_parse_error",
+                "raw_prediction": raw_str
+            })
+            continue
                 
-            # 2. Schema Validation
-            validated = validate_unified_output(parsed)
-            if validated is None:
-                parsed_preds.append(None)
-                failures.append({
-                    "image_id": image_id,
-                    "error_type": "schema_validation_error",
-                    "raw_prediction": raw_str
-                })
-                continue
+        # 2. Schema Validation
+        validated = validate_unified_output(parsed)
+        if validated is None:
+            parsed_preds.append(None)
+            failures.append({
+                "image_id": image_id,
+                "error_type": "schema_validation_error",
+                "raw_prediction": raw_str
+            })
+            continue
                 
-            # Valid JSON and Valid Schema
-            parsed_preds.append(parsed)
-            
-        ckpt["structural_metrics"] = structural_metrics
-        ckpt["parsed_predictions"] = parsed_preds
-        ckpt["failures"] = failures
-        save_checkpoint()
-    
-    structural_metrics = ckpt["structural_metrics"]
-    parsed_preds = ckpt["parsed_predictions"]
-    failures = ckpt["failures"]
+        # Valid JSON and Valid Schema
+        parsed_preds.append(parsed)
     
     # Extract components
     pred_captions = [p.get("caption", "") if p else "" for p in parsed_preds]
@@ -122,32 +88,20 @@ def run_full_evaluation(
     gt_violations = references
     
     # 2. Captioning metrics
-    if ckpt["caption_metrics"] is None:
-        logger.info("Computing captioning metrics...")
-        ckpt["caption_metrics"] = compute_all_caption_metrics(pred_captions, gt_captions, images=images, prefix="captioning_")
-        save_checkpoint()
-    caption_metrics = ckpt["caption_metrics"]
+    logger.info("Computing captioning metrics...")
+    caption_metrics = compute_all_caption_metrics(pred_captions, gt_captions, images=images, prefix="captioning_")
     
     # 3. Grounding metrics
-    if ckpt["grounding_metrics"] is None:
-        logger.info("Computing grounding metrics...")
-        ckpt["grounding_metrics"] = compute_grounding_metrics(pred_objects, gt_objects)
-        save_checkpoint()
-    grounding_metrics = ckpt["grounding_metrics"]
+    logger.info("Computing grounding metrics...")
+    grounding_metrics = compute_grounding_metrics(pred_objects, gt_objects)
     
     # 4. Violation metrics
-    if ckpt["violation_metrics"] is None:
-        logger.info("Computing safety violation metrics...")
-        ckpt["violation_metrics"] = compute_violation_metrics(pred_violations, gt_violations)
-        save_checkpoint()
-    violation_metrics = ckpt["violation_metrics"]
+    logger.info("Computing safety violation metrics...")
+    violation_metrics = compute_violation_metrics(pred_violations, gt_violations)
     
     # 5. Reasoning metrics
-    if ckpt["reasoning_metrics"] is None:
-        logger.info("Computing reasoning metrics (Captioning Suite)...")
-        ckpt["reasoning_metrics"] = batch_score_reasoning(pred_violations, gt_violations, images=images)
-        save_checkpoint()
-    reasoning_metrics = ckpt["reasoning_metrics"]
+    logger.info("Computing reasoning metrics (Captioning Suite)...")
+    reasoning_metrics = batch_score_reasoning(pred_violations, gt_violations, images=images)
     
     # Combine all results
     all_metrics = {}
