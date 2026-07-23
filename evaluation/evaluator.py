@@ -26,7 +26,7 @@ def run_full_evaluation(
     Runs the complete evaluation pipeline.
     raw_predictions: list of raw string responses from the model.
     references: list of ground truth UnifiedOutput dictionaries.
-    images: optional list of PIL Images (for CLIPScore).
+    images: list of PIL Images (for CLIPScore).
     """
     logger.info("Starting full evaluation pipeline...")
     
@@ -145,7 +145,7 @@ def run_full_evaluation(
     # 5. Reasoning metrics
     if ckpt["reasoning_metrics"] is None:
         logger.info("Computing reasoning metrics (Captioning Suite)...")
-        ckpt["reasoning_metrics"] = batch_score_reasoning(pred_violations, gt_violations)
+        ckpt["reasoning_metrics"] = batch_score_reasoning(pred_violations, gt_violations, images=images)
         save_checkpoint()
     reasoning_metrics = ckpt["reasoning_metrics"]
     

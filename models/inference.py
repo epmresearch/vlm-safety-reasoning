@@ -337,4 +337,20 @@ def run_inference_batched(
         torch.cuda.empty_cache()
 
     logger.info(f"Batched inference complete: {len(results)} new samples processed.")
+
+    # Save the standard .json file ONLY if we finish 
+    # the entire loop without a hard crash.
+    if output_path:
+        # Derive the .json path from the .jsonl path
+        json_output_path = output_path.replace(".jsonl", ".json")
+        if not json_output_path.endswith(".json"):
+            json_output_path += ".json" # Fallback just in case output_path had no extension
+            
+        try:
+            with open(json_output_path, "w", encoding="utf-8") as f_json:
+                json.dump(results, f_json, indent=2)
+            logger.info(f"Successfully saved complete JSON to {json_output_path}")
+        except Exception as e:
+            logger.error(f"Failed to save final JSON file: {e}")
+            
     return results
