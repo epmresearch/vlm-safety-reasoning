@@ -33,6 +33,11 @@ def compute_grounding_metrics(predictions: List[Dict[str, Any]], references: Lis
     class_inter_total_greedy: Dict[str, float] = {cls: 0.0 for cls in GROUNDING_CLASSES}
     class_union_total_greedy: Dict[str, float] = {cls: 0.0 for cls in GROUNDING_CLASSES}
 
+    class_inter_exist_mask: Dict[str, float] = {cls: 0.0 for cls in GROUNDING_CLASSES}
+    class_union_exist_mask: Dict[str, float] = {cls: 0.0 for cls in GROUNDING_CLASSES}
+    class_inter_exist_greedy: Dict[str, float] = {cls: 0.0 for cls in GROUNDING_CLASSES}
+    class_union_exist_greedy: Dict[str, float] = {cls: 0.0 for cls in GROUNDING_CLASSES}
+
     class_tn: Dict[str, int] = {cls: 0 for cls in GROUNDING_CLASSES}
     class_fp: Dict[str, int] = {cls: 0 for cls in GROUNDING_CLASSES}
     class_fn: Dict[str, int] = {cls: 0 for cls in GROUNDING_CLASSES}
@@ -84,6 +89,10 @@ def compute_grounding_metrics(predictions: List[Dict[str, Any]], references: Lis
                 class_exist_n[cls] += 1
                 class_ious_exist_tn0_mask[cls].append(mask_iou)
                 class_ious_exist_tn0_greedy[cls].append(greedy_iou_val)
+                class_inter_exist_mask[cls] += mask_result["intersection"]
+                class_union_exist_mask[cls] += mask_result["union"]
+                class_inter_exist_greedy[cls] += greedy_inter
+                class_union_exist_greedy[cls] += greedy_union
 
     metrics = {}
 
@@ -106,6 +115,7 @@ def compute_grounding_metrics(predictions: List[Dict[str, Any]], references: Lis
         metrics[f"grounding_mask_iou_exist_macro_{cls}"] = (
             sum(class_ious_exist_tn0_mask[cls]) / len(class_ious_exist_tn0_mask[cls]) if class_ious_exist_tn0_mask[cls] else 0.0
         )
+        metrics[f"grounding_mask_iou_exist_micro_{cls}"] = class_inter_exist_mask[cls] / class_union_exist_mask[cls] if class_union_exist_mask[cls] > 0 else 0.0
 
         # Greedy Metrics
         metrics[f"grounding_greedy_iou_all_macro_{cls}_tn0"] = (
@@ -120,6 +130,7 @@ def compute_grounding_metrics(predictions: List[Dict[str, Any]], references: Lis
         metrics[f"grounding_greedy_iou_exist_macro_{cls}"] = (
             sum(class_ious_exist_tn0_greedy[cls]) / len(class_ious_exist_tn0_greedy[cls]) if class_ious_exist_tn0_greedy[cls] else 0.0
         )
+        metrics[f"grounding_greedy_iou_exist_micro_{cls}"] = class_inter_exist_greedy[cls] / class_union_exist_greedy[cls] if class_union_exist_greedy[cls] > 0 else 0.0
 
         # Counters
         metrics[f"grounding_true_negatives_count_{cls}"] = class_tn[cls]
@@ -146,5 +157,13 @@ def compute_grounding_metrics(predictions: List[Dict[str, Any]], references: Lis
         (sum(class_ious_exist_tn0_greedy[cls]) / len(class_ious_exist_tn0_greedy[cls])) 
         if class_ious_exist_tn0_greedy[cls] else 0.0 for cls in GROUNDING_CLASSES
     ) / len(GROUNDING_CLASSES)
+
+    total_inter_exist_mask = sum(class_inter_exist_mask.values())
+    total_union_exist_mask = sum(class_union_exist_mask.values())
+    metrics["grounding_mask_iou_exist_micro_mean"] = total_inter_exist_mask / total_union_exist_mask if total_union_exist_mask > 0 else 0.0
+
+    total_inter_exist_greedy = sum(class_inter_exist_greedy.values())
+    total_union_exist_greedy = sum(class_union_exist_greedy.values())
+    metrics["grounding_greedy_iou_exist_micro_mean"] = total_inter_exist_greedy / total_union_exist_greedy if total_union_exist_greedy > 0 else 0.0
 
     return metrics
