@@ -53,7 +53,14 @@ def normalize_boxes(raw_boxes: Optional[Union[list, None]]) -> List[List[float]]
 # ---------------------------------------------------------------------------
 
 def is_valid_box(box: Optional[BBox], min_dim: float = 1e-4) -> bool:
-    """Filters degenerate (zero-area) or out-of-range boxes."""
+    """Filters degenerate (zero-area) or out-of-range boxes.
+
+    NOTE: every call site in this pipeline (metrics_grounding.py,
+    metrics_violations.py, preprocessor.py) only ever passes [0,1]-scale
+    boxes — predictions are always scaled via scale_1000_to_01() *before*
+    reaching this function. There is no remaining path that needs a
+    [0,1000]-scale tolerance, so the bound below is tightened to [0,1].
+    """
     if box is None or not isinstance(box, (list, tuple)) or len(box) != 4:
         return False
         
@@ -63,8 +70,7 @@ def is_valid_box(box: Optional[BBox], min_dim: float = 1e-4) -> bool:
         
     xmin, ymin, xmax, ymax = box
     
-    # We allow up to 1000 + epsilon to accommodate BOTH [0, 1] and [0, 1000] scale boxes
-    if not all(-1e-6 <= c <= 1000 + 1e-6 for c in box):
+    if not all(-1e-6 <= c <= 1.0 + 1e-6 for c in box):
         return False
         
     return (xmax - xmin) > min_dim and (ymax - ymin) > min_dim
@@ -87,8 +93,10 @@ def scale_01_to_1000(box_01: BBox) -> List[int]:
 
 
 def scale_1000_to_01(box_1000: BBox) -> List[float]:
-    """[xmin, ymin, xmax, ymax] in [0,1000] → [0,1] (floats)."""
-    return [c / 1000.0 for c in box_1000]
+    """[xmin, ymin, xmax, ymax] in [0,1000] → [0,1] (floats), clipped to the
+    valid image region so hallucinated out-of-spec model coordinates can't
+    silently corrupt downstream geometry (Shapely union/intersection)."""
+    return [min(1.0, max(0.0, c / 1000.0)) for c in box_1000]
 
 
 # ---------------------------------------------------------------------------

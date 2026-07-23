@@ -139,13 +139,18 @@ def run_dual_pass(raw_predictions: List[str], references: List[Dict[str, Any]], 
         strict_metrics.update(batch_score_reasoning(pred_violations_strict, gt_violations_strict, images=images_strict)) # Added missing images parameter
 
     # 4. Pass 2: Valid
-    logger.info("Running VALID metrics pass...")
-    valid_metrics = {}
-    if len(pred_captions_valid) > 0:
-        valid_metrics.update(compute_all_caption_metrics(pred_captions_valid, gt_captions_valid, images_valid, prefix="captioning_"))
-        valid_metrics.update(compute_grounding_metrics(pred_objects_valid, gt_objects_valid))
-        valid_metrics.update(compute_violation_metrics(pred_violations_valid, gt_violations_valid))
-        valid_metrics.update(batch_score_reasoning(pred_violations_valid, gt_violations_valid, images=images_valid)) # Added missing images parameter
+    if not failures:
+        logger.info("No parse or schema failures detected. VALID pass is identical to STRICT pass. Copying metrics to save time...")
+        import copy
+        valid_metrics = copy.deepcopy(strict_metrics)
+    else:
+        logger.info("Running VALID metrics pass...")
+        valid_metrics = {}
+        if len(pred_captions_valid) > 0:
+            valid_metrics.update(compute_all_caption_metrics(pred_captions_valid, gt_captions_valid, images_valid, prefix="captioning_"))
+            valid_metrics.update(compute_grounding_metrics(pred_objects_valid, gt_objects_valid))
+            valid_metrics.update(compute_violation_metrics(pred_violations_valid, gt_violations_valid))
+            valid_metrics.update(batch_score_reasoning(pred_violations_valid, gt_violations_valid, images=images_valid))
 
     return {
         "metrics": {
