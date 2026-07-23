@@ -26,31 +26,55 @@ def flatten_metrics(metrics: dict, label: str) -> dict:
     if not metrics:
         return {"Model": label}
     flat = {"Model": label}
-    # Caption metrics
-    flat["BERTScore_F1"] = metrics.get("captioning_bertscore_f1")
-    flat["CLIPScore"] = metrics.get("captioning_clipscore")
-    flat["METEOR"] = metrics.get("captioning_meteor")
-    flat["CIDEr-D"] = metrics.get("captioning_ciderd")
     
-    # Grounding metrics (using _tn0 as default per object-level grounding convention)
-    flat["Grounding_IoU_Macro_Mask"] = metrics.get("grounding_mask_iou_all_macro_mean_tn0")
-    flat["Grounding_IoU_Macro_Greedy"] = metrics.get("grounding_greedy_iou_all_macro_mean_tn0")
+    strict = metrics.get("strict_metrics", {})
+    valid = metrics.get("valid_metrics", {})
+    struct = metrics.get("structural_metrics", {})
+
+    # Structural metrics
+    flat["Valid_JSON_%"] = (struct.get("structural_json_validity_rate", 0.0)) * 100
+    flat["Schema_Adherence_%"] = (struct.get("structural_schema_adherence_rate", 0.0)) * 100
+
+    # Caption metrics
+    flat["Strict_BERTScore_F1"] = strict.get("captioning_bertscore_f1")
+    flat["Valid_BERTScore_F1"] = valid.get("captioning_bertscore_f1")
+    flat["Strict_CLIPScore"] = strict.get("captioning_clipscore")
+    flat["Valid_CLIPScore"] = valid.get("captioning_clipscore")
+    flat["Strict_METEOR"] = strict.get("captioning_meteor")
+    flat["Valid_METEOR"] = valid.get("captioning_meteor")
+    flat["Strict_CIDEr-D"] = strict.get("captioning_ciderd")
+    flat["Valid_CIDEr-D"] = valid.get("captioning_ciderd")
+    
+    # Grounding metrics
+    flat["Strict_Grounding_IoU_Macro_Mask"] = strict.get("grounding_mask_iou_all_macro_mean_tn0")
+    flat["Valid_Grounding_IoU_Macro_Mask"] = valid.get("grounding_mask_iou_all_macro_mean_tn0")
+    flat["Strict_Grounding_IoU_Macro_Greedy"] = strict.get("grounding_greedy_iou_all_macro_mean_tn0")
+    flat["Valid_Grounding_IoU_Macro_Greedy"] = valid.get("grounding_greedy_iou_all_macro_mean_tn0")
     
     # Violation metrics
-    flat["Violation_F1_Micro"] = metrics.get("violation_identification_f1_micro")
-    flat["Violation_Precision_Micro"] = metrics.get("violation_identification_precision_micro")
-    flat["Violation_Recall_Micro"] = metrics.get("violation_identification_recall_micro")
-    flat["Violation_F1_Macro"] = metrics.get("violation_identification_f1_macro")
-    flat["Violation_Precision_Macro"] = metrics.get("violation_identification_precision_macro")
-    flat["Violation_Recall_Macro"] = metrics.get("violation_identification_recall_macro")
-    flat["Violation_Grounding_IoU_Mask"] = metrics.get("violation_grounding_mask_iou_macro_tn0")
-    flat["Violation_Grounding_IoU_Greedy"] = metrics.get("violation_grounding_greedy_iou_macro_tn0")
-    # Structural metrics
-    flat["Valid_JSON_%"] = (metrics.get("structural_json_validity_rate", 0.0)) * 100
-    flat["Schema_Adherence_%"] = (metrics.get("structural_schema_adherence_rate", 0.0)) * 100
+    flat["Strict_Violation_F1_Micro"] = strict.get("violation_identification_f1_micro")
+    flat["Valid_Violation_F1_Micro"] = valid.get("violation_identification_f1_micro")
+    flat["Strict_Violation_Precision_Micro"] = strict.get("violation_identification_precision_micro")
+    flat["Valid_Violation_Precision_Micro"] = valid.get("violation_identification_precision_micro")
+    flat["Strict_Violation_Recall_Micro"] = strict.get("violation_identification_recall_micro")
+    flat["Valid_Violation_Recall_Micro"] = valid.get("violation_identification_recall_micro")
+    flat["Strict_Violation_F1_Macro"] = strict.get("violation_identification_f1_macro")
+    flat["Valid_Violation_F1_Macro"] = valid.get("violation_identification_f1_macro")
+    flat["Strict_Violation_Precision_Macro"] = strict.get("violation_identification_precision_macro")
+    flat["Valid_Violation_Precision_Macro"] = valid.get("violation_identification_precision_macro")
+    flat["Strict_Violation_Recall_Macro"] = strict.get("violation_identification_recall_macro")
+    flat["Valid_Violation_Recall_Macro"] = valid.get("violation_identification_recall_macro")
+    flat["Strict_Violation_Grounding_IoU_Mask"] = strict.get("violation_grounding_mask_iou_macro_tn0")
+    flat["Valid_Violation_Grounding_IoU_Mask"] = valid.get("violation_grounding_mask_iou_macro_tn0")
+    flat["Strict_Violation_Grounding_IoU_Greedy"] = strict.get("violation_grounding_greedy_iou_macro_tn0")
+    flat["Valid_Violation_Grounding_IoU_Greedy"] = valid.get("violation_grounding_greedy_iou_macro_tn0")
+    
     # Reasoning metrics
-    flat["Reasoning_BERTScore_F1_Macro"] = metrics.get("reasoning_text_similarity_bertscore_f1_macro")
-    flat["Reasoning_BERTScore_F1_Micro"] = metrics.get("reasoning_text_similarity_bertscore_f1_micro")
+    flat["Strict_Reasoning_BERTScore_F1_Macro"] = strict.get("reasoning_text_similarity_bertscore_f1_macro")
+    flat["Valid_Reasoning_BERTScore_F1_Macro"] = valid.get("reasoning_text_similarity_bertscore_f1_macro")
+    flat["Strict_Reasoning_BERTScore_F1_Micro"] = strict.get("reasoning_text_similarity_bertscore_f1_micro")
+    flat["Valid_Reasoning_BERTScore_F1_Micro"] = valid.get("reasoning_text_similarity_bertscore_f1_micro")
+    
     return flat
 
 def main():
