@@ -275,7 +275,6 @@ def sanitize_json_syntax(text: str, tracker: Optional[ChangeTracker] = None) -> 
 
     return result
 
-
 def attempt_truncation_repair(snippet: str) -> Optional[str]:
     """Best-effort repair for a truncated JSON object caused by hitting
     max_new_tokens mid-generation: closes any unterminated string and any
@@ -336,6 +335,8 @@ def attempt_truncation_repair(snippet: str) -> Optional[str]:
                     stack.pop()
 
     s = re.sub(r"[,:]\s*$", "", s.rstrip())
+    s = re.sub(r',\s*"(?:[^"\\]|\\.)*"\s*:?\s*$', "", s)
+    s = re.sub(r"[,:]\s*$", "", s.rstrip())
 
     closers = {"{": "}", "[": "]"}
     for opener in reversed(stack):
@@ -343,6 +344,40 @@ def attempt_truncation_repair(snippet: str) -> Optional[str]:
 
     return s if s.strip() else None
 
+
+_UNCLOSED_NUMERIC_STRING_PATTERN = re.compile(
+    r'"(\d+(?:\.\d+)?(?:\s*,\s*\d+(?:\.\d+)?){1,})[ \t]*\r?\n(\s*[\]},])'
+)
+
+
+def repair_unclosed_numeric_box_strings(
+    text: str, tracker: Optional["ChangeTracker"] = None
+) -> str:
+    """Repairs a specific generation bug where the model opens a string for
+    a bounding-box coordinate list (e.g. "798,216,995,524) but forgets the
+    closing quote before the line ends. Because the string boundary is left
+    unbalanced, a string-aware scanner would otherwise swallow every
+    subsequent character -- including real structural JSON like ], }, and
+    the next key's opening quote -- as literal string content, corrupting
+    everything after it.
+
+    Detection is intentionally narrow and safe: it only fires when the
+    "unterminated" run of text between the opening quote and the next
+    newline+structural-character is PURELY digits/commas/whitespace (i.e.
+    it looks like box coordinates, never natural-language caption/reason
+    text, which always contains letters). Only a closing quote character is
+    inserted at the point the model evidently meant to close it -- no digit
+    or coordinate value is ever touched.
+    """
+    def _replace(m):
+        if tracker:
+            tracker.log(
+                "box_string_missing_closing_quote_repaired",
+                detail=f"Inserted missing closing quote after numeric run '{m.group(1)}'.",
+            )
+        return f'"{m.group(1)}"\n{m.group(2)}'
+
+    return _UNCLOSED_NUMERIC_STRING_PATTERN.sub(_replace, text)
 
 def _unwrap_if_list(result: Any) -> Any:
     """Some models wrap the object in an array: [{...}]. Unwrap the first
@@ -377,13 +412,28 @@ def robust_parse(raw_str: str, tracker: Optional[ChangeTracker] = None) -> Optio
         except json.JSONDecodeError:
             pass
 
-        # Attempt 2: sanitize syntax (silent trial), then parse
-        sanitized = sanitize_json_syntax(candidate, tracker=None)
+        # Attempt 1.5: repair the missing-closing-quote-on-a-numeric-box-
+        # string bug (silent trial first), which otherwise corrupts every
+        # character after it.
+        quote_repaired = repair_unclosed_numeric_box_strings(candidate, tracker=None)
+        try:
+            result = _unwrap_if_list(json.loads(quote_repaired))
+            if isinstance(result, dict):
+                if tracker:
+                    repair_unclosed_numeric_box_strings(candidate, tracker=tracker)  # log real fix
+                return result
+        except json.JSONDecodeError:
+            pass
+
+        # Attempt 2: sanitize syntax (silent trial), then parse. Runs on the
+        # quote-repaired candidate so both fixes can compose.
+        sanitized = sanitize_json_syntax(quote_repaired, tracker=None)
         try:
             result = _unwrap_if_list(json.loads(sanitized))
             if isinstance(result, dict):
                 if tracker:
-                    sanitize_json_syntax(candidate, tracker=tracker)  # log the real fixes
+                    repair_unclosed_numeric_box_strings(candidate, tracker=tracker)
+                    sanitize_json_syntax(quote_repaired, tracker=tracker)  # log the real fixes
                 return result
         except json.JSONDecodeError:
             pass
@@ -395,7 +445,8 @@ def robust_parse(raw_str: str, tracker: Optional[ChangeTracker] = None) -> Optio
                 result = _unwrap_if_list(json.loads(repaired))
                 if isinstance(result, dict):
                     if tracker:
-                        sanitize_json_syntax(candidate, tracker=tracker)
+                        repair_unclosed_numeric_box_strings(candidate, tracker=tracker)
+                        sanitize_json_syntax(quote_repaired, tracker=tracker)
                         tracker.log(
                             "json_truncation_repaired",
                             detail="Unterminated string/brackets closed; "
@@ -966,6 +1017,42 @@ def _check_duplicate_boxes(
             _scan(v.get("bounding_box") or [], f"rule_{i}_violation.bounding_box")
 
 
+# =============================================================================
+# SECTION 6.5 — STRICT GATE (must stay byte-for-byte identical in behavior
+# to evaluation/output_parser.py::strip_fences / parse_model_output)
+# =============================================================================
+
+def _strict_strip_fences(text: str) -> str:
+    """EXACT mirror of evaluation/output_parser.py::strip_fences. Duplicated
+    literally (not imported) so this script stays standalone and doesn't
+    require the parent package on PYTHONPATH. If output_parser.py's
+    strip_fences ever changes, update this to match."""
+    match = re.search(r"```(?:json)?(.*?)```", text, flags=re.DOTALL | re.IGNORECASE)
+    if match:
+        return match.group(1).strip()
+    return text.strip()
+
+
+def _strict_parse_model_output(raw_str: str) -> Optional[Dict[str, Any]]:
+    """EXACT mirror of evaluation/output_parser.py::parse_model_output.
+
+    Defines the SAME strict pass/fail gate used by the eval pipeline and the
+    manual notebook: fence-strip, then a single json.loads() attempt -- no
+    candidate extraction, no syntax sanitization, no truncation repair, no
+    ast.literal_eval fallback. This is intentionally the ONLY thing that
+    determines 'valid_raw' in repair_and_validate() below, so this script's
+    reported valid/invalid counts line up exactly with what
+    run_evaluation.py / the notebook gates would report.
+    """
+    if not raw_str:
+        return None
+    text = _strict_strip_fences(raw_str)
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        return None
+
+
 def repair_and_validate(raw_str: str, duplicate_box_threshold: int = 3) -> Dict[str, Any]:
     """Full pipeline for one record's raw model output.
 
@@ -980,41 +1067,63 @@ def repair_and_validate(raw_str: str, duplicate_box_threshold: int = 3) -> Dict[
           "warnings": List[Dict[str, str]],  # diagnostic-only observations
         }
 
-    - "valid_raw"      : parsed cleanly AND matched schema with no fixing needed
-    - "fixed_valid"     : needed structural repair, but now matches schema
-    - "invalid_json"    : could not extract/parse any JSON object at all
-    - "invalid_schema"  : parsed fine, repaired as much as safely possible,
-                          still doesn't match schema (genuinely missing/
-                          ambiguous content — NOT fabricated)
+    - "valid_raw"      : passed the STRICT gate (identical to
+                          output_parser.py) with zero repair needed.
+    - "fixed_valid"     : failed the strict gate, but the repair pipeline
+                          (extraction/syntax/truncation/structural fixes)
+                          recovered a schema-valid result.
+    - "invalid_json"    : failed the strict gate AND the repair pipeline
+                          could not extract/parse any JSON object at all.
+    - "invalid_schema"  : parsed fine (via strict gate or repair), repaired
+                          as much as safely possible, still doesn't match
+                          schema (genuinely missing/ambiguous content --
+                          NOT fabricated).
     """
     tracker = ChangeTracker()
 
-    parsed = robust_parse(raw_str, tracker=tracker)
+    # --- STRICT GATE: identical to evaluation/output_parser.py. This
+    # decides "needs no repair at all" and keeps this script's counts in
+    # lockstep with the notebook / eval-pipeline gate. -------------------
+    strict_parsed = _strict_parse_model_output(raw_str)
+    if strict_parsed is not None:
+        try:
+            validated_raw = UnifiedOutput(**strict_parsed)
+            _check_duplicate_boxes(strict_parsed, tracker, threshold=duplicate_box_threshold)
+            return {
+                "status": "valid_raw",
+                "original_parsed": strict_parsed,
+                "fixed_parsed": strict_parsed,
+                "validated": validated_raw,
+                "error": None,
+                "changes": tracker.changes,
+                "warnings": tracker.warnings,
+            }
+        except Exception:
+            pass  # valid JSON, but schema mismatch -> fall through to repair
+
+    # --- REPAIR PIPELINE: only reached if the strict gate failed, i.e.
+    # this is exactly the set of records your notebook would count as
+    # "invalid JSON" or "invalid schema". Everything below is an attempt
+    # to recover them; whatever's still unrecoverable after this is the
+    # script's final invalid_json / invalid_schema count. ----------------
+    if strict_parsed is not None:
+        # JSON was already fine under the strict gate; only the schema
+        # failed, so skip re-extraction and go straight to structural fixes.
+        parsed = strict_parsed
+    else:
+        parsed = robust_parse(raw_str, tracker=tracker)
+
     if parsed is None:
         return {
             "status": "invalid_json",
             "original_parsed": None,
             "fixed_parsed": None,
             "validated": None,
-            "error": "Could not extract/parse any JSON object from raw output.",
+            "error": "Could not extract/parse any JSON object from raw output, "
+                     "even after attempting extraction/syntax/truncation repair.",
             "changes": tracker.changes,
             "warnings": tracker.warnings,
         }
-
-    try:
-        validated_raw = UnifiedOutput(**parsed)
-        _check_duplicate_boxes(parsed, tracker, threshold=duplicate_box_threshold)
-        return {
-            "status": "valid_raw",
-            "original_parsed": parsed,
-            "fixed_parsed": parsed,
-            "validated": validated_raw,
-            "error": None,
-            "changes": tracker.changes,
-            "warnings": tracker.warnings,
-        }
-    except Exception:
-        pass
 
     fixed = fix_prediction_structure(parsed, tracker=tracker)
     _check_duplicate_boxes(fixed, tracker, threshold=duplicate_box_threshold)
