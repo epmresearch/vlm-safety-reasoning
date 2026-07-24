@@ -6,6 +6,58 @@ CIDEr-D, METEOR, and SPICE use the OFFICIAL pycocoevalcap toolkit
 Requires: `apt-get install -y default-jre` in the Colab session before use.
 Only needed for evaluation notebooks — not for training/inference notebooks.
 """
+
+import re
+import subprocess
+from contextlib import contextmanager
+
+_SPICE_CACHE_NOISE_PATTERN = re.compile(
+    r"Could not cache item to.*|Caption may be too long", re.IGNORECASE
+)
+
+
+@contextmanager
+def _suppress_spice_cache_noise():
+    """Filters SPICE's jar-internal 'Could not cache item ... Caption may be
+    too long' lines out of the subprocess output.
+
+    Root cause: SPICE's bundled jar (spice-1.0.jar) uses the raw caption text
+    as the cache filename inside its `cache/` dir (instead of hashing it), and
+    Linux filesystems cap filenames at 255 bytes. Our captions routinely
+    exceed that, so every such caption prints this two-line warning. It only
+    means that ONE caption's cache entry was skipped -- the SPICE score
+    itself is still computed correctly (see Spice.compute_score in
+    pycocoevalcap/spice/spice.py -- the cache dir is passed via '-cache' but
+    failure to write there doesn't fail the job or corrupt results). This is
+    purely cosmetic log noise, unrelated to evaluation/spice_cache.py (which
+    only caches the CoreNLP model files, not this per-caption cache).
+
+    Everything else printed by the jar (including real errors) still passes
+    through, and a non-zero exit code still raises CalledProcessError exactly
+    like the un-patched subprocess.check_call would.
+    """
+    original_check_call = subprocess.check_call
+
+    def patched_check_call(cmd, *args, **kwargs):
+        kwargs["stdout"] = subprocess.PIPE
+        kwargs["stderr"] = subprocess.STDOUT
+        kwargs["text"] = True
+        proc = subprocess.Popen(cmd, *args, **kwargs)
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            if not _SPICE_CACHE_NOISE_PATTERN.search(line):
+                print(line, end="")
+        returncode = proc.wait()
+        if returncode != 0:
+            raise subprocess.CalledProcessError(returncode, cmd)
+        return returncode
+
+    subprocess.check_call = patched_check_call
+    try:
+        yield
+    finally:
+        subprocess.check_call = original_check_call
+
 from typing import Dict, List, Any
 import logging
 
@@ -152,7 +204,8 @@ def compute_spice(predictions: List[str], references: List[str]) -> Dict[str, fl
 
         res, gts = _ptb_tokenize_pairs(predictions, references)
         scorer = Spice()
-        score, scores = scorer.compute_score(gts, res)
+        with _suppress_spice_cache_noise():
+            score, scores = scorer.compute_score(gts, res)
 
         result = {"spice": float(score)}
 
