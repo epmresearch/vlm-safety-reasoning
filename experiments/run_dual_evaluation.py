@@ -171,6 +171,8 @@ def main():
     parser.add_argument("--output_dir", default=None)
     parser.add_argument("--max_samples", type=int, default=None)
     parser.add_argument("--skip_java_switch", action="store_true")
+    parser.add_argument("--wandb_project", type=str, default=None, help="Weights & Biases project name")
+    parser.add_argument("--wandb_run_name", type=str, default=None, help="Weights & Biases run name")
     args = parser.parse_args()
 
     predictions_path = Path(args.predictions_path)
@@ -244,6 +246,44 @@ def main():
         json.dump(valid_preds, f, indent=2)
 
     save_spice_cache(SPICE_CACHE_DIR)
+    
+    # --- W&B Logging ---
+    if args.wandb_project:
+        try:
+            import wandb
+            logger.info("Initializing W&B logging...")
+            wandb.init(
+                project=args.wandb_project,
+                name=args.wandb_run_name,
+                config=run_config
+            )
+            
+            def flatten_dict(d: dict, parent_key: str = '', sep: str = '/') -> dict:
+                items = []
+                for k, v in d.items():
+                    new_key = f"{parent_key}{sep}{k}" if parent_key else k
+                    if isinstance(v, dict):
+                        items.extend(flatten_dict(v, new_key, sep=sep).items())
+                    else:
+                        items.append((new_key, v))
+                return dict(items)
+                
+            flat_metrics = flatten_dict(eval_results["metrics"])
+            flat_metrics["failures/json_parse"] = len(parse_failures)
+            flat_metrics["failures/schema_validation"] = len(schema_failures)
+            
+            wandb.log(flat_metrics)
+            
+            artifact = wandb.Artifact(name=f"eval_results_{output_dir.name}", type="evaluation")
+            artifact.add_file(str(metrics_path))
+            artifact.add_file(str(parse_failures_path))
+            artifact.add_file(str(schema_failures_path))
+            wandb.log_artifact(artifact)
+            
+            wandb.finish()
+        except ImportError:
+            logger.error("wandb is not installed. Please install it (pip install wandb) to use W&B logging.")
+
     logger.info("Dual-pass evaluation complete.")
 
 
