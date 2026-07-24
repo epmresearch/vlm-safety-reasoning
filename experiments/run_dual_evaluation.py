@@ -63,7 +63,7 @@ def ensure_java8_active():
         logger.warning(f"Attempted Java 8 switch but verification failed: {verify}")
 
 
-def run_dual_pass(raw_predictions: List[str], references: List[Dict[str, Any]], images: List[Any]):
+def run_dual_pass(raw_predictions: List[str], references: List[Dict[str, Any]], images: List[Any], skip_spice: bool = False, spice_only: bool = False):
     logger.info("Parsing and validating outputs...")
     
     parsed_preds = []
@@ -88,7 +88,9 @@ def run_dual_pass(raw_predictions: List[str], references: List[Dict[str, Any]], 
         parsed_preds.append(parsed)
 
     # Calculate Structural Metrics (FIXED SIGNATURE)
-    structural_metrics = compute_structural_metrics(raw_predictions)
+    structural_metrics = {}
+    if not spice_only:
+        structural_metrics = compute_structural_metrics(raw_predictions)
     
     # 2. Split the Lists
     # Strict
@@ -133,10 +135,11 @@ def run_dual_pass(raw_predictions: List[str], references: List[Dict[str, Any]], 
     logger.info("Running STRICT metrics pass...")
     strict_metrics = {}
     if len(pred_captions_strict) > 0:
-        strict_metrics.update(compute_all_caption_metrics(pred_captions_strict, gt_captions_strict, images_strict, prefix="captioning_"))
-        strict_metrics.update(compute_grounding_metrics(pred_objects_strict, gt_objects_strict))
-        strict_metrics.update(compute_violation_metrics(pred_violations_strict, gt_violations_strict))
-        strict_metrics.update(batch_score_reasoning(pred_violations_strict, gt_violations_strict, images=images_strict)) # Added missing images parameter
+        strict_metrics.update(compute_all_caption_metrics(pred_captions_strict, gt_captions_strict, images_strict, include_spice=not skip_spice, spice_only=spice_only, prefix="captioning_"))
+        if not spice_only:
+            strict_metrics.update(compute_grounding_metrics(pred_objects_strict, gt_objects_strict))
+            strict_metrics.update(compute_violation_metrics(pred_violations_strict, gt_violations_strict))
+            strict_metrics.update(batch_score_reasoning(pred_violations_strict, gt_violations_strict, images=images_strict)) # Added missing images parameter
 
     # 4. Pass 2: Valid
     if not failures:
@@ -147,10 +150,11 @@ def run_dual_pass(raw_predictions: List[str], references: List[Dict[str, Any]], 
         logger.info("Running VALID metrics pass...")
         valid_metrics = {}
         if len(pred_captions_valid) > 0:
-            valid_metrics.update(compute_all_caption_metrics(pred_captions_valid, gt_captions_valid, images_valid, prefix="captioning_"))
-            valid_metrics.update(compute_grounding_metrics(pred_objects_valid, gt_objects_valid))
-            valid_metrics.update(compute_violation_metrics(pred_violations_valid, gt_violations_valid))
-            valid_metrics.update(batch_score_reasoning(pred_violations_valid, gt_violations_valid, images=images_valid))
+            valid_metrics.update(compute_all_caption_metrics(pred_captions_valid, gt_captions_valid, images_valid, include_spice=not skip_spice, spice_only=spice_only, prefix="captioning_"))
+            if not spice_only:
+                valid_metrics.update(compute_grounding_metrics(pred_objects_valid, gt_objects_valid))
+                valid_metrics.update(compute_violation_metrics(pred_violations_valid, gt_violations_valid))
+                valid_metrics.update(batch_score_reasoning(pred_violations_valid, gt_violations_valid, images=images_valid))
 
     return {
         "metrics": {
@@ -171,6 +175,8 @@ def main():
     parser.add_argument("--output_dir", default=None)
     parser.add_argument("--max_samples", type=int, default=None)
     parser.add_argument("--skip_java_switch", action="store_true")
+    parser.add_argument("--skip_spice", action="store_true")
+    parser.add_argument("--spice_only", action="store_true")
     parser.add_argument("--wandb_project", type=str, default=None, help="Weights & Biases project name")
     parser.add_argument("--wandb_run_name", type=str, default=None, help="Weights & Biases run name")
     args = parser.parse_args()
@@ -220,32 +226,51 @@ def main():
     images = [image_map.get(str(r.get("image_id"))) for r in records]
 
     # --- Run Dual Evaluation ---
-    eval_results = run_dual_pass(raw_predictions, references, images)
+    eval_results = run_dual_pass(raw_predictions, references, images, skip_spice=args.skip_spice, spice_only=args.spice_only)
 
     # --- Save Nested Metrics ---
     metrics_path = output_dir / "metrics.json"
+
+    if args.spice_only:
+        if metrics_path.exists():
+            with open(metrics_path, "r", encoding="utf-8") as f:
+                existing_metrics = json.load(f)
+            logger.info("Loaded existing metrics.json. Injecting SPICE scores...")
+            # Recursively update metrics dict
+            if "structural_metrics" in eval_results["metrics"]:
+                existing_metrics["structural_metrics"].update(eval_results["metrics"]["structural_metrics"])
+            if "strict_metrics" in eval_results["metrics"]:
+                existing_metrics["strict_metrics"].update(eval_results["metrics"]["strict_metrics"])
+            if "valid_metrics" in eval_results["metrics"]:
+                existing_metrics["valid_metrics"].update(eval_results["metrics"]["valid_metrics"])
+            eval_results["metrics"] = existing_metrics
+        else:
+            logger.warning("spice_only is true, but metrics.json not found! Saving only SPICE metrics.")
+
     with open(metrics_path, "w", encoding="utf-8") as f:
         json.dump(eval_results["metrics"], f, indent=2, ensure_ascii=False)
     logger.info(f"Nested Metrics saved to: {metrics_path}")
 
     # --- Save Failures ---
-    parse_failures_path = output_dir / "json_parse_failures.json"
-    schema_failures_path = output_dir / "schema_validation_failures.json"
+    if not args.spice_only:
+        parse_failures_path = output_dir / "json_parse_failures.json"
+        schema_failures_path = output_dir / "schema_validation_failures.json"
+        
+        parse_failures = [f for f in eval_results.get("failures", []) if f.get("error_type") == "json_parse_error"]
+        schema_failures = [f for f in eval_results.get("failures", []) if f.get("error_type") == "schema_validation_error"]
+        
+        with open(parse_failures_path, "w", encoding="utf-8") as f:
+            json.dump(parse_failures, f, indent=2)
+        with open(schema_failures_path, "w", encoding="utf-8") as f:
+            json.dump(schema_failures, f, indent=2)
     
-    parse_failures = [f for f in eval_results.get("failures", []) if f.get("error_type") == "json_parse_error"]
-    schema_failures = [f for f in eval_results.get("failures", []) if f.get("error_type") == "schema_validation_error"]
-    
-    with open(parse_failures_path, "w", encoding="utf-8") as f:
-        json.dump(parse_failures, f, indent=2)
-    with open(schema_failures_path, "w", encoding="utf-8") as f:
-        json.dump(schema_failures, f, indent=2)
+        parsed_path = output_dir / "parsed_predictions.json"
+        with open(parsed_path, "w", encoding="utf-8") as f:
+            valid_preds = [p for p in eval_results.get("parsed_predictions", []) if p is not None]
+            json.dump(valid_preds, f, indent=2)
 
-    parsed_path = output_dir / "parsed_predictions.json"
-    with open(parsed_path, "w", encoding="utf-8") as f:
-        valid_preds = [p for p in eval_results.get("parsed_predictions", []) if p is not None]
-        json.dump(valid_preds, f, indent=2)
-
-    save_spice_cache(SPICE_CACHE_DIR)
+    if not args.skip_spice:
+        save_spice_cache(SPICE_CACHE_DIR)
     
     # --- W&B Logging ---
     if args.wandb_project:
@@ -269,8 +294,14 @@ def main():
                 return dict(items)
                 
             flat_metrics = flatten_dict(eval_results["metrics"])
-            flat_metrics["failures/json_parse"] = len(parse_failures)
-            flat_metrics["failures/schema_validation"] = len(schema_failures)
+            
+            if not args.spice_only:
+                # We only have these lists if we didn't skip parsing stuff, but wait, failures are collected during parsing.
+                # In run_dual_pass, parse failures are collected regardless of spice_only.
+                parse_failures = [f for f in eval_results.get("failures", []) if f.get("error_type") == "json_parse_error"]
+                schema_failures = [f for f in eval_results.get("failures", []) if f.get("error_type") == "schema_validation_error"]
+                flat_metrics["failures/json_parse"] = len(parse_failures)
+                flat_metrics["failures/schema_validation"] = len(schema_failures)
             
             wandb.log(flat_metrics)
             wandb.finish()

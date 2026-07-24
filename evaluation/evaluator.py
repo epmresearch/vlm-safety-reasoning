@@ -18,6 +18,8 @@ def run_full_evaluation(
     raw_predictions: List[str],
     references: List[Dict[str, Any]],
     images: List[Any] = None,
+    skip_spice: bool = False,
+    spice_only: bool = False,
 ) -> Dict[str, Any]:
     """
     Runs the complete evaluation pipeline.
@@ -50,7 +52,9 @@ def run_full_evaluation(
         )
     
     # 1. Structural metrics & Parsing
-    structural_metrics = compute_structural_metrics(raw_predictions)
+    structural_metrics = {}
+    if not spice_only:
+        structural_metrics = compute_structural_metrics(raw_predictions)
         
     # Parse predictions and capture failures
     parsed_preds = []
@@ -95,19 +99,27 @@ def run_full_evaluation(
     
     # 2. Captioning metrics
     logger.info("Computing captioning metrics...")
-    caption_metrics = compute_all_caption_metrics(pred_captions, gt_captions, images=images, prefix="captioning_")
+    caption_metrics = compute_all_caption_metrics(
+        pred_captions, gt_captions, images=images, 
+        include_spice=not skip_spice, spice_only=spice_only, prefix="captioning_"
+    )
     
-    # 3. Grounding metrics
-    logger.info("Computing grounding metrics...")
-    grounding_metrics = compute_grounding_metrics(pred_objects, gt_objects)
+    grounding_metrics = {}
+    violation_metrics = {}
+    reasoning_metrics = {}
     
-    # 4. Violation metrics
-    logger.info("Computing safety violation metrics...")
-    violation_metrics = compute_violation_metrics(pred_violations, gt_violations)
-    
-    # 5. Reasoning metrics
-    logger.info("Computing reasoning metrics (Captioning Suite)...")
-    reasoning_metrics = batch_score_reasoning(pred_violations, gt_violations, images=images)
+    if not spice_only:
+        # 3. Grounding metrics
+        logger.info("Computing grounding metrics...")
+        grounding_metrics = compute_grounding_metrics(pred_objects, gt_objects)
+        
+        # 4. Violation metrics
+        logger.info("Computing safety violation metrics...")
+        violation_metrics = compute_violation_metrics(pred_violations, gt_violations)
+        
+        # 5. Reasoning metrics
+        logger.info("Computing reasoning metrics (Captioning Suite)...")
+        reasoning_metrics = batch_score_reasoning(pred_violations, gt_violations, images=images)
     
     # Combine all results
     all_metrics = {}

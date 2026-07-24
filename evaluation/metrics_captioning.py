@@ -344,6 +344,7 @@ def compute_all_caption_metrics(
     references: List[str],
     images: List[Any],
     include_spice: bool = True,
+    spice_only: bool = False,
     prefix: str = "",
 ) -> Dict[str, float]:
     """Computes all captioning metrics: BERTScore, METEOR, CIDEr-D, SPICE,
@@ -373,15 +374,16 @@ def compute_all_caption_metrics(
     clean_refs = [r if r and str(r).strip() else "empty" for r in references]
 
     results = {}
-    results.update(compute_bertscore(clean_preds, clean_refs))
-    results.update(compute_meteor(clean_preds, clean_refs))
-    results.update(compute_cider(clean_preds, clean_refs))
+    
+    if not spice_only:
+        results.update(compute_bertscore(clean_preds, clean_refs))
+        results.update(compute_meteor(clean_preds, clean_refs))
+        results.update(compute_cider(clean_preds, clean_refs))
+        results.update(compute_caption_length_stats(clean_preds))
+        results.update(compute_clipscore(clean_preds, images))
+
     if include_spice:
         results.update(compute_spice(clean_preds, clean_refs))
-
-    results.update(compute_caption_length_stats(clean_preds))
-
-    results.update(compute_clipscore(clean_preds, images))
 
     if prefix:
         results = {f"{prefix}{k}": v for k, v in results.items()}

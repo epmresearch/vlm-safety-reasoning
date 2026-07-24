@@ -97,6 +97,8 @@ def main():
                          help="Only evaluate the first N records in the predictions file.")
     parser.add_argument("--skip_java_switch", action="store_true",
                          help="Don't attempt to auto-switch to Java 8 for SPICE.")
+    parser.add_argument("--skip_spice", action="store_true", help="Skip SPICE metric (fast GPU run).")
+    parser.add_argument("--spice_only", action="store_true", help="Only run SPICE metric (load existing metrics.json and inject SPICE).")
     parser.add_argument("--wandb_project", type=str, default=None,
                          help="Weights & Biases project name")
     parser.add_argument("--wandb_run_name", type=str, default=None,
@@ -176,73 +178,89 @@ def main():
     # --- Run evaluation ---
     logger.info("Running full evaluation pipeline...")
     eval_results = run_full_evaluation(
-        raw_predictions, references, images=images
+        raw_predictions, references, images=images,
+        skip_spice=args.skip_spice, spice_only=args.spice_only
     )
 
-    # --- Save outputs ---
     metrics_path = output_dir / "metrics.json"
+
+    # If spice_only, merge with existing metrics
+    if args.spice_only:
+        if metrics_path.exists():
+            with open(metrics_path, "r", encoding="utf-8") as f:
+                existing_metrics = json.load(f)
+            logger.info("Loaded existing metrics.json. Injecting SPICE scores...")
+            existing_metrics.update(eval_results["metrics"])
+            eval_results["metrics"] = existing_metrics
+        else:
+            logger.warning("spice_only is true, but metrics.json not found! Saving only SPICE metrics.")
+
+    # --- Save outputs ---
     with open(metrics_path, "w", encoding="utf-8") as f:
         json.dump(eval_results["metrics"], f, indent=2, ensure_ascii=False)
     logger.info(f"Metrics saved to: {metrics_path}")
 
-    # Define separate paths for each error type (changed extensions to .json)
-    parse_failures_path = output_dir / "json_parse_failures.json"
-    schema_failures_path = output_dir / "schema_validation_failures.json"
-    
-    # Separate the failures into two lists in memory
-    parse_failures = [
-        f for f in eval_results.get("failures", []) 
-        if f.get("error_type") == "json_parse_error"
-    ]
-    schema_failures = [
-        f for f in eval_results.get("failures", []) 
-        if f.get("error_type") == "schema_validation_error"
-    ]
-    
-    parse_count = len(parse_failures)
-    schema_count = len(schema_failures)
-    
-    # Write the lists to standard JSON files
-    with open(parse_failures_path, "w", encoding="utf-8") as f_parse:
-        json.dump(parse_failures, f_parse, indent=2)
+    # If spice_only, we don't need to re-save failures and parsed_predictions
+    if not args.spice_only:
+        # Define separate paths for each error type (changed extensions to .json)
+        parse_failures_path = output_dir / "json_parse_failures.json"
+        schema_failures_path = output_dir / "schema_validation_failures.json"
         
-    with open(schema_failures_path, "w", encoding="utf-8") as f_schema:
-        json.dump(schema_failures, f_schema, indent=2)
-                
-    # Log the separate counts
-    logger.info(f"JSON Parse failures logged to: {parse_failures_path} ({parse_count} failures)")
-    logger.info(f"Schema Validation failures logged to: {schema_failures_path} ({schema_count} failures)")
-
-    # 2. Save parsed predictions as a standard JSON array
-    parsed_path = output_dir / "parsed_predictions.json"
-    with open(parsed_path, "w", encoding="utf-8") as f:
-        # Filter out the None values into a new list first
-        valid_preds = [
-            pred for pred in eval_results.get("parsed_predictions", []) 
-            if pred is not None
+        # Separate the failures into two lists in memory
+        parse_failures = [
+            f for f in eval_results.get("failures", []) 
+            if f.get("error_type") == "json_parse_error"
         ]
-        # Dump the filtered list
-        json.dump(valid_preds, f, indent=2)
+        schema_failures = [
+            f for f in eval_results.get("failures", []) 
+            if f.get("error_type") == "schema_validation_error"
+        ]
         
-    logger.info(f"Parsed predictions saved to: {parsed_path}")
-
-    # Combined record (raw + parsed + ground truth) for convenience when reviewing results.
-    combined_log = []
-    for i, r in enumerate(records):
-        combined_log.append({
-            "image_id": r["image_id"],
-            "raw_output": r["raw_output"],
-            "latency_seconds": r.get("latency_seconds", 0.0),
-            "parsed_output": eval_results["parsed_predictions"][i],
-            "ground_truth": references[i],
-        })
-    combined_path = output_dir / "predictions_with_eval.json"
-    with open(combined_path, "w", encoding="utf-8") as f:
-        json.dump(combined_log, f, indent=2)
-    logger.info(f"Combined predictions+eval saved to: {combined_path}")
+        parse_count = len(parse_failures)
+        schema_count = len(schema_failures)
+        
+        # Write the lists to standard JSON files
+        with open(parse_failures_path, "w", encoding="utf-8") as f_parse:
+            json.dump(parse_failures, f_parse, indent=2)
+            
+        with open(schema_failures_path, "w", encoding="utf-8") as f_schema:
+            json.dump(schema_failures, f_schema, indent=2)
+                    
+        # Log the separate counts
+        logger.info(f"JSON Parse failures logged to: {parse_failures_path} ({parse_count} failures)")
+        logger.info(f"Schema Validation failures logged to: {schema_failures_path} ({schema_count} failures)")
+    
+        # 2. Save parsed predictions as a standard JSON array
+        parsed_path = output_dir / "parsed_predictions.json"
+        with open(parsed_path, "w", encoding="utf-8") as f:
+            # Filter out the None values into a new list first
+            valid_preds = [
+                pred for pred in eval_results.get("parsed_predictions", []) 
+                if pred is not None
+            ]
+            # Dump the filtered list
+            json.dump(valid_preds, f, indent=2)
+            
+        logger.info(f"Parsed predictions saved to: {parsed_path}")
+    
+        # Combined record (raw + parsed + ground truth) for convenience when reviewing results.
+        combined_log = []
+        for i, r in enumerate(records):
+            combined_log.append({
+                "image_id": r["image_id"],
+                "raw_output": r["raw_output"],
+                "latency_seconds": r.get("latency_seconds", 0.0),
+                "parsed_output": eval_results["parsed_predictions"][i],
+                "ground_truth": references[i],
+            })
+        combined_path = output_dir / "predictions_with_eval.json"
+        with open(combined_path, "w", encoding="utf-8") as f:
+            json.dump(combined_log, f, indent=2)
+        logger.info(f"Combined predictions+eval saved to: {combined_path}")
 
     # --- Save SPICE cache for future runs (no-op if already up to date) ---
-    save_spice_cache(SPICE_CACHE_DIR)
+    if not args.skip_spice:
+        save_spice_cache(SPICE_CACHE_DIR)
 
     # --- W&B Logging ---
     if args.wandb_project:
@@ -255,10 +273,12 @@ def main():
                 config=run_config
             )
             
-            # The metrics in run_evaluation.py are already flat, but we add failure counts
+            # The metrics in run_evaluation.py are already flat
             metrics_to_log = dict(eval_results["metrics"])
-            metrics_to_log["failures/json_parse"] = parse_count
-            metrics_to_log["failures/schema_validation"] = schema_count
+            
+            if not args.spice_only:
+                metrics_to_log["failures/json_parse"] = parse_count
+                metrics_to_log["failures/schema_validation"] = schema_count
             
             wandb.log(metrics_to_log)
             wandb.finish()
