@@ -247,6 +247,25 @@ _SYNTAX_FIXES = [
     ("json_syntax_nan_converted", re.compile(r"\bNaN\b"), "null"),
     ("json_syntax_infinity_converted", re.compile(r"-?Infinity\b"), "null"),
     ("json_syntax_trailing_comma_removed", re.compile(r",\s*([}\]])"), r"\1"),
+    # NEW FIXES FOR THE REMAINING BROKEN JSONS:
+    
+    # 1. Fix missing opening bracket for list of lists (e.g., `: [1,2,3,4], [5,6,7,8]]`)
+    ("json_syntax_missing_outer_bracket", re.compile(r':\s*(\[\s*\d+(?:\.\d+)?(?:\s*,\s*\d+(?:\.\d+)?){3}\s*\]\s*,\s*\[)'), r': [\1'),
+
+    # 2. Fix rogue opening bracket inside a coordinate list (e.g., `190, 35, [700, 680`)
+    ("json_syntax_rogue_internal_bracket", re.compile(r'(?<=\d)\s*,\s*\[\s*(?=\d)'), r','),
+
+    # 3. Fix parentheses used instead of square brackets, INCLUDING mixed typos like `[140,440,260,510)`
+    ("json_syntax_parentheses_boxes", re.compile(r'[\[\(]\s*(\d+(?:\.\d+)?(?:\s*,\s*\d+(?:\.\d+)?){3})\s*[\]\)]'), r'[\1]'),
+
+    # 4. Fix extra nested brackets around string boxes (e.g., `[["35,560,70,620"]}`) -> `["35,560,70,620"]}`
+    ("json_syntax_extra_string_bracket", re.compile(r'\[\s*(\[\s*"[\d\s,.-]+"\s*\])\s*\}'), r'\1}'),
+
+    # 5. Fix mismatched closures at the end of the JSON (e.g., `]}}` or `]} ` when it should be `]]}`)
+    ("json_syntax_mismatched_end_closures", re.compile(r'(?<=\d)\s*\]\s*\}\s*\}?\s*$'), r']]}\n'),
+
+    # 6. Safely insert missing commas between structural elements (The safety net from earlier)
+    ("json_syntax_missing_comma_inserted", re.compile(r'(?<=[}\]"])(?=\s+[{\["])'), ","),
 ]
 
 
@@ -255,6 +274,8 @@ def sanitize_json_syntax(text: str, tracker: Optional[ChangeTracker] = None) -> 
     so caption/reason text is never rewritten. Logs each specific fix type
     that actually fired (with an occurrence count), not just a generic
     'sanitized' event."""
+    # NEW: Pre-pass to fix typos that span across string quotes (e.g. `[["35..."]}`)
+    text = re.sub(r'\[\s*\[\s*("[\d\s,.-]+")\s*\]\s*\}', r'[\1]}', text)
     segments = _split_string_segments(text)
     out = []
     for is_str, seg in segments:
@@ -345,39 +366,33 @@ def attempt_truncation_repair(snippet: str) -> Optional[str]:
     return s if s.strip() else None
 
 
+# Removed ',' from the lookahead so it never cannibalizes valid internal commas
 _UNCLOSED_NUMERIC_STRING_PATTERN = re.compile(
-    r'"(\d+(?:\.\d+)?(?:\s*,\s*\d+(?:\.\d+)?){1,})[ \t]*\r?\n(\s*[\]},])'
+    r'"(-?\d[\d.,\s-]*\d)(\s*)(?=[\]}])'
 )
-
 
 def repair_unclosed_numeric_box_strings(
     text: str, tracker: Optional["ChangeTracker"] = None
 ) -> str:
     """Repairs a specific generation bug where the model opens a string for
-    a bounding-box coordinate list (e.g. "798,216,995,524) but forgets the
-    closing quote before the line ends. Because the string boundary is left
-    unbalanced, a string-aware scanner would otherwise swallow every
-    subsequent character -- including real structural JSON like ], }, and
-    the next key's opening quote -- as literal string content, corrupting
-    everything after it.
-
-    Detection is intentionally narrow and safe: it only fires when the
-    "unterminated" run of text between the opening quote and the next
-    newline+structural-character is PURELY digits/commas/whitespace (i.e.
-    it looks like box coordinates, never natural-language caption/reason
-    text, which always contains letters). Only a closing quote character is
-    inserted at the point the model evidently meant to close it -- no digit
-    or coordinate value is ever touched.
+    a bounding-box coordinate list but forgets the closing quote.
     """
     def _replace(m):
+        raw_numeric = m.group(1)
+        trailing_ws = m.group(2)  # Capture the \n and spaces before the ] or }
+        cleaned_numeric = re.sub(r"\s+", "", raw_numeric)
+        
         if tracker:
-            tracker.log(
-                "box_string_missing_closing_quote_repaired",
-                detail=f"Inserted missing closing quote after numeric run '{m.group(1)}'.",
-            )
-        return f'"{m.group(1)}"\n{m.group(2)}'
+            detail = f"Inserted missing closing quote after numeric run '{cleaned_numeric}'."
+            if cleaned_numeric != raw_numeric:
+                detail += " Embedded line-wrap whitespace within the run was collapsed."
+            tracker.log("box_string_missing_closing_quote_repaired", detail=detail)
+            
+        # Put the closing quote directly after the numbers, then safely restore the original whitespace
+        return f'"{cleaned_numeric}"{trailing_ws}'
 
     return _UNCLOSED_NUMERIC_STRING_PATTERN.sub(_replace, text)
+
 
 def _unwrap_if_list(result: Any) -> Any:
     """Some models wrap the object in an array: [{...}]. Unwrap the first
@@ -619,12 +634,32 @@ def _to_float(x: Any) -> Optional[float]:
         return None
 
 
-def _parse_comma_string(s: str) -> Optional[List[float]]:
+def _parse_comma_string_boxes(s: str):
+    """Parses a comma/space-separated numeric string into zero or more
+    4-element boxes.
+
+    Returns (boxes, num_count):
+      - num_count: how many number-like tokens were found (kept even when
+        boxes is empty, purely so callers can log a useful detail).
+      - boxes: [] unless num_count is a clean, non-zero multiple of 4, in
+        which case ALL numbers are kept and reshaped into that many boxes
+        -- e.g. 16 numbers -> 4 boxes. This is the common case when a
+        model repeats/duplicates the same box several times inside one
+        string (a generation-loop artifact) instead of writing several
+        distinct boxes; either way every number is preserved, only
+        regrouped.
+      - If num_count is NOT a multiple of 4 (e.g. 14 or 15), there's no
+        way to know which numbers are extra vs. missing from which box,
+        so NOTHING is kept -- the whole string is dropped rather than
+        guessing which subset of numbers belongs together.
+    """
     parts = [p.strip() for p in re.split(r"[,\s]+", s.strip()) if p.strip()]
     nums = [_to_float(p) for p in parts]
-    if len(nums) == 4 and None not in nums:
-        return nums
-    return None
+    if not nums or None in nums:
+        return [], len(parts)
+    if len(nums) % 4 != 0:
+        return [], len(nums)
+    return [nums[i:i + 4] for i in range(0, len(nums), 4)], len(nums)
 
 
 def _looks_like_point(x: Any) -> bool:
@@ -738,13 +773,28 @@ def normalize_boxes(
     if raw_boxes is None:
         return []
     if isinstance(raw_boxes, str):
-        nums = _parse_comma_string(raw_boxes)
-        if nums and tracker:
+        boxes, count = _parse_comma_string_boxes(raw_boxes)
+        if boxes:
+            if tracker:
+                if len(boxes) > 1:
+                    tracker.log(
+                        "box_string_multi_box_reshaped", field=field,
+                        detail=f"Comma-separated string of {count} numbers reshaped into "
+                               f"{len(boxes)} box(es) (count was a clean multiple of 4).",
+                    )
+                else:
+                    tracker.log(
+                        "box_string_coordinates_parsed", field=field,
+                        detail="Comma/space-separated string parsed into a box.",
+                    )
+        elif count and tracker:
             tracker.log(
-                "box_string_coordinates_parsed", field=field,
-                detail="Comma/space-separated string parsed into a box.",
+                "box_dropped_unreconstructable", field=field,
+                detail=f"Comma-separated string had {count} number(s), not a multiple of 4 "
+                       f"(or contained non-numeric token(s)); ambiguous which coordinates "
+                       f"belong together, so dropped entirely.",
             )
-        return [nums] if nums else []
+        return boxes
     if isinstance(raw_boxes, dict):
         box = _dict_to_box(raw_boxes, field=field, tracker=tracker)
         return [box] if box else []
@@ -791,18 +841,28 @@ def normalize_boxes(
     for b in raw_boxes:
         if isinstance(b, (list, tuple)):
             if len(b) == 1 and isinstance(b[0], str):
-                nums = _parse_comma_string(b[0])
-                if nums:
-                    valid_boxes.append(nums)
+                boxes, count = _parse_comma_string_boxes(b[0])
+                if boxes:
+                    valid_boxes.extend(boxes)
                     if tracker:
-                        tracker.log(
-                            "box_string_coordinates_parsed", field=field,
-                            detail="Single-element list containing a comma-separated string parsed.",
-                        )
+                        if len(boxes) > 1:
+                            tracker.log(
+                                "box_string_multi_box_reshaped", field=field,
+                                detail=f"Single-element list contained a comma-separated string "
+                                       f"of {count} numbers, reshaped into {len(boxes)} box(es).",
+                            )
+                        else:
+                            tracker.log(
+                                "box_string_coordinates_parsed", field=field,
+                                detail="Single-element list containing a comma-separated string parsed.",
+                            )
                 elif tracker:
                     tracker.log(
                         "box_dropped_unreconstructable", field=field,
-                        detail="Single-element string box could not be parsed; dropped.",
+                        detail=(f"Single-element string box had {count} number(s), not a "
+                                f"multiple of 4; ambiguous which coordinates belong together, "
+                                f"dropped." if count else
+                                "Single-element string box could not be parsed; dropped."),
                     )
                 continue
             if len(b) == 4:
@@ -830,18 +890,28 @@ def normalize_boxes(
                     detail="Dict element had no recognizable box keys; dropped.",
                 )
         elif isinstance(b, str):
-            nums = _parse_comma_string(b)
-            if nums:
-                valid_boxes.append(nums)
+            boxes, count = _parse_comma_string_boxes(b)
+            if boxes:
+                valid_boxes.extend(boxes)
                 if tracker:
-                    tracker.log(
-                        "box_string_coordinates_parsed", field=field,
-                        detail="String element parsed as comma-separated box.",
-                    )
+                    if len(boxes) > 1:
+                        tracker.log(
+                            "box_string_multi_box_reshaped", field=field,
+                            detail=f"String element had {count} numbers, reshaped into "
+                                   f"{len(boxes)} box(es).",
+                        )
+                    else:
+                        tracker.log(
+                            "box_string_coordinates_parsed", field=field,
+                            detail="String element parsed as comma-separated box.",
+                        )
             elif tracker:
                 tracker.log(
                     "box_dropped_unreconstructable", field=field,
-                    detail=f"String element '{b}' could not be parsed as a box; dropped.",
+                    detail=(f"String element '{b}' had {count} number(s), not a multiple of 4; "
+                            f"ambiguous which coordinates belong together, dropped."
+                            if count else
+                            f"String element '{b}' could not be parsed as a box; dropped."),
                 )
         else:
             if tracker:
@@ -1102,7 +1172,7 @@ def repair_and_validate(raw_str: str, duplicate_box_threshold: int = 3) -> Dict[
             pass  # valid JSON, but schema mismatch -> fall through to repair
 
     # --- REPAIR PIPELINE: only reached if the strict gate failed, i.e.
-    # this is exactly the set of records your notebook would count as
+    # this is exactly the set of records the notebook would count as
     # "invalid JSON" or "invalid schema". Everything below is an attempt
     # to recover them; whatever's still unrecoverable after this is the
     # script's final invalid_json / invalid_schema count. ----------------

@@ -97,6 +97,10 @@ def main():
                          help="Only evaluate the first N records in the predictions file.")
     parser.add_argument("--skip_java_switch", action="store_true",
                          help="Don't attempt to auto-switch to Java 8 for SPICE.")
+    parser.add_argument("--wandb_project", type=str, default=None,
+                         help="Weights & Biases project name")
+    parser.add_argument("--wandb_run_name", type=str, default=None,
+                         help="Weights & Biases run name")
     args = parser.parse_args()
 
     predictions_path = Path(args.predictions_path)
@@ -239,6 +243,27 @@ def main():
 
     # --- Save SPICE cache for future runs (no-op if already up to date) ---
     save_spice_cache(SPICE_CACHE_DIR)
+
+    # --- W&B Logging ---
+    if args.wandb_project:
+        try:
+            import wandb
+            logger.info("Initializing W&B logging...")
+            wandb.init(
+                project=args.wandb_project,
+                name=args.wandb_run_name,
+                config=run_config
+            )
+            
+            # The metrics in run_evaluation.py are already flat, but we add failure counts
+            metrics_to_log = dict(eval_results["metrics"])
+            metrics_to_log["failures/json_parse"] = parse_count
+            metrics_to_log["failures/schema_validation"] = schema_count
+            
+            wandb.log(metrics_to_log)
+            wandb.finish()
+        except ImportError:
+            logger.error("wandb is not installed. Please install it (pip install wandb) to use W&B logging.")
 
     logger.info(f"Evaluation complete. All artifacts saved to: {output_dir}")
     logger.info(f"Total metrics tracked: {len(eval_results['metrics'])}")

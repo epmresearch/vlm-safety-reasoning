@@ -273,13 +273,6 @@ def main():
             flat_metrics["failures/schema_validation"] = len(schema_failures)
             
             wandb.log(flat_metrics)
-            
-            artifact = wandb.Artifact(name=f"eval_results_{output_dir.name}", type="evaluation")
-            artifact.add_file(str(metrics_path))
-            artifact.add_file(str(parse_failures_path))
-            artifact.add_file(str(schema_failures_path))
-            wandb.log_artifact(artifact)
-            
             wandb.finish()
         except ImportError:
             logger.error("wandb is not installed. Please install it (pip install wandb) to use W&B logging.")
