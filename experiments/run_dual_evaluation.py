@@ -295,13 +295,11 @@ def main():
                 
             flat_metrics = flatten_dict(eval_results["metrics"])
             
-            if not args.spice_only:
-                # We only have these lists if we didn't skip parsing stuff, but wait, failures are collected during parsing.
-                # In run_dual_pass, parse failures are collected regardless of spice_only.
-                parse_failures = [f for f in eval_results.get("failures", []) if f.get("error_type") == "json_parse_error"]
-                schema_failures = [f for f in eval_results.get("failures", []) if f.get("error_type") == "schema_validation_error"]
-                flat_metrics["failures/json_parse"] = len(parse_failures)
-                flat_metrics["failures/schema_validation"] = len(schema_failures)
+            # Failures are always perfectly collected during parsing, regardless of spice_only
+            parse_failures = [f for f in eval_results.get("failures", []) if f.get("error_type") == "json_parse_error"]
+            schema_failures = [f for f in eval_results.get("failures", []) if f.get("error_type") == "schema_validation_error"]
+            flat_metrics["failures/json_parse"] = len(parse_failures)
+            flat_metrics["failures/schema_validation"] = len(schema_failures)
             
             wandb.log(flat_metrics)
             wandb.finish()

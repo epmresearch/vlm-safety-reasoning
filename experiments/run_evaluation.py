@@ -276,9 +276,9 @@ def main():
             # The metrics in run_evaluation.py are already flat
             metrics_to_log = dict(eval_results["metrics"])
             
-            if not args.spice_only:
-                metrics_to_log["failures/json_parse"] = parse_count
-                metrics_to_log["failures/schema_validation"] = schema_count
+            # Failures are always perfectly calculated during parsing, even on spice_only runs
+            metrics_to_log["failures/json_parse"] = parse_count
+            metrics_to_log["failures/schema_validation"] = schema_count
             
             wandb.log(metrics_to_log)
             wandb.finish()
