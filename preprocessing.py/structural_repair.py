@@ -1012,7 +1012,7 @@ def normalize_violation_value(
         boxes = normalize_boxes(
             fixed.get("bounding_box", []), field=f"{rule_key}.bounding_box", tracker=tracker
         )
-        return {"reason": str(reason), "bounding_box": boxes}
+        return {"bounding_box": boxes, "reason": str(reason)}
 
     if tracker:
         tracker.log(
