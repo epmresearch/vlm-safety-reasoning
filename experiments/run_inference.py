@@ -61,7 +61,7 @@ def main():
                      help="Override inference max_seq_length")
     parser.add_argument(
         "--repetition_penalty", type=float, default=None,
-        help="Override generation repetition_penalty (default: 1.05, from configs/tasks/unified.yaml)"
+        help="Override generation repetition_penalty (default: 1.0, from configs/tasks/unified.yaml)"
     )
     args = parser.parse_args()
 
@@ -95,7 +95,7 @@ def main():
     repetition_penalty = (
         args.repetition_penalty
         if args.repetition_penalty is not None
-        else task_config.get("repetition_penalty", 1.05)
+        else task_config.get("repetition_penalty", 1.0)
     )
 
     # --- Manifest for reproducibility ---

@@ -22,7 +22,7 @@ def generate_single(
     max_new_tokens: int = DEFAULT_MAX_NEW_TOKENS,
     temperature: float = 0.0,
     do_sample: bool = False,
-    repetition_penalty: float = 1.05,
+    repetition_penalty: float = 1.0,
 ) -> str:
     """Generates a response for a single image using the unified prompt.
 
@@ -100,7 +100,7 @@ def run_inference(
     max_new_tokens: int = DEFAULT_MAX_NEW_TOKENS,
     max_samples: Optional[int] = None,
     show_progress: bool = True,
-    repetition_penalty: float = 1.05,
+    repetition_penalty: float = 1.0,
 ) -> List[Dict[str, Any]]:
     """Runs inference on a dataset split, returning raw outputs.
 
@@ -174,7 +174,7 @@ def generate_batch(
     max_new_tokens: int = DEFAULT_MAX_NEW_TOKENS,
     temperature: float = 0.0,
     do_sample: bool = False,
-    repetition_penalty: float = 1.05,
+    repetition_penalty: float = 1.0,
 ) -> List[str]:
     """Generates responses for a batch of images using the unified prompt."""
     from qwen_vl_utils import process_vision_info
@@ -248,7 +248,7 @@ def run_inference_batched(
     max_samples: Optional[int] = None,
     show_progress: bool = True,
     output_path: Optional[str] = None,
-    repetition_penalty: float = 1.05,
+    repetition_penalty: float = 1.0,
 ) -> List[Dict[str, Any]]:
     """Runs batched inference on a dataset split with Auto-Resume support."""
     from tqdm import tqdm
