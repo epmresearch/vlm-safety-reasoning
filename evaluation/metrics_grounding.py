@@ -61,7 +61,7 @@ def compute_grounding_metrics(predictions: List[Dict[str, Any]], references: Lis
 
             # 1. Mask-Union IoU
             mask_result = compute_mask_union_iou(pred_boxes_01, gt_boxes_01)
-            mask_iou = mask_result["iou"]
+            mask_iou = mask_result["iou"] if mask_result["iou"] is not None else 0.0
 
             # 2. Greedy IoU
             greedy_iou_val, greedy_inter, greedy_union = greedy_multibox_iou(pred_boxes_01, gt_boxes_01)
