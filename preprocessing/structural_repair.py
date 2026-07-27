@@ -1309,6 +1309,12 @@ def process_jsonl(
         for rec in fixed_records:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
 
+    json_output_path = str(output_path).replace(".jsonl", ".json")
+    if not json_output_path.endswith(".json"):
+        json_output_path += ".json"
+    with open(json_output_path, "w", encoding="utf-8") as f:
+        json.dump(fixed_records, f, indent=2, ensure_ascii=False)
+
     with open(manifest_path, "w", encoding="utf-8") as f:
         json.dump(manifest_records, f, indent=2, ensure_ascii=False)
 
