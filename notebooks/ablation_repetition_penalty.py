@@ -210,7 +210,7 @@ from datasets import load_from_disk
 # IMPORTING FROM CODEBASE
 from core.constants import RULES
 from evaluation.metrics_captioning import compute_all_caption_metrics
-from preprocessing.structural_repair import repair_and_validate, RepairTracker
+from preprocessing.structural_repair import repair_and_validate
 
 # Make sure DRIVE_ROOT is defined if running Notebook 2 in a fresh session
 try:
@@ -242,19 +242,24 @@ def strip_fences(text):
     match = re.search(r"```(?:json)?(.*?)```", text, flags=re.DOTALL | re.IGNORECASE)
     return match.group(1).strip() if match else text.strip()
 
-tracker = RepairTracker()
 parsed_predictions = {}
 count_valid = 0
 count_repaired = 0
 count_failed = 0
+repair_stats = {}
 
 for sample in gt_subset:
     img_id = str(sample["image_id"])
     raw_str = predictions_raw[img_id]
     
     # USING CODEBASE REPAIR LOGIC
-    result = repair_and_validate(raw_str, tracker=tracker)
+    result = repair_and_validate(raw_str)
     
+    if result.get("changes"):
+        for change in result["changes"]:
+            c_type = change.get("type", "unknown_fix")
+            repair_stats[c_type] = repair_stats.get(c_type, 0) + 1
+            
     if result["status"] == "fixed_valid":
         parsed_predictions[img_id] = result["fixed_parsed"]
         count_repaired += 1
@@ -277,6 +282,11 @@ print(f"Successfully Repaired:            {count_repaired}")
 print(f"Failed completely:                {count_failed}")
 print(f"Total Successful Parses:          {sum(1 for v in parsed_predictions.values() if v)}")
 
+if repair_stats:
+    print("\n--- Specific Repairs Applied ---")
+    for r_type, count in repair_stats.items():
+        print(f"{r_type}: {count} times")
+
 # ------------------
 # CELL 2.3: Data Extraction & Length Percentiles
 pred_captions, gt_captions, caption_images = [], [], []
@@ -289,7 +299,7 @@ for sample in gt_subset:
     # 1. Extract Captions
     if pred.get("caption"):
         pred_captions.append(pred["caption"])
-        gt_captions.append(sample["caption"])
+        gt_captions.append(sample["image_caption"])
         caption_images.append(sample["image"])
         
     # 2. Extract Reasons
@@ -336,3 +346,75 @@ if pred_reasons:
         print(f"{key}: {value:.4f}")
 else:
     print("No matching True Positive reasons found.")
+
+# ------------------
+# CELL 2.5: Full Pipeline Metrics (Grounding & Violations)
+from evaluation.metrics_grounding import compute_grounding_metrics
+from evaluation.metrics_violations import compute_violation_metrics
+
+# Re-align predictions and ground truth into lists of dictionaries
+pred_list = []
+gt_list = []
+
+for sample in gt_subset:
+    img_id = str(sample["image_id"])
+    pred = parsed_predictions.get(img_id, {})
+    pred_list.append(pred)
+    gt_list.append(sample)
+
+print("\n=== SAFETY VIOLATION IDENTIFICATION (Recall/Precision) ===")
+violation_metrics = compute_violation_metrics(pred_list, gt_list)
+for k, v in violation_metrics.items():
+    if "macro" in k or "micro" in k:  # Print the high-level summaries
+        print(f"{k}: {v:.4f}")
+
+print("\n=== GROUNDING (BBOX) METRICS (IoU/Recall) ===")
+grounding_metrics = compute_grounding_metrics(pred_list, gt_list)
+for k, v in grounding_metrics.items():
+    if "macro" in k or "micro" in k:
+        print(f"{k}: {v:.4f}")
+
+# ------------------
+# CELL 2.6: Save All Metrics to JSON
+import os
+import json
+import numpy as np
+
+# Convert the input path (e.g. ablation_rep_1.0.jsonl) into a metrics save path
+metrics_save_path = output_path.replace(".jsonl", "_metrics.json").replace(".json", "_metrics.json")
+
+# Helper to safely extract lengths
+def get_length_stats(counts):
+    if not counts: return {}
+    return {
+        "mean": float(np.mean(counts)),
+        "p25": float(np.percentile(counts, 25)),
+        "p50": float(np.percentile(counts, 50)),
+        "p75": float(np.percentile(counts, 75)),
+        "p99": float(np.percentile(counts, 99)),
+        "max": int(np.max(counts))
+    }
+
+final_report = {
+    "repair_stats": {
+        "already_valid": count_valid,
+        "repaired": count_repaired,
+        "failed": count_failed,
+        "specific_fixes": repair_stats
+    },
+    "length_metrics": {
+        "captions": get_length_stats(word_counts_c),
+        "reasons": get_length_stats(word_counts_r)
+    },
+    "nlp_metrics_captions": cap_metrics,
+    "nlp_metrics_reasons": res_metrics if 'res_metrics' in locals() else {},
+    "violation_metrics": violation_metrics,
+    "grounding_metrics": grounding_metrics
+}
+
+# Save to disk
+os.makedirs(os.path.dirname(metrics_save_path), exist_ok=True)
+with open(metrics_save_path, "w", encoding="utf-8") as f:
+    json.dump(final_report, f, indent=4)
+
+print(f"\n✅ Successfully saved all aggregated metrics to:\n{metrics_save_path}")

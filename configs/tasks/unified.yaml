@@ -14,3 +14,4 @@ reward_weights:      # unused until GRPO phase;
 
 max_new_tokens: 1000   # single response covers caption + objects + violations
 inference_max_seq_length: 2816   # NEW. Verified: full sweep of test(3004) prompt-only, max=1519+1000gen+margin=2770
+repetition_penalty: 1.05   # NEW - locked-in production default per ablation

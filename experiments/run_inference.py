@@ -59,6 +59,10 @@ def main():
     )
     parser.add_argument("--max_seq_length", type=int, default=None,
                      help="Override inference max_seq_length")
+    parser.add_argument(
+        "--repetition_penalty", type=float, default=None,
+        help="Override generation repetition_penalty (default: 1.05, from configs/tasks/unified.yaml)"
+    )
     args = parser.parse_args()
 
     # --- Resolve run identity + paths ---
@@ -88,6 +92,11 @@ def main():
         or base_config.get("max_new_tokens")
         or task_config.get("max_new_tokens", 1000)
     )
+    repetition_penalty = (
+        args.repetition_penalty
+        if args.repetition_penalty is not None
+        else task_config.get("repetition_penalty", 1.05)
+    )
 
     # --- Manifest for reproducibility ---
     run_config = {
@@ -99,6 +108,7 @@ def main():
         "batch_size": args.batch_size,
         "max_samples": args.max_samples,
         "max_new_tokens": max_new_tokens,
+        "repetition_penalty": repetition_penalty,
         "prompts": {
             "system_prompt": SYSTEM_PROMPT,
             "user_prompt": UNIFIED_INSPECTION_PROMPT,
@@ -135,6 +145,7 @@ def main():
         max_new_tokens=max_new_tokens,
         max_samples=args.max_samples,
         output_path=output_path,
+        repetition_penalty=repetition_penalty,
     )
 
     logger.info(f"Inference complete: {len(results)} total samples processed.")

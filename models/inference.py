@@ -22,6 +22,7 @@ def generate_single(
     max_new_tokens: int = DEFAULT_MAX_NEW_TOKENS,
     temperature: float = 0.0,
     do_sample: bool = False,
+    repetition_penalty: float = 1.05,
 ) -> str:
     """Generates a response for a single image using the unified prompt.
 
@@ -80,7 +81,7 @@ def generate_single(
             max_new_tokens=max_new_tokens,
             temperature=temperature,
             do_sample=do_sample,
-            repetition_penalty=1.15,
+            repetition_penalty=repetition_penalty,
             use_cache=True,
         )
 
@@ -99,6 +100,7 @@ def run_inference(
     max_new_tokens: int = DEFAULT_MAX_NEW_TOKENS,
     max_samples: Optional[int] = None,
     show_progress: bool = True,
+    repetition_penalty: float = 1.05,
 ) -> List[Dict[str, Any]]:
     """Runs inference on a dataset split, returning raw outputs.
 
@@ -137,6 +139,7 @@ def run_inference(
             output_text = generate_single(
                 model, tokenizer, pil_image,
                 max_new_tokens=max_new_tokens,
+                repetition_penalty=repetition_penalty,
             )
 
             elapsed = time.time() - start_time
@@ -171,6 +174,7 @@ def generate_batch(
     max_new_tokens: int = DEFAULT_MAX_NEW_TOKENS,
     temperature: float = 0.0,
     do_sample: bool = False,
+    repetition_penalty: float = 1.05,
 ) -> List[str]:
     """Generates responses for a batch of images using the unified prompt."""
     from qwen_vl_utils import process_vision_info
@@ -224,7 +228,7 @@ def generate_batch(
             max_new_tokens=max_new_tokens,
             temperature=temperature,
             do_sample=do_sample,
-            repetition_penalty=1.15,
+            repetition_penalty=repetition_penalty,
             use_cache=True,
         )
 
@@ -244,6 +248,7 @@ def run_inference_batched(
     max_samples: Optional[int] = None,
     show_progress: bool = True,
     output_path: Optional[str] = None,
+    repetition_penalty: float = 1.05,
 ) -> List[Dict[str, Any]]:
     """Runs batched inference on a dataset split with Auto-Resume support."""
     from tqdm import tqdm
@@ -297,7 +302,11 @@ def run_inference_batched(
         start_time = time.time()
         batch_results = []
         try:
-            outputs = generate_batch(model, tokenizer, pil_images, max_new_tokens=max_new_tokens)
+            outputs = generate_batch(
+                model, tokenizer, pil_images, 
+                max_new_tokens=max_new_tokens,
+                repetition_penalty=repetition_penalty
+            )
             elapsed = time.time() - start_time
             per_image_latency = elapsed / len(pil_images)
 

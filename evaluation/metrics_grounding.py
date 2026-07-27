@@ -23,12 +23,14 @@ def compute_grounding_metrics(predictions: List[Dict[str, Any]], references: Lis
 
     # MASK TRACKERS
     class_ious_all_tn0_mask: Dict[str, List[float]] = {cls: [] for cls in GROUNDING_CLASSES}
+    class_ious_all_tn1_mask: Dict[str, List[float]] = {cls: [] for cls in GROUNDING_CLASSES}
     class_ious_exist_tn0_mask: Dict[str, List[float]] = {cls: [] for cls in GROUNDING_CLASSES}
     class_inter_total_mask: Dict[str, float] = {cls: 0.0 for cls in GROUNDING_CLASSES}
     class_union_total_mask: Dict[str, float] = {cls: 0.0 for cls in GROUNDING_CLASSES}
 
     # GREEDY TRACKERS
     class_ious_all_tn0_greedy: Dict[str, List[float]] = {cls: [] for cls in GROUNDING_CLASSES}
+    class_ious_all_tn1_greedy: Dict[str, List[float]] = {cls: [] for cls in GROUNDING_CLASSES}
     class_ious_exist_tn0_greedy: Dict[str, List[float]] = {cls: [] for cls in GROUNDING_CLASSES}
     class_inter_total_greedy: Dict[str, float] = {cls: 0.0 for cls in GROUNDING_CLASSES}
     class_union_total_greedy: Dict[str, float] = {cls: 0.0 for cls in GROUNDING_CLASSES}
@@ -38,6 +40,7 @@ def compute_grounding_metrics(predictions: List[Dict[str, Any]], references: Lis
     class_inter_exist_greedy: Dict[str, float] = {cls: 0.0 for cls in GROUNDING_CLASSES}
     class_union_exist_greedy: Dict[str, float] = {cls: 0.0 for cls in GROUNDING_CLASSES}
 
+    class_tp: Dict[str, int] = {cls: 0 for cls in GROUNDING_CLASSES}
     class_tn: Dict[str, int] = {cls: 0 for cls in GROUNDING_CLASSES}
     class_fp: Dict[str, int] = {cls: 0 for cls in GROUNDING_CLASSES}
     class_fn: Dict[str, int] = {cls: 0 for cls in GROUNDING_CLASSES}
@@ -67,17 +70,25 @@ def compute_grounding_metrics(predictions: List[Dict[str, Any]], references: Lis
             is_fp = not gt_boxes_01 and bool(pred_boxes_01)
             is_fn = bool(gt_boxes_01) and not pred_boxes_01
 
+            is_tp = bool(gt_boxes_01) and bool(pred_boxes_01)
+
             if is_tn:
                 class_tn[cls] += 1
                 class_ious_all_tn0_mask[cls].append(0.0)
                 class_ious_all_tn0_greedy[cls].append(0.0)
+                class_ious_all_tn1_mask[cls].append(1.0)
+                class_ious_all_tn1_greedy[cls].append(1.0)
             else:
-                if is_fp:
+                if is_tp:
+                    class_tp[cls] += 1
+                elif is_fp:
                     class_fp[cls] += 1
                 elif is_fn:
                     class_fn[cls] += 1
                 class_ious_all_tn0_mask[cls].append(mask_iou)
                 class_ious_all_tn0_greedy[cls].append(greedy_iou_val)
+                class_ious_all_tn1_mask[cls].append(mask_iou)
+                class_ious_all_tn1_greedy[cls].append(greedy_iou_val)
 
             class_inter_total_mask[cls] += mask_result["intersection"]
             class_union_total_mask[cls] += mask_result["union"]
@@ -100,15 +111,24 @@ def compute_grounding_metrics(predictions: List[Dict[str, Any]], references: Lis
     total_inter_all_t_greedy, total_union_all_t_greedy = 0.0, 0.0
 
     all_ious_total_tn0_mask, all_ious_total_tn0_greedy = [], []
+    all_ious_total_tn1_mask, all_ious_total_tn1_greedy = [], []
+
+    # Accumulators for micro presence P/R/F1 (pooled across all classes)
+    global_presence_tp, global_presence_fp, global_presence_fn = 0, 0, 0
+    class_presence_precisions, class_presence_recalls, class_presence_f1s = [], [], []
 
     for cls in GROUNDING_CLASSES:
-        # Mask Metrics
+        # --- Mask IoU Metrics (tn0 + tn1) ---
         metrics[f"grounding_mask_iou_all_macro_{cls}_tn0"] = (
             sum(class_ious_all_tn0_mask[cls]) / len(class_ious_all_tn0_mask[cls]) if class_ious_all_tn0_mask[cls] else 0.0
+        )
+        metrics[f"grounding_mask_iou_all_macro_{cls}_tn1"] = (
+            sum(class_ious_all_tn1_mask[cls]) / len(class_ious_all_tn1_mask[cls]) if class_ious_all_tn1_mask[cls] else 0.0
         )
         metrics[f"grounding_mask_iou_all_micro_{cls}"] = class_inter_total_mask[cls] / class_union_total_mask[cls] if class_union_total_mask[cls] > 0 else 0.0
 
         all_ious_total_tn0_mask.extend(class_ious_all_tn0_mask[cls])
+        all_ious_total_tn1_mask.extend(class_ious_all_tn1_mask[cls])
         total_inter_all_t_mask += class_inter_total_mask[cls]
         total_union_all_t_mask += class_union_total_mask[cls]
         
@@ -117,13 +137,17 @@ def compute_grounding_metrics(predictions: List[Dict[str, Any]], references: Lis
         )
         metrics[f"grounding_mask_iou_exist_micro_{cls}"] = class_inter_exist_mask[cls] / class_union_exist_mask[cls] if class_union_exist_mask[cls] > 0 else 0.0
 
-        # Greedy Metrics
+        # --- Greedy IoU Metrics (tn0 + tn1) ---
         metrics[f"grounding_greedy_iou_all_macro_{cls}_tn0"] = (
             sum(class_ious_all_tn0_greedy[cls]) / len(class_ious_all_tn0_greedy[cls]) if class_ious_all_tn0_greedy[cls] else 0.0
+        )
+        metrics[f"grounding_greedy_iou_all_macro_{cls}_tn1"] = (
+            sum(class_ious_all_tn1_greedy[cls]) / len(class_ious_all_tn1_greedy[cls]) if class_ious_all_tn1_greedy[cls] else 0.0
         )
         metrics[f"grounding_greedy_iou_all_micro_{cls}"] = class_inter_total_greedy[cls] / class_union_total_greedy[cls] if class_union_total_greedy[cls] > 0 else 0.0
 
         all_ious_total_tn0_greedy.extend(class_ious_all_tn0_greedy[cls])
+        all_ious_total_tn1_greedy.extend(class_ious_all_tn1_greedy[cls])
         total_inter_all_t_greedy += class_inter_total_greedy[cls]
         total_union_all_t_greedy += class_union_total_greedy[cls]
         
@@ -132,13 +156,30 @@ def compute_grounding_metrics(predictions: List[Dict[str, Any]], references: Lis
         )
         metrics[f"grounding_greedy_iou_exist_micro_{cls}"] = class_inter_exist_greedy[cls] / class_union_exist_greedy[cls] if class_union_exist_greedy[cls] > 0 else 0.0
 
-        # Counters
+        # --- Counters ---
+        metrics[f"grounding_true_positives_count_{cls}"] = class_tp[cls]
         metrics[f"grounding_true_negatives_count_{cls}"] = class_tn[cls]
         metrics[f"grounding_false_positives_count_{cls}"] = class_fp[cls]
         metrics[f"grounding_false_negatives_count_{cls}"] = class_fn[cls]
         metrics[f"grounding_existing_ground_truth_count_{cls}"] = class_exist_n[cls]
 
-    # Global Aggregates
+        # --- Grounding Presence Precision/Recall/F1 (per class) ---
+        tp_c, fp_c, fn_c = class_tp[cls], class_fp[cls], class_fn[cls]
+        p_c = tp_c / (tp_c + fp_c) if (tp_c + fp_c) > 0 else 0.0
+        r_c = tp_c / (tp_c + fn_c) if (tp_c + fn_c) > 0 else 0.0
+        f1_c = 2 * p_c * r_c / (p_c + r_c) if (p_c + r_c) > 0 else 0.0
+        metrics[f"grounding_presence_precision_{cls}"] = p_c
+        metrics[f"grounding_presence_recall_{cls}"] = r_c
+        metrics[f"grounding_presence_f1_{cls}"] = f1_c
+
+        global_presence_tp += tp_c
+        global_presence_fp += fp_c
+        global_presence_fn += fn_c
+        class_presence_precisions.append(p_c)
+        class_presence_recalls.append(r_c)
+        class_presence_f1s.append(f1_c)
+
+    # --- Global IoU Aggregates (tn0) ---
     metrics["grounding_mask_iou_all_pooled_mean_tn0"] = sum(all_ious_total_tn0_mask) / len(all_ious_total_tn0_mask) if all_ious_total_tn0_mask else 0.0
     metrics["grounding_mask_iou_all_macro_mean_tn0"] = sum(metrics[f"grounding_mask_iou_all_macro_{cls}_tn0"] for cls in GROUNDING_CLASSES) / len(GROUNDING_CLASSES)
     metrics["grounding_mask_iou_all_micro_mean"] = total_inter_all_t_mask / total_union_all_t_mask if total_union_all_t_mask > 0 else 0.0
@@ -146,6 +187,25 @@ def compute_grounding_metrics(predictions: List[Dict[str, Any]], references: Lis
     metrics["grounding_greedy_iou_all_pooled_mean_tn0"] = sum(all_ious_total_tn0_greedy) / len(all_ious_total_tn0_greedy) if all_ious_total_tn0_greedy else 0.0
     metrics["grounding_greedy_iou_all_macro_mean_tn0"] = sum(metrics[f"grounding_greedy_iou_all_macro_{cls}_tn0"] for cls in GROUNDING_CLASSES) / len(GROUNDING_CLASSES)
     metrics["grounding_greedy_iou_all_micro_mean"] = total_inter_all_t_greedy / total_union_all_t_greedy if total_union_all_t_greedy > 0 else 0.0
+
+    # --- Global IoU Aggregates (tn1) ---
+    metrics["grounding_mask_iou_all_pooled_mean_tn1"] = sum(all_ious_total_tn1_mask) / len(all_ious_total_tn1_mask) if all_ious_total_tn1_mask else 0.0
+    metrics["grounding_mask_iou_all_macro_mean_tn1"] = sum(metrics[f"grounding_mask_iou_all_macro_{cls}_tn1"] for cls in GROUNDING_CLASSES) / len(GROUNDING_CLASSES)
+
+    metrics["grounding_greedy_iou_all_pooled_mean_tn1"] = sum(all_ious_total_tn1_greedy) / len(all_ious_total_tn1_greedy) if all_ious_total_tn1_greedy else 0.0
+    metrics["grounding_greedy_iou_all_macro_mean_tn1"] = sum(metrics[f"grounding_greedy_iou_all_macro_{cls}_tn1"] for cls in GROUNDING_CLASSES) / len(GROUNDING_CLASSES)
+
+    # --- Grounding Presence Aggregates ---
+    p_micro = global_presence_tp / (global_presence_tp + global_presence_fp) if (global_presence_tp + global_presence_fp) > 0 else 0.0
+    r_micro = global_presence_tp / (global_presence_tp + global_presence_fn) if (global_presence_tp + global_presence_fn) > 0 else 0.0
+    f1_micro = 2 * p_micro * r_micro / (p_micro + r_micro) if (p_micro + r_micro) > 0 else 0.0
+    metrics["grounding_presence_precision_micro"] = p_micro
+    metrics["grounding_presence_recall_micro"] = r_micro
+    metrics["grounding_presence_f1_micro"] = f1_micro
+
+    metrics["grounding_presence_precision_macro"] = sum(class_presence_precisions) / len(class_presence_precisions) if class_presence_precisions else 0.0
+    metrics["grounding_presence_recall_macro"] = sum(class_presence_recalls) / len(class_presence_recalls) if class_presence_recalls else 0.0
+    metrics["grounding_presence_f1_macro"] = sum(class_presence_f1s) / len(class_presence_f1s) if class_presence_f1s else 0.0
 
     # Exist Aggregates (Ignoring True Negatives)
     metrics["grounding_mask_iou_exist_macro_mean"] = sum(

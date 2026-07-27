@@ -10,6 +10,13 @@ from core.logging import get_logger
 
 logger = get_logger(__name__)
 
+# IoU threshold for IoU-conditioned violation identification.
+# A TP only counts if the greedy IoU between predicted and GT bounding boxes
+# meets this threshold. 0.25 is deliberately lenient — for construction safety
+# images where workers are small in frame, this means "the model at least knows
+# which region of the image the violation is in."
+IOU_CONDITIONED_THRESHOLD = 0.25
+
 def compute_violation_metrics(predictions: List[Dict[str, Any]], references: List[Dict[str, Any]]) -> Dict[str, float]:
     """
     Computes rule identification (F1, Precision, Recall) and grounding IoU for safety violations.
@@ -33,15 +40,22 @@ def compute_violation_metrics(predictions: List[Dict[str, Any]], references: Lis
     
     # Mask Trackers
     rule_iou_tn0_mask = {r: [] for r in RULES}
+    rule_iou_tn1_mask = {r: [] for r in RULES}
     rule_inter_total_mask = {r: 0.0 for r in RULES}
     rule_union_total_mask = {r: 0.0 for r in RULES}
 
     # Greedy Trackers
     rule_iou_tn0_greedy = {r: [] for r in RULES}
+    rule_iou_tn1_greedy = {r: [] for r in RULES}
     rule_inter_total_greedy = {r: 0.0 for r in RULES}
     rule_union_total_greedy = {r: 0.0 for r in RULES}
 
     rule_tn_count = {r: 0 for r in RULES}
+
+    # IoU-conditioned violation identification counters
+    # A TP only counts if greedy IoU >= IOU_CONDITIONED_THRESHOLD
+    iou_cond_global_tp, iou_cond_global_fp, iou_cond_global_fn = 0, 0, 0
+    iou_cond_rule_counts = {r: {"tp": 0, "fp": 0, "fn": 0} for r in RULES}
     
     for pred_dict, gt_dict in zip(predictions, references):
         pred_dict = pred_dict or {}
@@ -91,6 +105,39 @@ def compute_violation_metrics(predictions: List[Dict[str, Any]], references: Lis
                 rule_counts[r]["fn"] += 1
                 
         common_rules = pred_rules & gt_rules
+
+        # --- IoU-conditioned identification ---
+        # For rules predicted AND in GT (common_rules): check if grounding is good enough
+        # For rules only in pred (FP) or only in GT (FN): unconditionally count them
+        for r in RULES:
+            in_pred, in_gt = r in pred_rules, r in gt_rules
+            if in_pred and in_gt:
+                # Compute greedy IoU to gate the TP
+                p_boxes_1000 = normalize_boxes(pred_by_rule[r].get("bounding_box", []))
+                g_boxes_01 = normalize_boxes(gt_by_rule[r].get("bounding_box", []))
+                p_boxes_01 = [scale_1000_to_01(b) for b in p_boxes_1000]
+                p_boxes_01 = clean_boxes(p_boxes_01)
+                g_boxes_01 = clean_boxes(g_boxes_01)
+                greedy_iou, _, _ = greedy_multibox_iou(p_boxes_01, g_boxes_01)
+
+                if greedy_iou >= IOU_CONDITIONED_THRESHOLD:
+                    iou_cond_rule_counts[r]["tp"] += 1
+                    iou_cond_global_tp += 1
+                else:
+                    # Correctly identified the rule, but box is in the wrong place.
+                    # Counts as both FP (bad prediction) and FN (missed the real location).
+                    iou_cond_rule_counts[r]["fp"] += 1
+                    iou_cond_rule_counts[r]["fn"] += 1
+                    iou_cond_global_fp += 1
+                    iou_cond_global_fn += 1
+            elif in_pred and not in_gt:
+                iou_cond_rule_counts[r]["fp"] += 1
+                iou_cond_global_fp += 1
+            elif not in_pred and in_gt:
+                iou_cond_rule_counts[r]["fn"] += 1
+                iou_cond_global_fn += 1
+
+        # --- Grounding IoU for common rules (existing logic) ---
         for r in common_rules:
             pred_boxes_1000 = pred_by_rule[r].get("bounding_box", [])
             gt_boxes_01 = gt_by_rule[r].get("bounding_box", [])
@@ -117,10 +164,14 @@ def compute_violation_metrics(predictions: List[Dict[str, Any]], references: Lis
                 # True Negative
                 rule_iou_tn0_mask[r].append(0.0)
                 rule_iou_tn0_greedy[r].append(0.0)
+                rule_iou_tn1_mask[r].append(1.0)
+                rule_iou_tn1_greedy[r].append(1.0)
                 rule_tn_count[r] += 1
             else:
                 rule_iou_tn0_mask[r].append(mask_iou)
                 rule_iou_tn0_greedy[r].append(greedy_iou_val)
+                rule_iou_tn1_mask[r].append(mask_iou)
+                rule_iou_tn1_greedy[r].append(greedy_iou_val)
 
             rule_inter_total_mask[r] += mask_result["intersection"]
             rule_union_total_mask[r] += mask_result["union"]
@@ -167,16 +218,20 @@ def compute_violation_metrics(predictions: List[Dict[str, Any]], references: Lis
         
     # Grounding IoU per rule and global macro/micro
     tn0_macros_mask, tn0_macros_greedy = [], []
+    tn1_macros_mask, tn1_macros_greedy = [], []
     total_inter_mask, total_union_mask = 0.0, 0.0
     total_inter_greedy, total_union_greedy = 0.0, 0.0
     
     for r in RULES:
         metrics[f"violation_grounding_tn_count_{r}"] = rule_tn_count[r]
         
-        # Mask
+        # Mask (tn0 + tn1)
         tn0_val_mask = sum(rule_iou_tn0_mask[r]) / len(rule_iou_tn0_mask[r]) if rule_iou_tn0_mask[r] else 0.0
+        tn1_val_mask = sum(rule_iou_tn1_mask[r]) / len(rule_iou_tn1_mask[r]) if rule_iou_tn1_mask[r] else 0.0
         metrics[f"violation_grounding_mask_iou_{r}_tn0"] = tn0_val_mask
+        metrics[f"violation_grounding_mask_iou_{r}_tn1"] = tn1_val_mask
         tn0_macros_mask.append(tn0_val_mask)
+        tn1_macros_mask.append(tn1_val_mask)
         
         inter_r_mask = rule_inter_total_mask[r]
         union_r_mask = rule_union_total_mask[r]
@@ -184,21 +239,63 @@ def compute_violation_metrics(predictions: List[Dict[str, Any]], references: Lis
         total_inter_mask += inter_r_mask
         total_union_mask += union_r_mask
 
-        # Greedy
+        # Greedy (tn0 + tn1)
         tn0_val_greedy = sum(rule_iou_tn0_greedy[r]) / len(rule_iou_tn0_greedy[r]) if rule_iou_tn0_greedy[r] else 0.0
+        tn1_val_greedy = sum(rule_iou_tn1_greedy[r]) / len(rule_iou_tn1_greedy[r]) if rule_iou_tn1_greedy[r] else 0.0
         metrics[f"violation_grounding_greedy_iou_{r}_tn0"] = tn0_val_greedy
+        metrics[f"violation_grounding_greedy_iou_{r}_tn1"] = tn1_val_greedy
         tn0_macros_greedy.append(tn0_val_greedy)
+        tn1_macros_greedy.append(tn1_val_greedy)
         
         inter_r_greedy = rule_inter_total_greedy[r]
         union_r_greedy = rule_union_total_greedy[r]
         metrics[f"violation_grounding_greedy_iou_{r}_micro"] = inter_r_greedy / union_r_greedy if union_r_greedy > 0 else 0.0
         total_inter_greedy += inter_r_greedy
         total_union_greedy += union_r_greedy
-        
+
+    # Global grounding IoU aggregates (tn0)
     metrics["violation_grounding_mask_iou_macro_tn0"] = sum(tn0_macros_mask) / len(tn0_macros_mask) if tn0_macros_mask else 0.0
     metrics["violation_grounding_mask_iou_micro_mean"] = total_inter_mask / total_union_mask if total_union_mask > 0 else 0.0
-
     metrics["violation_grounding_greedy_iou_macro_tn0"] = sum(tn0_macros_greedy) / len(tn0_macros_greedy) if tn0_macros_greedy else 0.0
     metrics["violation_grounding_greedy_iou_micro_mean"] = total_inter_greedy / total_union_greedy if total_union_greedy > 0 else 0.0
+
+    # Global grounding IoU aggregates (tn1)
+    metrics["violation_grounding_mask_iou_macro_tn1"] = sum(tn1_macros_mask) / len(tn1_macros_mask) if tn1_macros_mask else 0.0
+    metrics["violation_grounding_greedy_iou_macro_tn1"] = sum(tn1_macros_greedy) / len(tn1_macros_greedy) if tn1_macros_greedy else 0.0
+
+    # -----------------------------------------------------------------------
+    # IoU-Conditioned Rule Identification (Metric 3)
+    # A TP only counts if greedy IoU >= IOU_CONDITIONED_THRESHOLD.
+    # rule_0 is excluded — it has no bounding box by definition.
+    # -----------------------------------------------------------------------
+    metrics["violation_identification_iou_threshold"] = IOU_CONDITIONED_THRESHOLD
+
+    # Micro (pooled across all rules)
+    iou_cond_p_micro = iou_cond_global_tp / (iou_cond_global_tp + iou_cond_global_fp) if (iou_cond_global_tp + iou_cond_global_fp) > 0 else 0.0
+    iou_cond_r_micro = iou_cond_global_tp / (iou_cond_global_tp + iou_cond_global_fn) if (iou_cond_global_tp + iou_cond_global_fn) > 0 else 0.0
+    iou_cond_f1_micro = 2 * iou_cond_p_micro * iou_cond_r_micro / (iou_cond_p_micro + iou_cond_r_micro) if (iou_cond_p_micro + iou_cond_r_micro) > 0 else 0.0
+    metrics["violation_identification_iou_conditioned_precision_micro"] = iou_cond_p_micro
+    metrics["violation_identification_iou_conditioned_recall_micro"] = iou_cond_r_micro
+    metrics["violation_identification_iou_conditioned_f1_micro"] = iou_cond_f1_micro
+
+    # Per-rule + macro (only RULES, not rule_0)
+    iou_cond_precisions, iou_cond_recalls, iou_cond_f1s = [], [], []
+    for r in RULES:
+        tp_c = iou_cond_rule_counts[r]["tp"]
+        fp_c = iou_cond_rule_counts[r]["fp"]
+        fn_c = iou_cond_rule_counts[r]["fn"]
+        p_c = tp_c / (tp_c + fp_c) if (tp_c + fp_c) > 0 else 0.0
+        r_c = tp_c / (tp_c + fn_c) if (tp_c + fn_c) > 0 else 0.0
+        f1_c = 2 * p_c * r_c / (p_c + r_c) if (p_c + r_c) > 0 else 0.0
+        metrics[f"violation_identification_iou_conditioned_precision_{r}"] = p_c
+        metrics[f"violation_identification_iou_conditioned_recall_{r}"] = r_c
+        metrics[f"violation_identification_iou_conditioned_f1_{r}"] = f1_c
+        iou_cond_precisions.append(p_c)
+        iou_cond_recalls.append(r_c)
+        iou_cond_f1s.append(f1_c)
+
+    metrics["violation_identification_iou_conditioned_precision_macro"] = sum(iou_cond_precisions) / len(iou_cond_precisions) if iou_cond_precisions else 0.0
+    metrics["violation_identification_iou_conditioned_recall_macro"] = sum(iou_cond_recalls) / len(iou_cond_recalls) if iou_cond_recalls else 0.0
+    metrics["violation_identification_iou_conditioned_f1_macro"] = sum(iou_cond_f1s) / len(iou_cond_f1s) if iou_cond_f1s else 0.0
     
     return metrics
