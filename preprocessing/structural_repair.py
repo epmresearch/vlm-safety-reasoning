@@ -276,6 +276,14 @@ def sanitize_json_syntax(text: str, tracker: Optional[ChangeTracker] = None) -> 
     'sanitized' event."""
     # NEW: Pre-pass to fix typos that span across string quotes (e.g. `[["35..."]}`)
     text = re.sub(r'\[\s*\[\s*("[\d\s,.-]+")\s*\]\s*\}', r'[\1]}', text)
+    
+    # NEW: Fix missing closing quotes before commas in multi-line numeric string lists
+    # Turns: `"895,447,936,540,\n "936...` into `"895,447,936,540",\n "936...`
+    text_before = text
+    text = re.sub(r'"([\d.,\s]+?),\s*(?=\n\s*")', r'"\1",', text)
+    if text != text_before and tracker:
+        tracker.log("json_syntax_missing_closing_quote_in_list", detail="Inserted missing closing quote before trailing comma in numeric list.")
+
     segments = _split_string_segments(text)
     out = []
     for is_str, seg in segments:
