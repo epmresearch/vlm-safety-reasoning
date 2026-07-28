@@ -1009,13 +1009,13 @@ def normalize_violation_value(
         if reason is None:
             reason = ""
         if isinstance(reason, list):
+            joined = ". ".join(str(r).strip().rstrip(".") for r in reason if r)
             if tracker:
                 tracker.log(
-                    "violation_reason_list_dropped", field=rule_key,
-                    detail="Reason given as a list of multiple strings; joining would alter "
-                           "phrasing, so this violation is dropped instead of merged.",
+                    "violation_reason_list_joined", field=rule_key,
+                    detail=f"{len(reason)} reason string(s) joined with '. ' into a single string.",
                 )
-            return None
+            reason = joined
 
         boxes = normalize_boxes(
             fixed.get("bounding_box", []), field=f"{rule_key}.bounding_box", tracker=tracker
