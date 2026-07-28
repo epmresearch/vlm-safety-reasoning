@@ -1,15 +1,15 @@
-# Baseline vs. SFT Evaluation Report (Repetition Penalty = 1.0)
+# Baseline vs. SFT Evaluation Report
 ### Construction Site 10k - VLM Fine-Tuning Analysis
 
 ---
 
 ## 1. Scope and Methodology Note
 
-This report compares the **untuned 2B baseline VLM (unsloth/Qwen3-VL-2B-Instruct)** against the **SFT (supervised fine-tuned) checkpoint of the same model**, both evaluated at **repetition penalty = 1.0 (decoding default, no penalty applied)**.
+This report compares the **untuned 2B baseline VLM (unsloth/Qwen3-VL-2B-Instruct)** against the **SFT (supervised fine-tuned) checkpoint of the same model**, both evaluated at **repetition penalty = 1.0**.
 
-All quality metrics below are computed **after** a structural JSON repair pipeline is applied to raw model outputs. Raw (pre-repair) validity is reported separately in Section 2, since it is the more honest measure of what the model natively produces.
+All quality metrics below are computed **after** a structural JSON repair pipeline is applied to raw baseline model outputs. Raw (pre-repair) validity is reported separately in Section 2, since it is the more honest measure of what the model natively produces.
 
-Test set: 3,004 records. Ground-truth reference lengths: **caption ≈ 48.5 words**, **reason ≈ 13.3 words**.
+Test set: 3,004 records.
 
 ---
 
@@ -32,7 +32,7 @@ The baseline produces a well-formed, schema-compliant response **natively** only
 | JSON validity rate | 99.33% (2984/3004) | 100.00% (3004/3004) |
 | Schema adherence rate | 99.33% (2984/3004) | 100.00% (3004/3004) |
 
-After repair, both models look nearly identical (99.3% vs. 100%). **This is the key reason raw validity (2.1) — not post-repair validity — is the metric that should be foregrounded in the paper**: post-repair numbers mask a real and large difference in native output reliability that matters for any deployment scenario without a repair step in the loop.
+After repair, both models look nearly identical (99.3% vs. 100%). **This is the key reason raw validity (2.1) — not post-repair validity — is the metric that should be foregrounded in the paper**: post-repair numbers mask a real and large difference in native output reliability.
 
 ---
 
@@ -49,7 +49,7 @@ After repair, both models look nearly identical (99.3% vs. 100%). **This is the 
 | Avg. words/caption | 73.33 | 59.58 | −13.75 | length reduced |
 | Min / Max words | 1 / 216 | 26 / 115 | — | far tighter spread |
 
-**Reading:** SFT improves every content-overlap metric (BERTScore F1, METEOR, CIDEr-D), most sharply CIDEr-D (~2x), which is the metric most sensitive to matching the exact phrasing/n-grams a human annotator would use. CLIPScore (image-text alignment, not a reference-comparison metric) is essentially flat — both models describe the *correct scene content* similarly well; the gap is in how closely the *phrasing* matches the reference style.
+**Reading:** SFT improves every content-overlap metric (BERTScore F1, METEOR, CIDEr-D), most sharply CIDEr-D (~2x), which is the metric most sensitive to matching the exact phrasing/n-grams. CLIPScore (image-text alignment, not a reference-comparison metric) is essentially flat — both models describe the *correct scene content* similarly well; the gap is in how closely the *phrasing* matches the reference style.
 
 Neither model matches the ground-truth caption length of 48.5 words: baseline over-generates by +51.2% (73.3 vs 48.5), SFT over-generates by +22.8% (59.6 vs 48.5). SFT is closer but still verbose relative to GT. The baseline's extreme max (216 words) and min (1 word) indicate output instability that SFT largely eliminates (max 115, min 26).
 
@@ -104,7 +104,7 @@ SFT roughly **doubles** presence-detection F1 in aggregate.
 | **Aggregate (micro mean)** | **0.3355** | **0.7732** | **+130.5%** |
 | Aggregate (macro mean) | 0.1815 | 0.5759 | +217.3% |
 
-**Reading:** This is the sharpest signal in the whole report. Not only does SFT detect objects far more reliably (Section 4.1), when it does localize an object the mask quality is dramatically better — more than doubled for excavator, more than quadrupled for rebar and hard hat. This indicates fine-tuning taught the model genuine spatial grounding for this domain, not just a bias toward saying "yes."
+**Reading:** This is the sharpest signal. Not only does SFT detect objects far more reliably (Section 4.1), when it does localize an object the mask quality is dramatically better — more than doubled for excavator, more than quadrupled for rebar and hard hat. This indicates fine-tuning taught the model genuine spatial grounding for this domain, not just a bias toward saying "yes."
 
 **Caveat:** Rebar (mask IoU 0.446) and White Hard Hat (0.638) remain well below Excavator (0.874) even after fine-tuning. These are the two rarer classes in training (846 and 680 examples vs. 2,415 for excavator) — a residual capability gap likely tied to data volume, and a natural target for the RL phase.
 
@@ -123,7 +123,7 @@ SFT roughly **doubles** presence-detection F1 in aggregate.
 | Recall (macro) | 0.2661 | 0.1922 | −27.8% |
 | F1 (macro) | 0.0838 | 0.2299 | +174.4% |
 
-**Reading — this is the most important nuance in the report.** SFT does **not** uniformly dominate here. The baseline achieves much higher *recall* (0.74 vs 0.32) but at the cost of extremely poor precision (0.13) — it is essentially over-flagging violations indiscriminately. SFT flips this: high precision (0.78), lower recall (0.32). F1 favors SFT because precision improved by a larger margin than recall was sacrificed, but **a system that misses ~68% of true violations is a real limitation**, not just a metric footnote — this should be stated plainly in the paper as an open problem, and is a natural target for reward shaping in the GRPO phase (Section 8).
+**Reading — this is the important nuance.** SFT does **not** uniformly dominate here. The baseline achieves much higher *recall* (0.74 vs 0.32) but at the cost of extremely poor precision (0.13) — it is essentially over-flagging violations indiscriminately. SFT flips this: high precision (0.78), lower recall (0.32). F1 favors SFT because precision improved by a larger margin than recall was sacrificed, but **a system that misses ~68% of true violations is a real limitation**, not just a metric footnote — this is a problem, and is a natural target for reward shaping in the GRPO phase.
 
 ### 5.2 Per-rule identification F1
 
@@ -135,7 +135,7 @@ SFT roughly **doubles** presence-detection F1 in aggregate.
 | Rule 4 (Blind Spot) | 24 | 0.0 / 0.0 / 0.0 | 0.0 / 0.0 / 0.0 | both fail |
 | Rule 0 (no violation) | — | 0.986 / 0.213 / 0.350 | 0.905 / 0.985 / 0.943 | +169.4% |
 
-**Reading:** SFT improves substantially on the two rules with meaningful training support (Rule 1: 677 train examples; Rule 2: 59). **Both models score zero on Rule 3 and Rule 4** — with only 109 and 46 training examples respectively (and 63 / 24 in test), this is a data-scarcity failure common to both, not something fine-tuning fixed. This is worth flagging explicitly as an unresolved gap, not glossing over.
+**Reading:** SFT improves substantially on the two rules with meaningful training support (Rule 1: 677 train examples; Rule 2: 59). **Both models score zero on Rule 3 and Rule 4** — with only 109 and 46 training examples respectively (and 63 / 24 in test), this is a data-scarcity failure common to both, not something fine-tuning fixed. This is worth flagging explicitly as an unresolved gap.
 
 Rule 0 (correctly recognizing "no violation present") improves from F1 0.350 to 0.943 — this single number largely explains the aggregate precision gain in 5.1: the baseline was rarely willing/able to correctly say nothing was wrong (recall 0.213), while SFT does so reliably (recall 0.985).
 
@@ -148,7 +148,7 @@ Rule 0 (correctly recognizing "no violation present") improves from F1 0.350 to 
 | F1 (micro) | 0.0735 | 0.3377 | **+359.3% (~4.6x)** |
 | F1 (macro) | 0.0323 | 0.1546 | +378.5% |
 
-Under the stricter joint criterion (must both identify **and** correctly localize the violation), SFT's advantage is largest of any metric family in this report (~4.6x on F1), driven almost entirely by the precision gain — recall is essentially unchanged between the two models under this stricter test. This reinforces the same story as 5.1: **SFT's gain is concentrated in precision/specificity, not in catching more true violations.**
+Under the stricter joint criterion (must both identify **and** correctly localize the violation), SFT's advantage is largest of any metric family (~4.6x on F1), driven almost entirely by the precision gain — recall is essentially unchanged between the two models under this stricter test. This reinforces the same story as 5.1: **SFT's gain is concentrated in precision/specificity, not in catching more true violations.**
 
 ---
 
@@ -182,7 +182,7 @@ Under the stricter joint criterion (must both identify **and** correctly localiz
 | Rule 1 | 0.2062 | 0.7532 | +265.3% |
 | Rule 2 | 0.5244 | 0.7542 | +43.8% |
 
-**Reading:** SFT's reasoning-text quality gain is the largest raw effect size in the report on a per-sample (micro) basis — nearly 4x BERTScore F1, with CIDEr-D moving from essentially zero to a substantial positive value, indicating the baseline's free-text justifications share almost no n-gram overlap with the reference style, while SFT's do. Combined with the length calibration above, SFT has learned both the *content* and the *register/brevity* of the target reasoning field; the baseline has learned neither.
+**Reading:** SFT's reasoning-text quality gain is large on a per-sample (micro) basis — nearly 4x BERTScore F1, with CIDEr-D moving from essentially zero to a substantial positive value, indicating the baseline's free-text justifications share almost no n-gram overlap with the reference style, while SFT's do. Combined with the length calibration above, SFT has learned both the *content* and the *register/brevity* of the target reasoning field; the baseline has learned neither.
 
 ---
 
@@ -204,12 +204,7 @@ Under the stricter joint criterion (must both identify **and** correctly localiz
 
 ## 8. Conclusions and Next-Phase (GRPO/RL) Implications
 
-**Overall conclusion:** Fine-tuning delivers large, consistent gains over the baseline across format compliance, captioning fidelity, spatial grounding, and reasoning-text quality — improvements ranging from roughly +19% to +4.6x depending on the metric family, with the largest gains concentrated in grounding IoU and reasoning-text similarity. This comparison (Baseline vs. SFT, RP=1.0) is a defensible, parameter-free headline result for the paper.
+**Overall conclusion:** Fine-tuning delivers large, consistent gains over the baseline across format compliance, captioning fidelity, spatial grounding, and reasoning-text quality — improvements ranging from roughly +19% to +4.6x depending on the metric family, with the largest gains concentrated in grounding IoU and reasoning-text similarity.
 
-**The one genuine trade-off, and it should be reported honestly rather than hidden:** SFT trades recall for precision on violation identification (recall drops from 0.74 to 0.32 while precision rises from 0.13 to 0.78). The baseline's high recall is a symptom of over-triggering (it also has far worse precision and a near-collapsed ability to correctly say "no violation," Rule 0 recall 0.21), not a capability worth preserving — but it does mean **SFT alone leaves ~68% of true violations undetected**, which is a real limitation for a safety-inspection use case and should be stated as such.
-
-**Two concrete gaps for the RL/GRPO phase, both directly evidenced above:**
-1. **Violation recall**, particularly for Rule 1 (0.409) and the entirely-failed Rules 3 and 4 (0.0 for both models, likely a data-scarcity issue given 109/46 training examples respectively). A reward term that credits correctly identified violations — weighted to account for rule rarity — is a natural lever GRPO can pull that a fixed decoding parameter cannot.
-2. **Minority-class grounding** — Rebar (IoU 0.446) and White Hard Hat (IoU 0.638) remain well below Excavator (IoU 0.874) despite fine-tuning, tracking the ~3.5x smaller training support for those classes (846 and 680 vs. 2,415 examples). An IoU-based reward term, possibly with class reweighting, is a direct way to target this residual gap.
-
-Both gaps are consistent with the training-set imbalance documented in the dataset statistics, and neither is likely to be resolved by decoding-time adjustments — they represent genuine capability ceilings for the SFT model that make a strong, well-motivated case for the RL phase.
+**The one genuine trade-off:** SFT trades recall for precision on violation identification (recall drops from 0.74 to 0.32 while precision rises from 0.13 to 0.78). The baseline's high recall is a symptom of over-triggering (it also has far worse precision and a near-collapsed ability to correctly say "no violation," Rule 0 recall 0.21), not a capability worth preserving — but it does mean **SFT alone leaves ~68% of true violations undetected**, which is a real limitation for a safety-inspection use case.
+Violation recall, particularly for Rule 1 (0.409) and the entirely-failed Rules 3 and 4 (0.0 for both models, likely a data-scarcity issue given 109/46 training examples respectively).
