@@ -5,7 +5,7 @@
 
 ## 1. Scope and Methodology Note
 
-This report compares the **untuned 2B baseline VLM (unsloth/Qwen3-VL-2B-Instruct)** against the **SFT (supervised fine-tuned) checkpoint of the same model**, both evaluated at **repetition penalty = 1.0**.
+This report compares the **untuned 2B baseline VLM (unsloth/Qwen3-VL-2B-Instruct)** against the **SFT (supervised fine-tuned) checkpoint of the same model**, both evaluated at **repetition penalty = 1.0 (decoding default, no penalty applied)**. No other repetition-penalty condition is included in this report.
 
 All quality metrics below are computed **after** a structural JSON repair pipeline is applied to raw baseline model outputs. Raw (pre-repair) validity is reported separately in Section 2, since it is the more honest measure of what the model natively produces.
 
