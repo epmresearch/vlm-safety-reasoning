@@ -364,7 +364,7 @@ def attempt_truncation_repair(snippet: str) -> Optional[str]:
                     stack.pop()
 
     s = re.sub(r"[,:]\s*$", "", s.rstrip())
-    s = re.sub(r',\s*"(?:[^"\\]|\\.)*"\s*:?\s*$', "", s)
+    s = re.sub(r'"(?:[^"\\]|\\.)*"\s*:?\s*$', "", s)
     s = re.sub(r"[,:]\s*$", "", s.rstrip())
 
     closers = {"{": "}", "[": "]"}
