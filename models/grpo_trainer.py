@@ -1,11 +1,22 @@
 """
 GRPO / GSPO-style reinforcement learning on top of an SFT checkpoint,
-using TRL's GRPOTrainer with unified reward functions from rewards/.
+using TRL's GRPOTrainer with the 6-component reward system from rewards/.
 
 The model produces unified JSON output (caption + detected_objects +
-safety_violations) and the composite reward scores it across all axes.
+safety_violations) and the composite reward scores it across six axes:
+    1. Format validity  (schema compliance)
+    2. Caption quality   (semantic + lexical + length calibration)
+    3. Object grounding  (mask-union IoU with TN fix)
+    4. Violation ID       (F-beta, β=2, recall-weighted)
+    5. Violation grounding (TP-conditioned mask-union IoU)
+    6. Reasoning quality   (TP-conditioned semantic + lexical + length)
+
+Supports two modes:
+    - TRL native multi-reward:  reward_funcs=[f1,...,f6], reward_weights=[w1,...,w6]
+    - Fallback single-function: reward_funcs=[unified_fn] (for older TRL versions)
 """
-from typing import Callable, Dict, List
+import os
+from typing import Callable, Dict, List, Optional
 
 from core.config import load_config, load_task_config
 from core.io import ensure_dir
@@ -13,58 +24,45 @@ from core.logging import get_logger
 from core.wandb_utils import init_run, finish_run
 from models.model_loader import get_model_info, load_model_for_training
 from core.io import get_drive_path
-from data.loader import load_construction_dataset
-# TODO: to_grpo_prompt doesn't exist yet
-# from data.preprocessor import to_grpo_prompt
+from data.loader import load_dataset_splits
+from data.preprocessor import to_grpo_prompt, build_grpo_dataset
 
-from rewards.unified_reward import compute_reward, DEFAULT_WEIGHTS
+from rewards.unified_reward import (
+    get_reward_funcs_and_weights,
+    build_grpo_reward_fn,
+    REWARD_COMPONENTS,
+)
 
 logger = get_logger(__name__)
 
 
-def _build_grpo_reward_fn(
-    weights: Dict[str, float],
-) -> Callable[[List[str], List[Dict]], List[float]]:
-    """Build a single reward function for GRPOTrainer.
-
-    TRL's GRPOTrainer expects reward functions with signature:
-        (completions: List[str], **kwargs) -> List[float]
-
-    where kwargs includes ground_truth (list of dicts aligned with
-    completions). We wrap our unified compute_reward to match.
-
-    Args:
-        weights: Per-component reward weights.
-
-    Returns:
-        A callable matching the GRPOTrainer reward function interface.
-    """
-
-    def unified_reward_fn(
-        completions: List[str],
-        ground_truth: List[Dict] = None,
-        **kwargs,
-    ) -> List[float]:
-        if ground_truth is None:
-            return [0.0] * len(completions)
-
-        scores = []
-        for completion, gt in zip(completions, ground_truth):
-            score = compute_reward(completion, gt, weights=weights)
-            scores.append(score)
-        return scores
-
-    unified_reward_fn.__name__ = "reward_unified"
-    return unified_reward_fn
+def _check_trl_supports_reward_weights() -> bool:
+    """Check if installed TRL version supports reward_weights in GRPOConfig."""
+    try:
+        from trl import GRPOConfig
+        import inspect
+        sig = inspect.signature(GRPOConfig)
+        return "reward_weights" in sig.parameters
+    except Exception:
+        return False
 
 
-def run_grpo(task: str, model_id: str, variant_name: str = "grpo_v1") -> str:
+def run_grpo(
+    task: str,
+    model_id: str,
+    variant_name: str = "grpo_v1",
+    max_samples: Optional[int] = None,
+    adapter_path: Optional[str] = None,
+) -> str:
     """Run GRPO training for the unified safety inspection task.
 
     Args:
         task: Task name (e.g. "full_unified").
         model_id: Model registry ID to fine-tune.
         variant_name: Name for the output variant.
+        max_samples: Optional cap on dataset size (for debugging).
+        adapter_path: Optional explicit path to the SFT adapter to load. 
+                      Overrides the default in the model registry.
 
     Returns:
         Path to the saved checkpoint directory.
@@ -73,52 +71,90 @@ def run_grpo(task: str, model_id: str, variant_name: str = "grpo_v1") -> str:
     task_cfg = load_task_config(task)
     entry = get_model_info(model_id)
     hf_path = entry["hf_path"]
-    lora_path = entry.get("lora_path")  # typically the SFT adapter
+    
+    # Use the explicitly provided adapter_path if available, otherwise fallback to registry
+    lora_path = adapter_path if adapter_path is not None else entry.get("lora_path")
 
-    from unsloth import FastVisionModel
     from trl import GRPOTrainer, GRPOConfig
 
     logger.info(f"Loading model for GRPO: base={hf_path}, adapter={lora_path}")
-    model, tokenizer = FastVisionModel.from_pretrained(hf_path, load_in_4bit=True)
-    if lora_path:
-        from peft import PeftModel
-        model = PeftModel.from_pretrained(model, lora_path, is_trainable=True)
-    FastVisionModel.for_training(model)
+    model, tokenizer, _ = load_model_for_training(
+        model_name=hf_path,
+        tier=model_id,
+        sft_cfg=cfg,
+        adapter_path=lora_path,
+    )
 
-    # Build reward weights from task config, falling back to defaults
-    config_weights = task_cfg.get("reward_weights", {})
-    weights = dict(DEFAULT_WEIGHTS)
-    weights.update(config_weights)
+    # Left padding is required for GRPO batched generation rollouts
+    tokenizer.padding_side = "left"
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
 
-    logger.info(f"Reward weights: {weights}")
+    # -----------------------------------------------------------------------
+    # Build reward configuration
+    # -----------------------------------------------------------------------
+    use_native_weights = _check_trl_supports_reward_weights()
+    logger.info(f"TRL native reward_weights support: {use_native_weights}")
 
+    # Log the component registry
+    for name, _, weight in REWARD_COMPONENTS:
+        logger.info(f"  Reward component: {name} (weight={weight:.2f})")
+
+    # -----------------------------------------------------------------------
+    # Build GRPO prompt dataset with oversampling
+    # -----------------------------------------------------------------------
     logger.info("Building GRPO prompt dataset...")
-    raw_dataset = load_construction_dataset()
-    
-    # TODO: to_grpo_prompt and Prompt/Message API are not fully implemented
+    raw_dataset = load_dataset_splits()
+
+    # Apply oversampling to match SFT strategy
     try:
-        from data.preprocessor import to_grpo_prompt
-        grpo_prompts = [to_grpo_prompt(raw, task, task_cfg) for raw in raw_dataset["train"]]
-        train_data = [
-            {
-                "prompt": [m.dict() for m in p.prompt_messages],
-                "image_id": p.image_id,
-                "ground_truth": p.ground_truth,
-            }
-            for p in grpo_prompts
-        ]
+        from data.oversampling import build_oversampled_indices
+        train_split = raw_dataset["train"]
+        oversampled_indices = build_oversampled_indices(train_split)
+        train_split = train_split.select(oversampled_indices)
+        logger.info(
+            f"Oversampled training set: {len(raw_dataset['train'])} → "
+            f"{len(train_split)} samples"
+        )
     except ImportError:
-        logger.warning("to_grpo_prompt not found, using empty train_data for now")
-        train_data = []
+        train_split = raw_dataset["train"]
+        logger.warning("Oversampling module not available, using raw train split")
 
-    reward_fn = _build_grpo_reward_fn(weights)
+    from datasets import Dataset
+    train_data_list = build_grpo_dataset(train_split, max_samples=max_samples)
+    train_data = Dataset.from_list(train_data_list)
+    logger.info(f"GRPO prompt dataset built: {len(train_data)} samples")
 
-    output_dir = str(get_drive_path("checkpoints", task, variant_name))
+    if not train_data:
+        raise ValueError(
+            "GRPO training dataset is empty. Cannot train on zero samples."
+        )
+
+    # -----------------------------------------------------------------------
+    # Output directory & checkpoint recovery
+    # -----------------------------------------------------------------------
+    short_name = entry.get("short_name", f"qwen3vl-{model_id}")
+    output_dir = str(get_drive_path("checkpoints", short_name, variant_name))
     ensure_dir(output_dir)
 
+    from transformers.trainer_utils import get_last_checkpoint
+
+    resume_from_checkpoint = False
+    if os.path.exists(output_dir):
+        last_checkpoint = get_last_checkpoint(output_dir)
+        if last_checkpoint is not None:
+            resume_from_checkpoint = True
+            logger.info(f"Resuming from checkpoint: {last_checkpoint}")
+
+    # -----------------------------------------------------------------------
+    # WandB tracking
+    # -----------------------------------------------------------------------
     run = init_run(study_name=f"grpo-{task}", run_name=variant_name, config=cfg)
 
-    grpo_config = GRPOConfig(
+    # -----------------------------------------------------------------------
+    # GRPOConfig + Trainer setup
+    # -----------------------------------------------------------------------
+    grpo_config_kwargs = dict(
         output_dir=output_dir,
         num_generations=cfg["num_generations"],
         max_prompt_length=cfg["max_prompt_length"],
@@ -133,29 +169,54 @@ def run_grpo(task: str, model_id: str, variant_name: str = "grpo_v1") -> str:
         report_to=["wandb"],
     )
 
-    trainer = GRPOTrainer(
-        model=model,
-        args=grpo_config,
-        train_dataset=train_data,
-        reward_funcs=[reward_fn],
-        tokenizer=tokenizer,
-    )
+    if use_native_weights:
+        # ------------------------------------------------------------------
+        # Mode 1: TRL native multi-reward (preferred — per-component logging)
+        # ------------------------------------------------------------------
+        reward_funcs, reward_weights = get_reward_funcs_and_weights()
+        grpo_config_kwargs["reward_weights"] = reward_weights
 
-    import os
-    from transformers.trainer_utils import get_last_checkpoint
-    
-    resume_from_checkpoint = False
-    if os.path.exists(output_dir):
-        last_checkpoint = get_last_checkpoint(output_dir)
-        if last_checkpoint is not None:
-            resume_from_checkpoint = True
-            logger.info(f"Resuming from checkpoint: {last_checkpoint}")
+        grpo_config = GRPOConfig(**grpo_config_kwargs)
 
+        trainer = GRPOTrainer(
+            model=model,
+            args=grpo_config,
+            train_dataset=train_data,
+            reward_funcs=reward_funcs,
+            processing_class=tokenizer,
+        )
+        logger.info(
+            f"Using TRL native multi-reward mode: "
+            f"{len(reward_funcs)} functions, weights={reward_weights}"
+        )
+    else:
+        # ------------------------------------------------------------------
+        # Mode 2: Fallback single composite reward (older TRL versions)
+        # ------------------------------------------------------------------
+        reward_fn = build_grpo_reward_fn()
+
+        grpo_config = GRPOConfig(**grpo_config_kwargs)
+
+        trainer = GRPOTrainer(
+            model=model,
+            args=grpo_config,
+            train_dataset=train_data,
+            reward_funcs=[reward_fn],
+            processing_class=tokenizer,
+        )
+        logger.info(
+            "Using single composite reward mode (TRL reward_weights not available)"
+        )
+
+    # -----------------------------------------------------------------------
+    # Train
+    # -----------------------------------------------------------------------
     logger.info(
         f"Starting GRPO training: task={task}, model_id={model_id}, "
-        f"variant={variant_name}"
+        f"variant={variant_name}, dataset_size={len(train_data)}, "
+        f"num_generations={cfg['num_generations']}, beta={cfg['beta']}"
     )
-    
+
     try:
         trainer.train(resume_from_checkpoint=resume_from_checkpoint)
         logger.info(f"Saving adapter to {output_dir}")
@@ -175,5 +236,7 @@ if __name__ == "__main__":
     parser.add_argument("--task", required=True)
     parser.add_argument("--model_id", required=True)
     parser.add_argument("--variant_name", default="grpo_v1")
+    parser.add_argument("--max_samples", type=int, default=None,
+                        help="Cap dataset size for debugging")
     args = parser.parse_args()
-    run_grpo(args.task, args.model_id, args.variant_name)
+    run_grpo(args.task, args.model_id, args.variant_name, args.max_samples)

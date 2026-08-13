@@ -157,3 +157,85 @@ def build_ground_truth_dict(raw: Dict[str, Any]) -> Dict[str, Any]:
         gt[cls] = [list(b) for b in boxes]
         
     return gt
+
+
+# ---------------------------------------------------------------------------
+# GRPO prompt preparation
+# ---------------------------------------------------------------------------
+
+def to_grpo_prompt(raw: Dict[str, Any], pil_image) -> Dict[str, Any]:
+    """Converts a single raw dataset sample into GRPO prompt format.
+
+    Unlike SFT (which includes the assistant response for teacher forcing),
+    GRPO only needs the prompt (system + user messages) and the ground truth
+    for reward computation. The model generates its own response during
+    rollouts.
+
+    Args:
+        raw: Dict from the HF dataset (one row).
+        pil_image: The PIL Image object for this sample.
+
+    Returns:
+        Dict with:
+            - "prompt": list of message dicts (system + user, no assistant)
+            - "ground_truth": ground truth dict for reward computation
+            - "image_id": the image identifier
+    """
+    prompt_messages = [
+        {
+            "role": "system",
+            "content": [{"type": "text", "text": SYSTEM_PROMPT}],
+        },
+        {
+            "role": "user",
+            "content": [
+                {"type": "image", "image": pil_image},
+                {"type": "text", "text": UNIFIED_INSPECTION_PROMPT},
+            ],
+        },
+    ]
+
+    ground_truth = build_ground_truth_dict(raw)
+
+    return {
+        "prompt": prompt_messages,
+        "ground_truth": ground_truth,
+        "image_id": raw.get("image_id", ""),
+    }
+
+
+def build_grpo_dataset(
+    hf_dataset,
+    max_samples: Optional[int] = None,
+) -> List[Dict[str, Any]]:
+    """Converts a full HF dataset split into GRPO prompt format.
+
+    Args:
+        hf_dataset: A HuggingFace Dataset split (train).
+        max_samples: Optional cap on number of samples (for debugging).
+
+    Returns:
+        List of GRPO prompt dicts ready for GRPOTrainer.
+    """
+    dataset_iter = hf_dataset
+    if max_samples is not None:
+        dataset_iter = hf_dataset.select(range(min(max_samples, len(hf_dataset))))
+
+    prompts = []
+    skipped = 0
+    for sample in dataset_iter:
+        try:
+            pil_image = sample["image"]  # PIL Image from HF datasets
+            prompt_dict = to_grpo_prompt(sample, pil_image)
+            prompts.append(prompt_dict)
+        except Exception as e:
+            skipped += 1
+            logger.warning(
+                f"Skipping sample {sample.get('image_id', '?')}: {e}"
+            )
+
+    logger.info(
+        f"Built GRPO prompt dataset: {len(prompts)} samples "
+        f"({skipped} skipped)"
+    )
+    return prompts

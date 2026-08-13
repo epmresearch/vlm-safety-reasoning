@@ -124,6 +124,8 @@ def load_model_for_training(
         for name, param in model.named_parameters():
             if "lora" in name.lower():
                 param.requires_grad = True
+            else:
+                param.requires_grad = False
     else:
         # --- Fresh model + fresh LoRA init (original path) ---
         logger.info(f"Loading BASE model: {model_name} (4-bit={load_in_4bit})")

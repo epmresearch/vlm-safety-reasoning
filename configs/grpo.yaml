@@ -1,6 +1,6 @@
 num_generations: 8
 max_prompt_length: 1024
-max_completion_length: 256
+max_completion_length: 1000   # matched to SFT max_new_tokens; 256 truncates unified JSON → invalid → reward=0
 learning_rate: 1.0e-6
 per_device_train_batch_size: 1
 gradient_accumulation_steps: 16
