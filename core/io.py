@@ -21,11 +21,13 @@ def ensure_dir(path: PathLike) -> Path:
 
 def get_drive_path(*subpaths: str) -> Path:
     """
-    Resolves a path under drive_root, e.g.:
-        get_drive_path("checkpoints", "rule_violation", "sft_v1")
+    Resolves a path dynamically based on VLM_DATA_ROOT (for HPC/Local) 
+    or falls back to drive_root in base.yaml.
     """
+    import os
     base_cfg = load_base_config()
-    root = Path(base_cfg["drive_root"])
+    root_str = os.environ.get("VLM_DATA_ROOT", base_cfg.get("drive_root", "./vlm_data_root"))
+    root = Path(root_str)
     return root.joinpath(*subpaths)
 
 

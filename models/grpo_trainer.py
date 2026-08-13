@@ -24,7 +24,7 @@ from core.logging import get_logger
 from core.wandb_utils import init_run, finish_run
 from models.model_loader import get_model_info, load_model_for_training
 from core.io import get_drive_path
-from data.loader import load_dataset_splits
+from data.loader import load_processed_dataset
 from data.preprocessor import to_grpo_prompt, build_grpo_dataset
 
 from rewards.unified_reward import (
@@ -104,14 +104,16 @@ def run_grpo(
     # Build GRPO prompt dataset with oversampling
     # -----------------------------------------------------------------------
     logger.info("Building GRPO prompt dataset...")
-    raw_dataset = load_dataset_splits()
+    from data.loader import load_processed_dataset
+    raw_dataset = load_processed_dataset()
 
     # Apply oversampling to match SFT strategy
     try:
         from data.oversampling import build_oversampled_indices
         train_split = raw_dataset["train"]
-        oversampled_indices = build_oversampled_indices(train_split)
+        oversampled_indices, oversample_manifest = build_oversampled_indices(train_split)
         train_split = train_split.select(oversampled_indices)
+        logger.info(f"Oversample manifest: {oversample_manifest}")
         logger.info(
             f"Oversampled training set: {len(raw_dataset['train'])} → "
             f"{len(train_split)} samples"
@@ -120,10 +122,8 @@ def run_grpo(
         train_split = raw_dataset["train"]
         logger.warning("Oversampling module not available, using raw train split")
 
-    from datasets import Dataset
-    train_data_list = build_grpo_dataset(train_split, max_samples=max_samples)
-    train_data = Dataset.from_list(train_data_list)
-    logger.info(f"GRPO prompt dataset built: {len(train_data)} samples")
+    train_data = build_grpo_dataset(train_split, max_samples=max_samples)
+    logger.info(f"GRPO prompt dataset built: {len(train_data)} samples (Python list)")
 
     if not train_data:
         raise ValueError(
@@ -167,6 +167,7 @@ def run_grpo(
         save_steps=cfg["save_steps"],
         beta=cfg["beta"],
         report_to=["wandb"],
+        remove_unused_columns=False,
     )
 
     if use_native_weights:

@@ -66,7 +66,12 @@ def _make_batch_reward(reward_fn: Callable) -> Callable:
 
     This wrapper bridges the gap by iterating over the batch.
     """
-    def batch_fn(completions, ground_truth=None, **kwargs):
+    def batch_fn(prompts=None, completions=None, ground_truth=None, **kwargs):
+        # Handle TRL >= 0.9 where prompts is the first positional argument
+        if completions is None and prompts is not None:
+            completions = prompts
+        if completions is None:
+            return []
         if ground_truth is None:
             return [0.0] * len(completions)
         return [reward_fn(c, gt) for c, gt in zip(completions, ground_truth)]

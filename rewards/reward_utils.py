@@ -24,12 +24,12 @@ logger = get_logger(__name__)
 # Global singleton for embedding model
 _EMBED_MODEL = None
 
+import copy
+
 @functools.lru_cache(maxsize=128)
-def _strict_parse(text: str) -> Optional[dict]:
+def _strict_parse_cached(text: str) -> Optional[dict]:
     """
-    Strictly parse JSON from text. 
-    Strips fences, parses JSON, checks if dict, and validates with UnifiedOutput.
-    Returns the raw dictionary if valid, None otherwise.
+    Strictly parse JSON from text and cache the result.
     """
     try:
         stripped = strip_fences(text)
@@ -44,6 +44,14 @@ def _strict_parse(text: str) -> Optional[dict]:
         return parsed
     except Exception as e:
         return None
+
+def _strict_parse(text: str) -> Optional[dict]:
+    """
+    Wrapper around cached parser to ensure we never return a mutable reference 
+    from the cache, which could corrupt downstream reward functions.
+    """
+    res = _strict_parse_cached(text)
+    return copy.deepcopy(res) if res is not None else None
 
 def _is_violation_present(v: Any) -> bool:
     """

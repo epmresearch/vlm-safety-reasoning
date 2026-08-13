@@ -4,6 +4,10 @@ Usage: python experiments/run_grpo.py --tier 2b --variant unified-grpo-v1
 """
 import argparse
 import time
+from dotenv import load_dotenv
+
+# Load environment variables from .env file (e.g., WANDB_API_KEY, HF_TOKEN)
+load_dotenv()
 
 from core.config import load_config
 from core.logging import get_logger, attach_file_logger

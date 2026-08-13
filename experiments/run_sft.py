@@ -4,6 +4,10 @@ Usage: python experiments/run_sft.py --tier 2b --variant unified-sft-v1
 """
 import unsloth
 import argparse
+from dotenv import load_dotenv
+
+# Load environment variables from .env file (e.g., WANDB_API_KEY, HF_TOKEN)
+load_dotenv()
 
 from core.config import load_config
 from core.logging import get_logger
