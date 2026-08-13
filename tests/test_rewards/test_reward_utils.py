@@ -85,7 +85,7 @@ class TestStrictParse:
         r1 = _strict_parse(text)
         r2 = _strict_parse(text)
         assert r1 == r2
-        assert r1 is r2  # same cached object
+        assert r1 is not r2  # Must not return the same mutable cached reference
 
     def test_preamble_stripped(self):
         text = "Here is my analysis:\n```json\n" + json.dumps(_valid_payload()) + "\n```"

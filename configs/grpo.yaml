@@ -11,6 +11,8 @@ logging_steps: 5
 save_steps: 50
 beta: 0.04                     # KL penalty coefficient
 use_gspo: false                # not yet implemented; placeholder
+bf16: true
+optim: "adamw_8bit"
 
 # Model loading — will be used via load_model_for_training
 load_in_4bit: true

@@ -131,22 +131,25 @@ class TestToGrpoPrompt:
         user_content = result["prompt"][1]["content"]
         image_parts = [c for c in user_content if c.get("type") == "image"]
         assert len(image_parts) == 1
-        assert "image" in image_parts[0]
-        assert isinstance(image_parts[0]["image"], PILImage.Image)
+        assert "image" not in image_parts[0]
+        assert "images" in result
+        assert isinstance(result["images"][0], PILImage.Image)
 
     def test_ground_truth_is_dict(self):
         raw = _make_raw_sample()
         pil = _make_pil_image()
         result = to_grpo_prompt(raw, pil)
         gt = result["ground_truth"]
-        assert isinstance(gt, dict)
-        assert "caption" in gt
+        assert isinstance(gt, str)
+        gt_dict = json.loads(gt)
+        assert "caption" in gt_dict
 
     def test_ground_truth_boxes_in_01_scale(self):
         raw = _make_raw_sample(with_objects=True)
         pil = _make_pil_image()
         result = to_grpo_prompt(raw, pil)
-        for box in result["ground_truth"]["excavator"]:
+        gt_dict = json.loads(result["ground_truth"])
+        for box in gt_dict["excavator"]:
             assert all(0.0 <= c <= 1.0 for c in box)
 
 

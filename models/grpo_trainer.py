@@ -57,7 +57,7 @@ def run_grpo(
     """Run GRPO training for the unified safety inspection task.
 
     Args:
-        task: Task name (e.g. "full_unified").
+        task: Task name (e.g. "unified").
         model_id: Model registry ID to fine-tune.
         variant_name: Name for the output variant.
         max_samples: Optional cap on dataset size (for debugging).
@@ -68,6 +68,7 @@ def run_grpo(
         Path to the saved checkpoint directory.
     """
     cfg = load_config(task=task, training_kind="grpo")
+    sft_cfg = load_config(task=task, training_kind="sft")
     task_cfg = load_task_config(task)
     entry = get_model_info(model_id)
     hf_path = entry["hf_path"]
@@ -81,7 +82,7 @@ def run_grpo(
     model, tokenizer, _ = load_model_for_training(
         model_name=hf_path,
         tier=model_id,
-        sft_cfg=cfg,
+        sft_cfg=sft_cfg,
         adapter_path=lora_path,
     )
 
@@ -166,6 +167,8 @@ def run_grpo(
         logging_steps=cfg["logging_steps"],
         save_steps=cfg["save_steps"],
         beta=cfg["beta"],
+        bf16=cfg.get("bf16", True),
+        optim=cfg.get("optim", "adamw_8bit"),
         report_to=["wandb"],
         remove_unused_columns=False,
     )
@@ -237,6 +240,8 @@ if __name__ == "__main__":
     parser.add_argument("--task", required=True)
     parser.add_argument("--model_id", required=True)
     parser.add_argument("--variant_name", default="grpo_v1")
+    parser.add_argument("--adapter_path", default=None,
+                        help="Optional explicit path to SFT adapter")
     parser.add_argument("--max_samples", type=int, default=None,
                         help="Cap dataset size for debugging")
     args = parser.parse_args()

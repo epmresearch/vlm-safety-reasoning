@@ -74,7 +74,10 @@ def _make_batch_reward(reward_fn: Callable) -> Callable:
             return []
         if ground_truth is None:
             return [0.0] * len(completions)
-        return [reward_fn(c, gt) for c, gt in zip(completions, ground_truth)]
+        
+        import json
+        parsed_gts = [json.loads(gt) if isinstance(gt, str) else gt for gt in ground_truth]
+        return [reward_fn(c, gt) for c, gt in zip(completions, parsed_gts)]
     batch_fn.__name__ = getattr(reward_fn, '__name__', 'reward_fn')
     return batch_fn
 
@@ -208,17 +211,23 @@ def build_grpo_reward_fn(
     """
 
     def unified_reward_fn(
-        prompts,
-        completions: List[str],
+        prompts=None,
+        completions: List[str] = None,
         ground_truth: List[Dict] = None,
         **kwargs,
     ) -> List[float]:
+        if completions is None and prompts is not None:
+            completions = prompts
+        if completions is None:
+            return []
         if ground_truth is None:
             return [0.0] * len(completions)
 
+        import json
         scores = []
         for completion, gt in zip(completions, ground_truth):
-            score = compute_reward(completion, gt, weights=weights)
+            parsed_gt = json.loads(gt) if isinstance(gt, str) else gt
+            score = compute_reward(completion, parsed_gt, weights=weights)
             scores.append(score)
         return scores
 

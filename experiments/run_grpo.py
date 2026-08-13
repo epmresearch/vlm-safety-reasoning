@@ -42,7 +42,7 @@ def main():
 
     # Run the GRPO training
     checkpoint_dir = run_grpo(
-        task="full_unified",  # The task config name used for training
+        task="unified",  # The task config name used for training
         model_id=args.tier,
         variant_name=args.variant,
         max_samples=args.max_samples,

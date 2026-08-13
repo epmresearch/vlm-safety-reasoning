@@ -189,7 +189,7 @@ def to_grpo_prompt(raw: Dict[str, Any], pil_image) -> Dict[str, Any]:
         {
             "role": "user",
             "content": [
-                {"type": "image", "image": pil_image},
+                {"type": "image"},
                 {"type": "text", "text": UNIFIED_INSPECTION_PROMPT},
             ],
         },
@@ -199,8 +199,9 @@ def to_grpo_prompt(raw: Dict[str, Any], pil_image) -> Dict[str, Any]:
 
     return {
         "prompt": prompt_messages,
-        "ground_truth": ground_truth,
+        "ground_truth": json.dumps(ground_truth),
         "image_id": raw.get("image_id", ""),
+        "images": [pil_image],
     }
 
 
@@ -219,7 +220,10 @@ def build_grpo_dataset(
     """
     dataset_iter = hf_dataset
     if max_samples is not None:
-        dataset_iter = hf_dataset.select(range(min(max_samples, len(hf_dataset))))
+        if hasattr(hf_dataset, "select"):
+            dataset_iter = hf_dataset.select(range(min(max_samples, len(hf_dataset))))
+        else:
+            dataset_iter = hf_dataset[:max_samples]
 
     prompts = []
     skipped = 0

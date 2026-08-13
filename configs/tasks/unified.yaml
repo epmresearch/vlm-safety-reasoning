@@ -1,4 +1,4 @@
-task_name: "full_unified"
+task_name: "unified"
 prompt_key: "UNIFIED_INSPECTION_PROMPT"
 
 # Output format: minimized JSON wrapped in ```json ... ``` code fences.

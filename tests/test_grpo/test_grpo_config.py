@@ -56,7 +56,7 @@ class TestConfigMerge:
         """Top-level grpo.yaml per_device_train_batch_size should win over nested registry value."""
         from core.config import load_config
 
-        cfg = load_config(task="full_unified", training_kind="grpo")
+        cfg = load_config(task="unified", training_kind="grpo")
         # grpo.yaml has per_device_train_batch_size: 1
         # model_registry.yaml has per_device_train_batch_size: 32 NESTED under models.2b
         # Top-level from grpo.yaml should win
@@ -67,12 +67,12 @@ class TestConfigMerge:
 
     def test_task_config_keys_present_after_merge(self):
         from core.config import load_config
-        cfg = load_config(task="full_unified", training_kind="grpo")
+        cfg = load_config(task="unified", training_kind="grpo")
         assert "task_name" in cfg
-        assert cfg["task_name"] == "full_unified"
+        assert cfg["task_name"] == "unified"
 
     def test_base_config_keys_present(self):
         from core.config import load_config
-        cfg = load_config(task="full_unified", training_kind="grpo")
+        cfg = load_config(task="unified", training_kind="grpo")
         assert "drive_root" in cfg
         assert "seed" in cfg
