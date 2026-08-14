@@ -79,6 +79,11 @@ def run_grpo(
     from trl import GRPOTrainer, GRPOConfig
 
     logger.info(f"Loading model for GRPO: base={hf_path}, adapter={lora_path}")
+    
+    # Override SFT context window with explicitly defined GRPO context window
+    if "max_seq_length" in cfg:
+        sft_cfg["max_seq_length"] = cfg["max_seq_length"]
+
     model, tokenizer, _ = load_model_for_training(
         model_name=hf_path,
         tier=model_id,
@@ -160,6 +165,7 @@ def run_grpo(
         num_generations=cfg["num_generations"],
         max_prompt_length=cfg["max_prompt_length"],
         max_completion_length=cfg["max_completion_length"],
+        max_seq_length=cfg.get("max_seq_length"),
         learning_rate=cfg["learning_rate"],
         per_device_train_batch_size=cfg["per_device_train_batch_size"],
         gradient_accumulation_steps=cfg["gradient_accumulation_steps"],
