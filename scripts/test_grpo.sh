@@ -3,8 +3,8 @@
 #SBATCH --partition=gpu-h100
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=8
-#SBATCH --mem=80G
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=32G
 #SBATCH --gres=gpu:h100:1                 # Using H100
 #SBATCH --time=00:30:00                   # Quick 30-minute limit
 #SBATCH --output=logs/grpo_test_%j.out
