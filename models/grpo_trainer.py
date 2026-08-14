@@ -76,8 +76,6 @@ def run_grpo(
     # Use the explicitly provided adapter_path if available, otherwise fallback to registry
     lora_path = adapter_path if adapter_path is not None else entry.get("lora_path")
 
-    from unsloth import FastVisionModel, PatchFastRL
-    PatchFastRL("GRPO", FastVisionModel)
     from trl import GRPOTrainer, GRPOConfig
 
     logger.info(f"Loading model for GRPO: base={hf_path}, adapter={lora_path}")
