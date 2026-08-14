@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=vlm-grpo-2b
-#SBATCH --account=YOUR_ARC_ACCOUNT       # ← replace with your allocation
-#SBATCH --partition=gpu                   # ← check with: sinfo | grep gpu
+# #SBATCH --account=YOUR_ARC_ACCOUNT       # ← Commented out: Let Slurm use your default.
+#SBATCH --partition=gpu-h100              # ← Using the fastest partition!
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=80G                         # needs RAM for dataset + sentence transformers
-#SBATCH --gres=gpu:1                      # 1 GPU; for A100: gpu:a100:1 or gpu:a100l:1
+#SBATCH --gres=gpu:h200:1                 # ← Requesting 1x H200 GPU
 #SBATCH --time=24:00:00                   # GRPO 1 epoch on 6308 samples ≈ 12-18h
 #SBATCH --output=logs/grpo_%j.out
 #SBATCH --error=logs/grpo_%j.err
 #SBATCH --mail-type=BEGIN,END,FAIL
-#SBATCH --mail-user=YOUR_EMAIL@ucalgary.ca
+#SBATCH --mail-user=nabeel.shan@ucalgary.ca
 
 # ─── Reproducibility ──────────────────────────────────────────────────────────
 echo "Job started: $(date)"

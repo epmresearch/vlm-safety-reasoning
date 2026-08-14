@@ -76,6 +76,8 @@ def run_grpo(
     # Use the explicitly provided adapter_path if available, otherwise fallback to registry
     lora_path = adapter_path if adapter_path is not None else entry.get("lora_path")
 
+    from unsloth import FastVisionModel, PatchFastRL
+    PatchFastRL("GRPO", FastVisionModel)
     from trl import GRPOTrainer, GRPOConfig
 
     logger.info(f"Loading model for GRPO: base={hf_path}, adapter={lora_path}")
@@ -142,6 +144,18 @@ def run_grpo(
     short_name = entry.get("short_name", f"qwen3vl-{model_id}")
     output_dir = str(get_drive_path("checkpoints", short_name, variant_name))
     ensure_dir(output_dir)
+
+    # Save a run manifest with all configs
+    import json
+    manifest = {
+        "grpo_cfg": cfg,
+        "sft_cfg": sft_cfg,
+        "task_cfg": task_cfg,
+        "model_id": model_id,
+        "variant": variant_name
+    }
+    with open(os.path.join(output_dir, "run_manifest.json"), "w") as f:
+        json.dump(manifest, f, indent=4)
 
     from transformers.trainer_utils import get_last_checkpoint
 

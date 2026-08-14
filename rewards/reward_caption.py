@@ -4,7 +4,7 @@ Uses semantic similarity, lexical overlap, and length calibration.
 """
 
 import math
-from rewards.reward_utils import _strict_parse, _safe_reward, _get_embed_model, _cosine_sim, _ngram_f1
+from rewards.reward_utils import _strict_parse, _safe_reward, _embed_texts, _cosine_sim, _ngram_f1
 from core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -22,9 +22,8 @@ def compute_reward(completion: str, ground_truth: dict, **kwargs) -> float:
         return 0.0
 
     # Semantic similarity
-    model = _get_embed_model()
-    pred_emb = model.encode([pred_cap], convert_to_tensor=True)
-    ref_emb = model.encode([gt_cap], convert_to_tensor=True)
+    pred_emb = _embed_texts([pred_cap])
+    ref_emb = _embed_texts([gt_cap])
     semantic = max(0.0, _cosine_sim(pred_emb[0], ref_emb[0]))
 
     # Lexical overlap

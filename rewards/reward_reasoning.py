@@ -5,7 +5,7 @@ Reasoning text quality (TP-conditioned). Uses semantic + lexical similarity with
 import math
 from rewards.reward_utils import (
     _strict_parse, _safe_reward, _is_violation_present,
-    _get_embed_model, _cosine_sim, _ngram_f1,
+    _embed_texts, _cosine_sim, _ngram_f1,
 )
 from core.constants import RULES
 from core.logging import get_logger
@@ -27,21 +27,20 @@ def compute_reward(completion: str, ground_truth: dict, **kwargs) -> float:
     if not common_rules:
         return 0.0
 
-    model = _get_embed_model()
     rule_scores = []
     for r in common_rules:
         pv = parsed.get(f"{r}_violation", {}) or {}
         gv = ground_truth.get(f"{r}_violation", {}) or {}
 
-        pred_reason = str(pv.get("reason", "") if isinstance(pv, dict) else "").strip()
-        gt_reason = str(gv.get("reason", "") if isinstance(gv, dict) else "").strip()
+        pred_reason = str((pv.get("reason", "") if isinstance(pv, dict) else "") or "").strip()
+        gt_reason = str((gv.get("reason", "") if isinstance(gv, dict) else "") or "").strip()
 
         if not pred_reason or not gt_reason:
             rule_scores.append(0.0)
             continue
 
-        pred_emb = model.encode([pred_reason], convert_to_tensor=True)
-        ref_emb = model.encode([gt_reason], convert_to_tensor=True)
+        pred_emb = _embed_texts([pred_reason])
+        ref_emb = _embed_texts([gt_reason])
         semantic = max(0.0, _cosine_sim(pred_emb[0], ref_emb[0]))
 
         lexical = _ngram_f1(pred_reason, gt_reason, n_range=(1, 2))
