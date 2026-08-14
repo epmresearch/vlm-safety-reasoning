@@ -270,4 +270,4 @@ if __name__ == "__main__":
     parser.add_argument("--max_samples", type=int, default=None,
                         help="Cap dataset size for debugging")
     args = parser.parse_args()
-    run_grpo(args.task, args.model_id, args.variant_name, args.max_samples)
+    run_grpo(args.task, args.model_id, args.variant_name, args.max_samples, adapter_path=args.adapter_path)
