@@ -17,9 +17,8 @@ nvidia-smi
 mkdir -p logs
 
 module purge
-module load gcc/12.3
-module load cuda/12.2
-module load python/3.11
+module load gcc/13.3.0
+module load python/3.12.5
 
 source "$HOME/envs/vlm_grpo/bin/activate"
 cd "$HOME/vlm-safety-reasoning"

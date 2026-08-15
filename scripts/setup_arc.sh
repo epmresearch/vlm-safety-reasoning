@@ -19,9 +19,8 @@ cd "$REPO_DIR"
 
 # ─── 2. Load modules ─────────────────────────────────────────────────────────
 # Check available CUDA: `module spider cuda`
-module load gcc/12.3
-module load cuda/12.2       # adjust to what ARC provides
-module load python/3.11     # adjust version as needed
+module load gcc/13.3.0
+module load python/3.12.5
 
 # ─── 3. Create virtualenv in scratch (fast I/O, not backed up) ───────────────
 VENV="$HOME/envs/vlm_grpo"
