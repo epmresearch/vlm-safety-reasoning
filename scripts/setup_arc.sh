@@ -40,6 +40,7 @@ pip install "unsloth @ git+https://github.com/unslothai/unsloth.git"
 
 # Project dependencies
 pip install \
+    unsloth_zoo \
     datasets \
     huggingface_hub \
     wandb \
