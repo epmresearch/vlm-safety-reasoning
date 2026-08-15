@@ -34,13 +34,13 @@ cd "$HOME/vlm-safety-reasoning"
 
 # ─── Environment variables ────────────────────────────────────────────────────
 export PYTHONPATH="$HOME/vlm-safety-reasoning:$PYTHONPATH"
-export HF_HOME="/scratch/$USER/hf_cache"
-export TRANSFORMERS_CACHE="/scratch/$USER/hf_cache"
-export SENTENCE_TRANSFORMERS_HOME="/scratch/$USER/st_cache"
+export HF_HOME="$HOME/scratch/hf_cache"
+export TRANSFORMERS_CACHE="$HOME/scratch/hf_cache"
+export SENTENCE_TRANSFORMERS_HOME="$HOME/scratch/st_cache"
 
 # WandB: use offline on ARC compute nodes (no internet), sync manually later
 export WANDB_MODE=offline
-export WANDB_DIR="/scratch/$USER/wandb"
+export WANDB_DIR="$HOME/scratch/wandb"
 mkdir -p "$WANDB_DIR"
 
 # Prevent CUDA fragmentation
