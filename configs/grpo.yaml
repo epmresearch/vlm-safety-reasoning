@@ -4,8 +4,8 @@ max_prompt_length: 2048        # was 1024 — verified max is 1519 tokens (see u
 max_completion_length: 1000
 max_seq_length: 3200           # ADDED — must cover max_prompt + max_completion + margin
 learning_rate: 1.0e-6
-per_device_train_batch_size: 1
-gradient_accumulation_steps: 16
+per_device_train_batch_size: 4
+gradient_accumulation_steps: 8
 num_train_epochs: 1
 logging_steps: 5
 save_steps: 50
