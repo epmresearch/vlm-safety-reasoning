@@ -112,32 +112,20 @@ def load_model_for_training(
 
     if adapter_path:
         logger.info(f"Loading EXISTING adapter for cooldown training: {adapter_path}")
-        try:
-            model, tokenizer = FastVisionModel.from_pretrained(
-                adapter_path,
-                load_in_4bit=load_in_4bit,
-                use_gradient_checkpointing=use_gradient_checkpointing,
-                max_seq_length=max_seq_length,
-            )
-        except Exception as e:
-            if "processor" in str(e).lower() or "tokenizer" in str(e).lower() or "config" in str(e).lower():
-                logger.warning(f"Failed to load processor from {adapter_path}: {e}")
-                logger.warning(f"Copying processor files from base model {model_name} to adapter directory...")
-                from core.callbacks import _ensure_preprocessor_config
-                from transformers import AutoProcessor
-                # Download and save the processor files to the adapter path
-                proc = AutoProcessor.from_pretrained(model_name)
-                proc.save_pretrained(adapter_path)
-                _ensure_preprocessor_config(adapter_path, model_name)
-                # Try again
-                model, tokenizer = FastVisionModel.from_pretrained(
-                    adapter_path,
-                    load_in_4bit=load_in_4bit,
-                    use_gradient_checkpointing=use_gradient_checkpointing,
-                    max_seq_length=max_seq_length,
-                )
+        logger.info(f"Loading base model + processor from: {model_name}, adapter from: {adapter_path}")
+        model, tokenizer = FastVisionModel.from_pretrained(
+            model_name,
+            load_in_4bit=load_in_4bit,
+            use_gradient_checkpointing=use_gradient_checkpointing,
+            max_seq_length=max_seq_length,
+        )
+        from peft import PeftModel
+        model = PeftModel.from_pretrained(model, adapter_path, is_trainable=True)
+        for name, param in model.named_parameters():
+            if "lora" in name.lower():
+                param.requires_grad = True
             else:
-                raise
+                param.requires_grad = False
     else:
         # --- Fresh model + fresh LoRA init (original path) ---
         logger.info(f"Loading BASE model: {model_name} (4-bit={load_in_4bit})")
