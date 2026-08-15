@@ -38,8 +38,9 @@ pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
 pip install "unsloth @ git+https://github.com/unslothai/unsloth.git"
 
 # Project dependencies
+pip install unsloth_zoo --no-deps
+pip uninstall torchao -y || true
 pip install \
-    unsloth_zoo \
     datasets \
     huggingface_hub \
     wandb \
