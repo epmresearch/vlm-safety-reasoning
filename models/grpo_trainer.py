@@ -177,9 +177,8 @@ def run_grpo(
     grpo_config_kwargs = dict(
         output_dir=output_dir,
         num_generations=cfg["num_generations"],
-        max_prompt_length=cfg["max_prompt_length"],
-        max_completion_length=cfg["max_completion_length"],
-        max_seq_length=cfg.get("max_seq_length"),
+        max_prompt_length=cfg.get("max_prompt_length", 1600),
+        max_completion_length=cfg.get("max_completion_length", 1024),
         learning_rate=cfg["learning_rate"],
         per_device_train_batch_size=cfg["per_device_train_batch_size"],
         gradient_accumulation_steps=cfg["gradient_accumulation_steps"],
