@@ -34,8 +34,7 @@ pip install --upgrade pip wheel
 
 # Core ML stack — adjust versions to what was tested on Colab
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
-pip install transformers==4.47.0 peft==0.14.0 accelerate==1.2.0
-pip install trl==0.12.2
+
 pip install "unsloth @ git+https://github.com/unslothai/unsloth.git"
 
 # Project dependencies
@@ -62,6 +61,9 @@ pip install \
     matplotlib \
     tqdm \
     pytest
+
+# Pin critical ML stack versions at the very end to prevent unsloth_zoo from upgrading them!
+pip install transformers==4.47.0 peft==0.14.0 accelerate==1.2.0 trl==0.12.2
 
 # ─── 5. Pre-download HF models to scratch (no internet on compute nodes) ─────
 HF_CACHE="$HOME/scratch/hf_cache"
