@@ -1,6 +1,6 @@
 # GRPO/GSPO training hyperparameters
 num_generations: 8
-max_prompt_length: 1600        # was 1024 — verified max is 1519 tokens (see unified.yaml comment)
+max_prompt_length: 2048        # was 1024 — verified max is 1519 tokens (see unified.yaml comment)
 max_completion_length: 1000
 max_seq_length: 3200           # ADDED — must cover max_prompt + max_completion + margin
 learning_rate: 1.0e-6
