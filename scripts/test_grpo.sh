@@ -7,8 +7,8 @@
 #SBATCH --mem=80G
 #SBATCH --gres=gpu:h200:1                 # Using H200
 #SBATCH --time=00:30:00                   # Quick 30-minute limit
-#SBATCH --output=logs/grpo_test_%j.out
-#SBATCH --error=logs/grpo_test_%j.err
+#SBATCH --output=/home/%u/vlm-finetuning-project1/logs/grpo_test_%j.out
+#SBATCH --error=/home/%u/vlm-finetuning-project1/logs/grpo_test_%j.err
 
 echo "Test Job started: $(date)"
 echo "Node: $SLURMD_NODENAME"
