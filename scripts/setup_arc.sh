@@ -54,11 +54,17 @@ pip install \
     pandas \
     numpy \
     Pillow \
-    PyYAML
+    PyYAML \
+    qwen-vl-utils \
+    scikit-learn \
+    nltk \
+    matplotlib \
+    tqdm \
+    pytest
 
 # ─── 5. Pre-download HF models to scratch (no internet on compute nodes) ─────
-HF_CACHE="/scratch/$USER/hf_cache"
-ST_CACHE="/scratch/$USER/st_cache"
+HF_CACHE="$HOME/scratch/hf_cache"
+ST_CACHE="$HOME/scratch/st_cache"
 mkdir -p "$HF_CACHE" "$ST_CACHE"
 
 export HF_HOME="$HF_CACHE"
