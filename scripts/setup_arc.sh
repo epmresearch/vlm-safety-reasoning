@@ -35,12 +35,11 @@ pip install --upgrade pip wheel
 # Core ML stack — adjust versions to what was tested on Colab
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
 
-pip install "unsloth @ git+https://github.com/unslothai/unsloth.git"
-
-# Project dependencies
-pip install unsloth_zoo --no-deps
-pip uninstall torchao -y || true
+# Install unsloth, unsloth_zoo, and all project dependencies together 
+# This forces pip's backtracking resolver to perfectly balance their strict version requirements!
 pip install \
+    "unsloth @ git+https://github.com/unslothai/unsloth.git" \
+    unsloth_zoo \
     datasets \
     huggingface_hub \
     wandb \
@@ -66,6 +65,8 @@ pip install \
     peft \
     accelerate \
     trl
+
+pip uninstall torchao -y || true
 
 # ─── 5. Pre-download HF models to scratch (no internet on compute nodes) ─────
 HF_CACHE="$HOME/scratch/hf_cache"
