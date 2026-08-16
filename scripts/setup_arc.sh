@@ -63,9 +63,6 @@ pip install \
     tqdm \
     pytest
 
-# Pin critical ML stack versions at the very end to prevent unsloth_zoo from upgrading them!
-pip install transformers==4.46.3 peft==0.14.0 accelerate==1.2.0 trl==0.12.2
-
 # ─── 5. Pre-download HF models to scratch (no internet on compute nodes) ─────
 HF_CACHE="$HOME/scratch/hf_cache"
 ST_CACHE="$HOME/scratch/st_cache"
