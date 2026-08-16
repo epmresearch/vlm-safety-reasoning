@@ -19,7 +19,6 @@ echo "Job ID: $SLURM_JOB_ID"
 nvidia-smi
 
 # ─── Create log directory ─────────────────────────────────────────────────────
-mkdir -p logs
 
 # ─── Load modules ─────────────────────────────────────────────────────────────
 module purge

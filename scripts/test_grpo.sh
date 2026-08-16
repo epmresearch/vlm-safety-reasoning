@@ -14,8 +14,6 @@ echo "Test Job started: $(date)"
 echo "Node: $SLURMD_NODENAME"
 nvidia-smi
 
-mkdir -p logs
-
 module purge
 module load gcc/13.3.0
 module load python/3.12.5

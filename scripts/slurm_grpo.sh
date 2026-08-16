@@ -20,7 +20,6 @@ echo "Job ID: $SLURM_JOB_ID"
 nvidia-smi
 
 # ─── Create log directory ─────────────────────────────────────────────────────
-mkdir -p logs
 
 # ─── Load modules (match what you used in setup_arc.sh) ──────────────────────
 module purge
