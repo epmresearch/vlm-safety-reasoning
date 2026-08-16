@@ -32,15 +32,16 @@ source "$VENV/bin/activate"
 # ─── 4. Install packages ──────────────────────────────────────────────────────
 pip install --upgrade pip wheel
 
-# Core ML stack — adjust versions to what was tested on Colab
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+# Core ML stack — Upgrade PyTorch to >=2.6 using cu124 to bypass the torch.load vulnerability!
+pip install torch torchvision --upgrade --index-url https://download.pytorch.org/whl/cu124
 
-# Install unsloth, unsloth_zoo, and all project dependencies together 
-# This forces pip's backtracking resolver to perfectly balance their strict version requirements!
+# Install unsloth and strictly pin the EXACT versions that unsloth_zoo 2026.8.12 demands
 pip install \
     "unsloth @ git+https://github.com/unslothai/unsloth.git" \
-    unsloth_zoo \
-    datasets \
+    unsloth_zoo==2026.8.12 \
+    transformers==5.4.0 \
+    datasets==4.3.0 \
+    trl==0.23.0 \
     huggingface_hub \
     wandb \
     sentence-transformers \
@@ -61,10 +62,8 @@ pip install \
     matplotlib \
     tqdm \
     pytest \
-    transformers \
     peft \
-    accelerate \
-    trl
+    accelerate
 
 pip uninstall torchao -y || true
 
