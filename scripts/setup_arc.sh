@@ -61,7 +61,11 @@ pip install \
     nltk \
     matplotlib \
     tqdm \
-    pytest
+    pytest \
+    transformers \
+    peft \
+    accelerate \
+    trl
 
 # ─── 5. Pre-download HF models to scratch (no internet on compute nodes) ─────
 HF_CACHE="$HOME/scratch/hf_cache"
