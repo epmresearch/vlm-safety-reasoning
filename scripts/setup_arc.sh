@@ -99,7 +99,6 @@ fi
 # ─── 7. Verify setup ──────────────────────────────────────────────────────────
 python -c "import torch; print('PyTorch:', torch.__version__); print('CUDA available:', torch.cuda.is_available())"
 python -c "import trl; print('TRL:', trl.__version__)"
-python -c "import unsloth; print('Unsloth OK')"
 
 echo ""
 echo ">>> Setup complete!"
