@@ -92,7 +92,8 @@ echo "======================================================================"
 # This safely fixes trailing commas, unclosed brackets, etc. without 
 # hallucinating meaning, producing predictions_repaired.jsonl
 python preprocessing/structural_repair.py \
-    --input "$PREDS_FILE"
+    --input "$PREDS_FILE" \
+    --output "$PREDS_DIR/repair_applied/predictions_repaired.jsonl"
 
 
 # ==============================================================================
