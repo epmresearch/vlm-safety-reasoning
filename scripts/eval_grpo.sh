@@ -111,6 +111,7 @@ python -m experiments.run_evaluation \
     --predictions_path "$REPAIRED_FILE" \
     --output_dir "$EVAL_OUT_DIR" \
     --skip_java_switch \
+    --skip_spice \
     --wandb_project "vlm-safety-evals" \
     --wandb_run_name "qwen3-2b-grpo-final-repaired"
 
