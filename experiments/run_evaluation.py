@@ -145,7 +145,7 @@ def main():
         "output_dir": str(output_dir),
         "max_samples": args.max_samples,
     }
-    save_run_manifest(str(output_dir), run_config)
+    save_run_manifest(str(output_dir), run_config, filename="eval_manifest.json")
     logger.info(json.dumps(run_config, indent=2))
 
     # --- Load predictions ---
