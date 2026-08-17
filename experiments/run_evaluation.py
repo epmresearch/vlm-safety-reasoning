@@ -200,24 +200,24 @@ def main():
         json.dump(eval_results["metrics"], f, indent=2, ensure_ascii=False)
     logger.info(f"Metrics saved to: {metrics_path}")
 
+    # Extract failure counts for W&B logging unconditionally
+    parse_failures = [
+        f for f in eval_results.get("failures", []) 
+        if f.get("error_type") == "json_parse_error"
+    ]
+    schema_failures = [
+        f for f in eval_results.get("failures", []) 
+        if f.get("error_type") == "schema_validation_error"
+    ]
+    
+    parse_count = len(parse_failures)
+    schema_count = len(schema_failures)
+
     # If spice_only, we don't need to re-save failures and parsed_predictions
     if not args.spice_only:
         # Define separate paths for each error type (changed extensions to .json)
         parse_failures_path = output_dir / "json_parse_failures.json"
         schema_failures_path = output_dir / "schema_validation_failures.json"
-        
-        # Separate the failures into two lists in memory
-        parse_failures = [
-            f for f in eval_results.get("failures", []) 
-            if f.get("error_type") == "json_parse_error"
-        ]
-        schema_failures = [
-            f for f in eval_results.get("failures", []) 
-            if f.get("error_type") == "schema_validation_error"
-        ]
-        
-        parse_count = len(parse_failures)
-        schema_count = len(schema_failures)
         
         # Write the lists to standard JSON files
         with open(parse_failures_path, "w", encoding="utf-8") as f_parse:

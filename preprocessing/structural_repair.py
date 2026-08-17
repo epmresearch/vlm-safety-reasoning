@@ -1383,9 +1383,10 @@ if __name__ == "__main__":
 
     input_path = Path(args.input)
     output_path = Path(args.output) if args.output else input_path.parent / "predictions_repaired.jsonl"
-    report_path = Path(args.report) if args.report else input_path.parent / "repair_report.json"
-    broken_path = Path(args.broken) if args.broken else input_path.parent / "still_broken.json"
-    manifest_path = Path(args.manifest) if args.manifest else input_path.parent / "change_manifest.json"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path = Path(args.report) if args.report else output_path.parent / "repair_report.json"
+    broken_path = Path(args.broken) if args.broken else output_path.parent / "still_broken.json"
+    manifest_path = Path(args.manifest) if args.manifest else output_path.parent / "change_manifest.json"
 
     print(f"Loading predictions from: {input_path}")
     report = process_jsonl(
