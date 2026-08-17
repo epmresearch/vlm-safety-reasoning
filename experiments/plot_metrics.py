@@ -5,6 +5,7 @@ import seaborn as sns
 import pandas as pd
 from pathlib import Path
 import numpy as np
+from math import pi
 
 # Set seaborn style for beautiful, academic paper-ready plots
 sns.set_theme(style="whitegrid", context="paper", font_scale=1.2)
@@ -37,13 +38,11 @@ def load_metrics():
 
 def plot_formatting(metrics_data, repair_data):
     models = list(metrics_data.keys())
-    if not models:
-        return
+    if not models: return
 
     json_validity = [metrics_data[m].get("structural_json_validity_rate", 0) * 100 for m in models]
     schema_adherence = [metrics_data[m].get("structural_schema_adherence_rate", 0) * 100 for m in models]
     
-    # Repairs
     repairs = []
     for m in models:
         if m in repair_data:
@@ -70,7 +69,6 @@ def plot_formatting(metrics_data, repair_data):
     ax1.legend(loc='lower left')
     ax1.set_ylim(0, 105)
     
-    # Add a twin axis for the repair count line
     if any(repairs):
         ax2 = ax1.twinx()
         ax2.plot(x, repairs, color=sns.color_palette("dark")[3], marker='o', linewidth=2, markersize=8, label='Repairs Needed')
@@ -79,101 +77,348 @@ def plot_formatting(metrics_data, repair_data):
         ax2.legend(loc='lower right')
         
     plt.tight_layout()
-    plt.savefig(PLOTS_DIR / "formatting_metrics.png", dpi=300, bbox_inches='tight')
+    plt.savefig(PLOTS_DIR / "01_formatting_metrics.png", dpi=300, bbox_inches='tight')
     plt.close()
 
-def plot_grounding(metrics_data):
+def plot_grounding_iou(metrics_data):
     models = list(metrics_data.keys())
     if not models: return
-    
     categories = ["Excavator", "Rebar", "Worker w/ Hard Hat", "Mean (Macro)"]
-    keys = [
-        "grounding_mask_iou_all_micro_excavator",
-        "grounding_mask_iou_all_micro_rebar",
-        "grounding_mask_iou_all_micro_worker_with_white_hard_hat",
-        "grounding_mask_iou_all_macro_mean_tn0"
-    ]
-    
-    data = []
-    for m in models:
-        for cat, key in zip(categories, keys):
-            val = metrics_data[m].get(key, 0)
-            data.append({"Model": m.upper(), "Category": cat, "IoU Score": val})
-            
-    df = pd.DataFrame(data)
-    
+    keys = ["grounding_mask_iou_all_micro_excavator", "grounding_mask_iou_all_micro_rebar", "grounding_mask_iou_all_micro_worker_with_white_hard_hat", "grounding_mask_iou_all_macro_mean_tn0"]
+    data = [{"Model": m.upper(), "Category": cat, "IoU Score": metrics_data[m].get(key, 0)} for m in models for cat, key in zip(categories, keys)]
     plt.figure(figsize=(10, 6))
-    sns.barplot(data=df, x="Category", y="IoU Score", hue="Model", palette="deep")
+    sns.barplot(data=pd.DataFrame(data), x="Category", y="IoU Score", hue="Model", palette="deep")
     plt.title("Object Grounding (IoU) Comparison")
     plt.ylim(0, 1.0)
-    plt.ylabel("Intersection over Union (IoU)")
     plt.legend(title="Model")
     plt.tight_layout()
-    plt.savefig(PLOTS_DIR / "grounding_metrics.png", dpi=300, bbox_inches='tight')
+    plt.savefig(PLOTS_DIR / "02_grounding_iou.png", dpi=300, bbox_inches='tight')
     plt.close()
-    
-def plot_safety_violations(metrics_data):
+
+def plot_grounding_presence(metrics_data):
     models = list(metrics_data.keys())
     if not models: return
+    categories = ["Excavator", "Rebar", "Worker w/ Hard Hat", "Mean (Macro)"]
+    keys = ["grounding_presence_f1_excavator", "grounding_presence_f1_rebar", "grounding_presence_f1_worker_with_white_hard_hat", "grounding_presence_f1_macro"]
+    data = [{"Model": m.upper(), "Category": cat, "F1 Score": metrics_data[m].get(key, 0)} for m in models for cat, key in zip(categories, keys)]
+    plt.figure(figsize=(10, 6))
+    sns.barplot(data=pd.DataFrame(data), x="Category", y="F1 Score", hue="Model", palette="muted")
+    plt.title("Object Grounding Presence (Detection F1 Score)")
+    plt.ylim(0, 1.0)
+    plt.legend(title="Model")
+    plt.tight_layout()
+    plt.savefig(PLOTS_DIR / "03_grounding_presence.png", dpi=300, bbox_inches='tight')
+    plt.close()
     
+def plot_grounding_tn0_vs_tn1(metrics_data):
+    models = list(metrics_data.keys())
+    if not models: return
+    metrics = ["Absent Objects (TN0)", "Present Objects (TN1)"]
+    keys = ["grounding_mask_iou_all_macro_mean_tn0", "grounding_mask_iou_all_macro_mean_tn1"]
+    data = [{"Model": m.upper(), "Metric": metric, "Score": metrics_data[m].get(key, 0)} for m in models for metric, key in zip(metrics, keys)]
+    plt.figure(figsize=(8, 6))
+    sns.barplot(data=pd.DataFrame(data), x="Metric", y="Score", hue="Model", palette="Set3")
+    plt.title("Grounding IoU: Absent vs Present Objects")
+    plt.ylim(0, 1.0)
+    plt.legend(title="Model")
+    plt.tight_layout()
+    plt.savefig(PLOTS_DIR / "04_grounding_tn0_vs_tn1.png", dpi=300, bbox_inches='tight')
+    plt.close()
+
+def plot_safety_violations_f1(metrics_data):
+    models = list(metrics_data.keys())
+    if not models: return
     rules = ["Rule 0", "Rule 1", "Rule 2", "Rule 3", "Rule 4", "Macro F1"]
-    keys = [
-        "violation_identification_f1_rule_0",
-        "violation_identification_f1_rule_1",
-        "violation_identification_f1_rule_2",
-        "violation_identification_f1_rule_3",
-        "violation_identification_f1_rule_4",
-        "violation_identification_f1_macro"
-    ]
-    
-    data = []
-    for m in models:
-        for rule, key in zip(rules, keys):
-            val = metrics_data[m].get(key, 0)
-            data.append({"Model": m.upper(), "Rule": rule, "F1 Score": val})
-            
-    df = pd.DataFrame(data)
-    
+    keys = [f"violation_identification_f1_rule_{i}" for i in range(5)] + ["violation_identification_f1_macro"]
+    data = [{"Model": m.upper(), "Rule": rule, "F1 Score": metrics_data[m].get(key, 0)} for m in models for rule, key in zip(rules, keys)]
     plt.figure(figsize=(12, 6))
-    sns.barplot(data=df, x="Rule", y="F1 Score", hue="Model", palette="pastel")
+    sns.barplot(data=pd.DataFrame(data), x="Rule", y="F1 Score", hue="Model", palette="pastel")
     plt.title("Safety Violation Identification (F1 Score)")
     plt.ylim(0, 1.0)
-    plt.ylabel("F1 Score")
     plt.legend(title="Model")
     plt.tight_layout()
-    plt.savefig(PLOTS_DIR / "safety_violations.png", dpi=300, bbox_inches='tight')
+    plt.savefig(PLOTS_DIR / "05_safety_violations_f1.png", dpi=300, bbox_inches='tight')
+    plt.close()
+
+def plot_iou_conditioned_violations(metrics_data):
+    models = list(metrics_data.keys())
+    if not models: return
+    rules = ["Rule 1", "Rule 2", "Macro F1"]
+    keys = ["violation_identification_iou_conditioned_f1_rule_1", "violation_identification_iou_conditioned_f1_rule_2", "violation_identification_iou_conditioned_f1_macro"]
+    data = [{"Model": m.upper(), "Rule": rule, "F1 Score": metrics_data[m].get(key, 0)} for m in models for rule, key in zip(rules, keys)]
+    plt.figure(figsize=(10, 6))
+    sns.barplot(data=pd.DataFrame(data), x="Rule", y="F1 Score", hue="Model", palette="dark")
+    plt.title("Strict Safety Violation Identification (F1 Score Conditioned on IoU)")
+    plt.ylim(0, 1.0)
+    plt.legend(title="Model")
+    plt.tight_layout()
+    plt.savefig(PLOTS_DIR / "06_iou_conditioned_violations.png", dpi=300, bbox_inches='tight')
+    plt.close()
+
+def plot_violation_precision_recall(metrics_data):
+    models = list(metrics_data.keys())
+    if not models: return
+    metrics = ["Precision (Macro)", "Recall (Macro)", "IoU Cond. Precision", "IoU Cond. Recall"]
+    keys = ["violation_identification_precision_macro", "violation_identification_recall_macro", "violation_identification_iou_conditioned_precision_macro", "violation_identification_iou_conditioned_recall_macro"]
+    data = [{"Model": m.upper(), "Metric": metric, "Score": metrics_data[m].get(key, 0)} for m in models for metric, key in zip(metrics, keys)]
+    plt.figure(figsize=(10, 6))
+    sns.barplot(data=pd.DataFrame(data), x="Metric", y="Score", hue="Model", palette="Set2")
+    plt.title("Violation Identification Precision vs Recall")
+    plt.ylim(0, 1.0)
+    plt.legend(title="Model")
+    plt.tight_layout()
+    plt.savefig(PLOTS_DIR / "07_violation_precision_recall.png", dpi=300, bbox_inches='tight')
+    plt.close()
+
+def plot_violation_grounding(metrics_data):
+    models = list(metrics_data.keys())
+    if not models: return
+    metrics = ["Mask IoU (Macro TN0)", "Greedy IoU (Macro TN0)", "Mask IoU (Micro Mean)"]
+    keys = ["violation_grounding_mask_iou_macro_tn0", "violation_grounding_greedy_iou_macro_tn0", "violation_grounding_mask_iou_micro_mean"]
+    data = [{"Model": m.upper(), "Metric": metric, "Score": metrics_data[m].get(key, 0)} for m in models for metric, key in zip(metrics, keys)]
+    plt.figure(figsize=(8, 6))
+    sns.barplot(data=pd.DataFrame(data), x="Metric", y="Score", hue="Model", palette="coolwarm")
+    plt.title("Violation Grounding (IoU) Comparison")
+    plt.ylim(0, 1.0)
+    plt.legend(title="Model")
+    plt.tight_layout()
+    plt.savefig(PLOTS_DIR / "08_violation_grounding.png", dpi=300, bbox_inches='tight')
     plt.close()
     
-def plot_reasoning_captioning(metrics_data):
+def plot_reasoning_vs_captioning(metrics_data):
+    models = list(metrics_data.keys())
+    if not models: return
+    metrics = ["Reasoning BERTScore", "Captioning BERTScore", "Reasoning CLIPScore", "Captioning CLIPScore"]
+    keys = ["reasoning_text_similarity_bertscore_f1_macro", "captioning_bertscore_f1", "reasoning_text_similarity_clipscore_macro", "captioning_clipscore"]
+    data = [{"Model": m.upper(), "Metric": metric, "Score": metrics_data[m].get(key, 0)} for m in models for metric, key in zip(metrics, keys)]
+    plt.figure(figsize=(12, 6))
+    sns.barplot(data=pd.DataFrame(data), x="Metric", y="Score", hue="Model", palette="colorblind")
+    plt.title("General Captioning vs Safety Reasoning Explanations")
+    plt.ylim(0, 1.0)
+    plt.legend(title="Model")
+    plt.tight_layout()
+    plt.savefig(PLOTS_DIR / "09_reasoning_vs_captioning.png", dpi=300, bbox_inches='tight')
+    plt.close()
+
+def plot_reasoning_by_rule(metrics_data):
+    models = list(metrics_data.keys())
+    if not models: return
+    rules = ["Rule 1", "Rule 2", "Macro"]
+    keys = ["reasoning_text_similarity_bertscore_f1_rule_1", "reasoning_text_similarity_bertscore_f1_rule_2", "reasoning_text_similarity_bertscore_f1_macro"]
+    data = [{"Model": m.upper(), "Rule": rule, "BERTScore F1": metrics_data[m].get(key, 0)} for m in models for rule, key in zip(rules, keys)]
+    plt.figure(figsize=(10, 6))
+    sns.barplot(data=pd.DataFrame(data), x="Rule", y="BERTScore F1", hue="Model", palette="husl")
+    plt.title("Reasoning Explanation Quality by Rule (BERTScore)")
+    plt.ylim(0, 1.0)
+    plt.legend(title="Model")
+    plt.tight_layout()
+    plt.savefig(PLOTS_DIR / "10_reasoning_by_rule.png", dpi=300, bbox_inches='tight')
+    plt.close()
+
+# ----- NEW 9 CHARTS -----
+
+def plot_radar_summary(metrics_data):
     models = list(metrics_data.keys())
     if not models: return
     
-    metrics = ["Reasoning BERTScore F1", "Reasoning Meteor", "Reasoning CLIPScore", "Captioning CLIPScore", "Captioning Meteor"]
+    metrics = ["Format\nValid", "Grounding\nIoU", "Grounding\nF1", "Violation\nF1", "Reasoning\nBERT"]
     keys = [
-        "reasoning_text_similarity_bertscore_f1_macro",
-        "reasoning_text_similarity_meteor_macro",
-        "reasoning_text_similarity_clipscore_macro",
-        "captioning_clipscore",
-        "captioning_meteor"
+        "structural_json_validity_rate",
+        "grounding_mask_iou_all_macro_mean_tn0",
+        "grounding_presence_f1_macro",
+        "violation_identification_f1_macro",
+        "reasoning_text_similarity_bertscore_f1_macro"
     ]
+    
+    # number of variable
+    N = len(metrics)
+    angles = [n / float(N) * 2 * pi for n in range(N)]
+    angles += angles[:1]
+    
+    plt.figure(figsize=(8, 8))
+    ax = plt.subplot(111, polar=True)
+    ax.set_theta_offset(pi / 2)
+    ax.set_theta_direction(-1)
+    
+    plt.xticks(angles[:-1], metrics)
+    ax.set_rlabel_position(0)
+    plt.yticks([0.2, 0.4, 0.6, 0.8], ["0.2", "0.4", "0.6", "0.8"], color="grey", size=7)
+    plt.ylim(0, 1.0)
+    
+    colors = sns.color_palette("deep", len(models))
+    for idx, model in enumerate(models):
+        values = [metrics_data[model].get(k, 0) for k in keys]
+        values += values[:1]
+        ax.plot(angles, values, linewidth=2, linestyle='solid', label=model.upper(), color=colors[idx])
+        ax.fill(angles, values, alpha=0.1, color=colors[idx])
+
+    plt.legend(loc='upper right', bbox_to_anchor=(0.1, 0.1))
+    plt.title("Radar Summary of Macro Metrics")
+    plt.savefig(PLOTS_DIR / "11_radar_summary.png", dpi=300, bbox_inches='tight')
+    plt.close()
+
+def plot_full_captioning_breakdown(metrics_data):
+    models = list(metrics_data.keys())
+    if not models: return
+    metrics = ["BERTScore P", "BERTScore R", "BERTScore F1", "METEOR", "CIDEr-D", "CLIPScore"]
+    keys = ["captioning_bertscore_precision", "captioning_bertscore_recall", "captioning_bertscore_f1", "captioning_meteor", "captioning_ciderd", "captioning_clipscore"]
+    data = [{"Model": m.upper(), "Metric": metric, "Score": metrics_data[m].get(key, 0)} for m in models for metric, key in zip(metrics, keys)]
+    plt.figure(figsize=(12, 6))
+    sns.barplot(data=pd.DataFrame(data), x="Metric", y="Score", hue="Model", palette="Set1")
+    plt.title("Full Captioning Metrics Breakdown")
+    plt.ylim(0, 1.0)
+    plt.legend(title="Model")
+    plt.tight_layout()
+    plt.savefig(PLOTS_DIR / "12_full_captioning_breakdown.png", dpi=300, bbox_inches='tight')
+    plt.close()
+
+def plot_grounding_counts(metrics_data):
+    models = list(metrics_data.keys())
+    if not models: return
+    classes = ["excavator", "rebar", "worker_with_white_hard_hat"]
+    stat_types = ["true_positives", "false_positives", "false_negatives"]
+    
+    fig, axes = plt.subplots(1, 3, figsize=(18, 6), sharey=True)
+    colors = sns.color_palette("muted", len(models))
+    
+    for i, cls in enumerate(classes):
+        data = []
+        for m in models:
+            for stat in stat_types:
+                val = metrics_data[m].get(f"grounding_{stat}_count_{cls}", 0)
+                data.append({"Model": m.upper(), "Count Type": stat.replace("_", " ").title(), "Count": val})
+        df = pd.DataFrame(data)
+        sns.barplot(data=df, x="Count Type", y="Count", hue="Model", ax=axes[i], palette="muted")
+        axes[i].set_title(cls.replace("_", " ").title())
+        axes[i].set_xlabel("")
+        if i > 0: axes[i].get_legend().remove()
+    
+    plt.suptitle("Grounding TP/FP/FN Counts per Class")
+    plt.tight_layout()
+    plt.savefig(PLOTS_DIR / "13_grounding_counts.png", dpi=300, bbox_inches='tight')
+    plt.close()
+
+def plot_mask_vs_greedy_iou(metrics_data):
+    models = list(metrics_data.keys())
+    if not models: return
+    classes = ["excavator", "rebar", "worker_with_white_hard_hat"]
     
     data = []
     for m in models:
-        for metric, key in zip(metrics, keys):
-            val = metrics_data[m].get(key, 0)
-            data.append({"Model": m.upper(), "Metric": metric, "Score": val})
+        for cls in classes:
+            mask_val = metrics_data[m].get(f"grounding_mask_iou_all_micro_{cls}", 0)
+            greedy_val = metrics_data[m].get(f"grounding_greedy_iou_all_micro_{cls}", 0)
+            data.append({"Model": m.upper(), "Class": cls.replace("_", " ").title(), "IoU Type": "Mask IoU", "Score": mask_val})
+            data.append({"Model": m.upper(), "Class": cls.replace("_", " ").title(), "IoU Type": "Greedy IoU", "Score": greedy_val})
             
     df = pd.DataFrame(data)
-    
-    plt.figure(figsize=(12, 6))
-    sns.barplot(data=df, x="Metric", y="Score", hue="Model", palette="colorblind")
-    plt.title("Reasoning & Captioning Quality")
+    plt.figure(figsize=(14, 6))
+    sns.catplot(data=df, x="Class", y="Score", hue="Model", col="IoU Type", kind="bar", height=5, aspect=1.2, palette="deep")
     plt.ylim(0, 1.0)
-    plt.ylabel("Score")
-    plt.xticks(rotation=15)
+    plt.tight_layout()
+    plt.savefig(PLOTS_DIR / "14_mask_vs_greedy_iou.png", dpi=300, bbox_inches='tight')
+    plt.close()
+
+def plot_exist_vs_all_iou(metrics_data):
+    models = list(metrics_data.keys())
+    if not models: return
+    metrics = ["Mask IoU (Exist Macro)", "Mask IoU (All Macro)"]
+    keys = ["grounding_mask_iou_exist_macro_mean", "grounding_mask_iou_all_macro_mean_tn1"]
+    data = [{"Model": m.upper(), "Metric": metric, "Score": metrics_data[m].get(key, 0)} for m in models for metric, key in zip(metrics, keys)]
+    plt.figure(figsize=(8, 6))
+    sns.barplot(data=pd.DataFrame(data), x="Metric", y="Score", hue="Model", palette="Set2")
+    plt.title("Grounding IoU: Objects that Exist vs All Images")
+    plt.ylim(0, 1.0)
     plt.legend(title="Model")
     plt.tight_layout()
-    plt.savefig(PLOTS_DIR / "reasoning_metrics.png", dpi=300, bbox_inches='tight')
+    plt.savefig(PLOTS_DIR / "15_exist_vs_all_iou.png", dpi=300, bbox_inches='tight')
+    plt.close()
+
+def plot_per_rule_prf1(metrics_data):
+    models = list(metrics_data.keys())
+    if not models: return
+    rules = ["rule_0", "rule_1", "rule_2"] # rule 3/4 usually zero
+    metrics = ["precision", "recall", "f1"]
+    
+    data = []
+    for m in models:
+        for rule in rules:
+            for metric in metrics:
+                key = f"violation_identification_{metric}_{rule}"
+                val = metrics_data[m].get(key, 0)
+                data.append({"Model": m.upper(), "Rule/Metric": f"{rule.replace('_',' ').title()} {metric.title()}", "Score": val})
+                
+    df = pd.DataFrame(data)
+    plt.figure(figsize=(16, 6))
+    sns.barplot(data=df, x="Rule/Metric", y="Score", hue="Model", palette="tab10")
+    plt.title("Per-Rule Violation Precision/Recall/F1 Breakdown")
+    plt.xticks(rotation=45)
+    plt.ylim(0, 1.0)
+    plt.legend(title="Model")
+    plt.tight_layout()
+    plt.savefig(PLOTS_DIR / "16_per_rule_prf1.png", dpi=300, bbox_inches='tight')
+    plt.close()
+
+def plot_full_reasoning_metrics(metrics_data):
+    models = list(metrics_data.keys())
+    if not models: return
+    metrics = ["BERTScore P", "BERTScore R", "BERTScore F1", "METEOR", "CIDEr", "CLIPScore"]
+    keys = ["reasoning_text_similarity_bertscore_precision_macro", "reasoning_text_similarity_bertscore_recall_macro", "reasoning_text_similarity_bertscore_f1_macro", "reasoning_text_similarity_meteor_macro", "reasoning_text_similarity_ciderd_macro", "reasoning_text_similarity_clipscore_macro"]
+    data = [{"Model": m.upper(), "Metric": metric, "Score": metrics_data[m].get(key, 0)} for m in models for metric, key in zip(metrics, keys)]
+    plt.figure(figsize=(12, 6))
+    sns.barplot(data=pd.DataFrame(data), x="Metric", y="Score", hue="Model", palette="magma")
+    plt.title("Full Reasoning Explanations Metrics (Macro)")
+    plt.ylim(0, 1.0)
+    plt.legend(title="Model")
+    plt.tight_layout()
+    plt.savefig(PLOTS_DIR / "17_full_reasoning_metrics.png", dpi=300, bbox_inches='tight')
+    plt.close()
+
+def plot_overall_heatmap(metrics_data):
+    models = list(metrics_data.keys())
+    if not models: return
+    
+    # Select a diverse set of top 15-20 metrics
+    selected_keys = [
+        "structural_json_validity_rate",
+        "captioning_bertscore_f1",
+        "captioning_clipscore",
+        "grounding_mask_iou_all_macro_mean_tn0",
+        "grounding_presence_f1_macro",
+        "violation_identification_f1_macro",
+        "violation_identification_recall_macro",
+        "violation_identification_precision_macro",
+        "violation_grounding_mask_iou_macro_tn0",
+        "reasoning_text_similarity_bertscore_f1_macro",
+        "reasoning_text_similarity_meteor_macro"
+    ]
+    
+    data_matrix = []
+    for k in selected_keys:
+        row = [metrics_data[m].get(k, 0) for m in models]
+        data_matrix.append(row)
+        
+    df = pd.DataFrame(data_matrix, columns=[m.upper() for m in models], index=[k.replace('_', ' ').title() for k in selected_keys])
+    
+    plt.figure(figsize=(10, 8))
+    sns.heatmap(df, annot=True, cmap="YlGnBu", fmt=".3f", vmin=0, vmax=1)
+    plt.title("Overall Metrics Heatmap")
+    plt.tight_layout()
+    plt.savefig(PLOTS_DIR / "18_overall_heatmap.png", dpi=300, bbox_inches='tight')
+    plt.close()
+
+def plot_caption_word_stats(metrics_data):
+    models = list(metrics_data.keys())
+    if not models: return
+    metrics = ["Avg Words (Captioning)", "Avg Words (Reasoning)"]
+    keys = ["captioning_avg_words_per_caption", "reasoning_text_similarity_avg_words_per_caption_micro"]
+    data = [{"Model": m.upper(), "Metric": metric, "Word Count": metrics_data[m].get(key, 0)} for m in models for metric, key in zip(metrics, keys)]
+    plt.figure(figsize=(8, 6))
+    sns.barplot(data=pd.DataFrame(data), x="Metric", y="Word Count", hue="Model", palette="Pastel1")
+    plt.title("Average Word Count per Caption/Explanation")
+    plt.legend(title="Model")
+    plt.tight_layout()
+    plt.savefig(PLOTS_DIR / "19_caption_word_stats.png", dpi=300, bbox_inches='tight')
     plt.close()
 
 def main():
@@ -185,19 +430,29 @@ def main():
         
     PLOTS_DIR.mkdir(parents=True, exist_ok=True)
     
-    print("Plotting formatting metrics...")
+    print("Generating the 19 Comprehensive Plot Suite...")
     plot_formatting(metrics_data, repair_data)
+    plot_grounding_iou(metrics_data)
+    plot_grounding_presence(metrics_data)
+    plot_grounding_tn0_vs_tn1(metrics_data)
+    plot_safety_violations_f1(metrics_data)
+    plot_iou_conditioned_violations(metrics_data)
+    plot_violation_precision_recall(metrics_data)
+    plot_violation_grounding(metrics_data)
+    plot_reasoning_vs_captioning(metrics_data)
+    plot_reasoning_by_rule(metrics_data)
     
-    print("Plotting grounding metrics...")
-    plot_grounding(metrics_data)
+    plot_radar_summary(metrics_data)
+    plot_full_captioning_breakdown(metrics_data)
+    plot_grounding_counts(metrics_data)
+    plot_mask_vs_greedy_iou(metrics_data)
+    plot_exist_vs_all_iou(metrics_data)
+    plot_per_rule_prf1(metrics_data)
+    plot_full_reasoning_metrics(metrics_data)
+    plot_overall_heatmap(metrics_data)
+    plot_caption_word_stats(metrics_data)
     
-    print("Plotting safety violations...")
-    plot_safety_violations(metrics_data)
-    
-    print("Plotting reasoning & captioning...")
-    plot_reasoning_captioning(metrics_data)
-    
-    print(f"All plots saved to {PLOTS_DIR.absolute()}")
+    print(f"All 19 plots successfully saved to {PLOTS_DIR.absolute()}")
 
 if __name__ == "__main__":
     main()
