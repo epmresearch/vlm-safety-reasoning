@@ -15,12 +15,22 @@ def compute_reward(completion: str, ground_truth: dict, **kwargs) -> float:
     if parsed is None:
         return 0.0
 
-    # Only score rules present in BOTH prediction and GT (TP set)
+    pred_rules = set()
+    gt_rules = set()
     common_rules = []
+    
     for r in RULES:
-        if _is_violation_present(parsed.get(f"{r}_violation")) and \
-           _is_violation_present(ground_truth.get(f"{r}_violation")):
+        has_pred = _is_violation_present(parsed.get(f"{r}_violation"))
+        has_gt = _is_violation_present(ground_truth.get(f"{r}_violation"))
+        
+        if has_pred: pred_rules.add(r)
+        if has_gt: gt_rules.add(r)
+        if has_pred and has_gt:
             common_rules.append(r)
+
+    # Perfect True Negative: Both correctly agree there are no violations
+    if not pred_rules and not gt_rules:
+        return 1.0
 
     if not common_rules:
         return 0.0  # No TPs to score
