@@ -63,7 +63,8 @@ pip install \
     tqdm \
     pytest \
     peft \
-    accelerate
+    accelerate \
+    bitsandbytes
 
 pip uninstall torchao -y || true
 
