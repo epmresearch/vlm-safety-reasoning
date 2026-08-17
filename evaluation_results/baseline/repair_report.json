@@ -1,0 +1,69 @@
+{
+  "total_records": 3004,
+  "status_counts": {
+    "valid_raw": 459,
+    "fixed_valid": 2525,
+    "invalid_schema": 20
+  },
+  "status_percentages": {
+    "valid_raw": 15.28,
+    "fixed_valid": 84.05,
+    "invalid_schema": 0.67
+  },
+  "change_type_summary": {
+    "json_syntax_parentheses_boxes": {
+      "total_occurrences": 1226,
+      "records_affected": 1219
+    },
+    "json_truncation_repaired": {
+      "total_occurrences": 1512,
+      "records_affected": 1512
+    },
+    "box_flat_list_reshaped": {
+      "total_occurrences": 2967,
+      "records_affected": 1884
+    },
+    "box_string_coordinates_parsed": {
+      "total_occurrences": 528,
+      "records_affected": 242
+    },
+    "box_dropped_unreconstructable": {
+      "total_occurrences": 388,
+      "records_affected": 114
+    },
+    "box_string_missing_closing_quote_repaired": {
+      "total_occurrences": 232,
+      "records_affected": 143
+    },
+    "box_string_multi_box_reshaped": {
+      "total_occurrences": 3,
+      "records_affected": 3
+    },
+    "box_dict_corners_converted": {
+      "total_occurrences": 116,
+      "records_affected": 86
+    },
+    "box_dict_wrapper_unwrapped": {
+      "total_occurrences": 2,
+      "records_affected": 1
+    },
+    "json_syntax_missing_closing_quote_in_list": {
+      "total_occurrences": 1,
+      "records_affected": 1
+    },
+    "violation_empty_dict_treated_as_null": {
+      "total_occurrences": 1,
+      "records_affected": 1
+    }
+  },
+  "warning_type_summary": {
+    "likely_truncated_output": {
+      "total_occurrences": 1605,
+      "records_affected": 1605
+    },
+    "duplicate_box_detected": {
+      "total_occurrences": 27,
+      "records_affected": 19
+    }
+  }
+}

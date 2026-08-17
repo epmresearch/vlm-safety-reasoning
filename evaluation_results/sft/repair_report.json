@@ -1,0 +1,35 @@
+{
+  "total_records": 3004,
+  "status_counts": {
+    "valid_raw": 2945,
+    "fixed_valid": 59
+  },
+  "status_percentages": {
+    "valid_raw": 98.04,
+    "fixed_valid": 1.96
+  },
+  "change_type_summary": {
+    "json_syntax_parentheses_boxes": {
+      "total_occurrences": 68,
+      "records_affected": 59
+    },
+    "json_truncation_repaired": {
+      "total_occurrences": 59,
+      "records_affected": 59
+    },
+    "box_dropped_unreconstructable": {
+      "total_occurrences": 46,
+      "records_affected": 46
+    }
+  },
+  "warning_type_summary": {
+    "likely_truncated_output": {
+      "total_occurrences": 59,
+      "records_affected": 59
+    },
+    "duplicate_box_detected": {
+      "total_occurrences": 45,
+      "records_affected": 37
+    }
+  }
+}
