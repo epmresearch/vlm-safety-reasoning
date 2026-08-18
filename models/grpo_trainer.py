@@ -207,7 +207,7 @@ def run_grpo(
         top_p=0.9,
         bf16=cfg.get("bf16", True),
         optim=cfg.get("optim", "adamw_8bit"),
-        report_to=["wandb", "console"],
+        report_to="wandb",
         remove_unused_columns=False,
     )
 
