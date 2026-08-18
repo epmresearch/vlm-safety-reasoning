@@ -109,6 +109,14 @@ def _cosine_sim(a: torch.Tensor, b: torch.Tensor) -> float:
         return torch.dot(a, b).item()
     return torch.nn.functional.cosine_similarity(a.unsqueeze(0), b.unsqueeze(0)).item()
 
+def _cosine_sim_batch(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+    """Compute cosine similarity across two batches of embeddings (shape: N x D)."""
+    if a.dim() == 1:
+        a = a.unsqueeze(0)
+    if b.dim() == 1:
+        b = b.unsqueeze(0)
+    return torch.nn.functional.cosine_similarity(a, b, dim=1)
+
 def _get_ngrams(tokens: List[str], n: int) -> set:
     """Helper to extract n-grams from a list of tokens."""
     return set(tuple(tokens[i:i+n]) for i in range(len(tokens)-n+1))
@@ -195,4 +203,19 @@ def _safe_reward(fn):
                 f"{traceback.format_exc()}"
             )
             return 0.0
+    return wrapper
+
+def _safe_batch_reward(fn):
+    """Decorator that wraps a batched reward function, returning [0.0]*N on exception."""
+    @functools.wraps(fn)
+    def wrapper(completions, ground_truths, *args, **kwargs):
+        try:
+            return fn(completions, ground_truths, *args, **kwargs)
+        except Exception as e:
+            import traceback
+            logger.warning(
+                f"Error in batch reward function {fn.__name__}: {str(e)}\n"
+                f"{traceback.format_exc()}"
+            )
+            return [0.0] * len(completions)
     return wrapper

@@ -77,6 +77,11 @@ def _make_batch_reward(reward_fn: Callable) -> Callable:
         
         import json
         parsed_gts = [json.loads(gt) if isinstance(gt, str) else gt for gt in ground_truth]
+
+        # Bypass for natively batched reward functions
+        if getattr(reward_fn, "is_batched", False):
+            return reward_fn(completions, parsed_gts, **kwargs)
+
         return [reward_fn(c, gt) for c, gt in zip(completions, parsed_gts)]
     batch_fn.__name__ = getattr(reward_fn, '__name__', 'reward_fn')
     return batch_fn
