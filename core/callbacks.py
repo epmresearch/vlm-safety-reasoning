@@ -176,13 +176,11 @@ class PersistentCheckpointCallback(TrainerCallback):
                 shutil.copytree(current_ckpt, persistent_ckpt)
 
 class ConsoleLogCallback(TrainerCallback):
-    """Prints training logs (like loss and rewards) directly to the console/SLURM log."""
+    """Prints all training logs directly to the console/SLURM log."""
     
     def on_log(self, args, state, control, logs=None, **kwargs):
         if logs is None:
             return
             
-        reward_keys = {k: v for k, v in logs.items() if "reward" in k.lower() or k == "loss"}
-        if reward_keys:
-            msg = " | ".join(f"{k}: {v:.4f}" if isinstance(v, float) else f"{k}: {v}" for k, v in reward_keys.items())
-            logger.info(f"Step {state.global_step} - {msg}")
+        import json
+        logger.info(f"Step {state.global_step} Logs:\n{json.dumps(logs, indent=2)}")
