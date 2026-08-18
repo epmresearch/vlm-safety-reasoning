@@ -47,7 +47,7 @@ def compute_reward(completion: str, ground_truth: dict, **kwargs) -> float:
         gt_boxes = clean_boxes(normalize_boxes(gt_boxes_raw))
 
         mask_result = compute_mask_union_iou(pred_boxes, gt_boxes)
-        iou = mask_result["iou"] if mask_result["iou"] is not None else 1.0
+        iou = mask_result["iou"] if mask_result["iou"] is not None else 0.0
         ious.append(iou)
 
     return sum(ious) / len(ious) if ious else 0.0

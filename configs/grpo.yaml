@@ -3,21 +3,21 @@ num_generations: 8
 max_prompt_length: 2048        # was 1024 — verified max is 1519 tokens (see unified.yaml comment)
 max_completion_length: 1000
 max_seq_length: 3200           # ADDED — must cover max_prompt + max_completion + margin
-learning_rate: 1.0e-6
-per_device_train_batch_size: 4
+learning_rate: 5.0e-7
+per_device_train_batch_size: 8
 gradient_accumulation_steps: 8
 num_train_epochs: 1
 logging_steps: 5
 save_steps: 50
 save_total_limit: 3
-beta: 0.04                     # KL penalty coefficient
+beta: 0.10                     # KL penalty coefficient
 use_gspo: false                # not yet implemented; placeholder
 bf16: true
 optim: "adamw_8bit"
 warmup_ratio: 0.05
 weight_decay: 0.01
 lr_scheduler_type: "cosine"
-max_grad_norm: 1.0
+max_grad_norm: 0.3
 
 # Model loading — will be used via load_model_for_training
 load_in_4bit: true

@@ -31,7 +31,7 @@ def compute_reward(completion: str, ground_truth: dict, **kwargs) -> float:
             # True Positive: both present
             mask_result = compute_mask_union_iou(pred_boxes, gt_boxes)
             iou = mask_result["iou"] if mask_result["iou"] is not None else 0.0
-            class_scores.append(0.5 + 0.5 * iou)  # 0.5 presence + 0.5*IoU quality
+            class_scores.append(iou)  # Pure IoU, range [0.0, 1.0], no cliff
 
     return sum(class_scores) / len(class_scores) if class_scores else 0.0
 

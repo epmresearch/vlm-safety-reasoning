@@ -189,6 +189,10 @@ def _safe_reward(fn):
         try:
             return fn(*args, **kwargs)
         except Exception as e:
-            logger.warning(f"Error in reward function {fn.__name__}: {str(e)}")
+            import traceback
+            logger.warning(
+                f"Error in reward function {fn.__name__}: {str(e)}\n"
+                f"{traceback.format_exc()}"
+            )
             return 0.0
     return wrapper

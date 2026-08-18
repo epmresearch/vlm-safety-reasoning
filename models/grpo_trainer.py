@@ -22,6 +22,7 @@ from core.config import load_config, load_task_config
 from core.io import ensure_dir
 from core.logging import get_logger
 from core.wandb_utils import init_run, finish_run
+from core.callbacks import PersistentCheckpointCallback, GPUMemoryLoggingCallback
 from models.model_loader import get_model_info, load_model_for_training
 from core.io import get_drive_path
 from data.loader import load_processed_dataset
@@ -119,7 +120,11 @@ def run_grpo(
     try:
         from data.oversampling import build_oversampled_indices
         train_split = raw_dataset["train"]
-        oversampled_indices, oversample_manifest = build_oversampled_indices(train_split)
+        oversampled_indices, oversample_manifest = build_oversampled_indices(
+            train_split,
+            rule24_multiplier=1,
+            rule3_multiplier=1,
+        )
         train_split = train_split.select(oversampled_indices)
         logger.info(f"Oversample manifest: {oversample_manifest}")
         logger.info(
@@ -191,6 +196,8 @@ def run_grpo(
         lr_scheduler_type=cfg.get("lr_scheduler_type", "cosine"),
         max_grad_norm=cfg.get("max_grad_norm", 1.0),
         beta=cfg["beta"],
+        temperature=0.5,
+        top_p=0.9,
         bf16=cfg.get("bf16", True),
         optim=cfg.get("optim", "adamw_8bit"),
         report_to=["wandb"],
@@ -212,6 +219,10 @@ def run_grpo(
             train_dataset=train_data,
             reward_funcs=reward_funcs,
             processing_class=tokenizer,
+            callbacks=[
+                PersistentCheckpointCallback(persistent_freq=200),
+                GPUMemoryLoggingCallback(every_n_steps=10)
+            ],
         )
         logger.info(
             f"Using TRL native multi-reward mode: "
@@ -231,6 +242,10 @@ def run_grpo(
             train_dataset=train_data,
             reward_funcs=[reward_fn],
             processing_class=tokenizer,
+            callbacks=[
+                PersistentCheckpointCallback(persistent_freq=200),
+                GPUMemoryLoggingCallback(every_n_steps=10)
+            ],
         )
         logger.info(
             "Using single composite reward mode (TRL reward_weights not available)"

@@ -39,12 +39,12 @@ from rewards.reward_reasoning import compute_reward as _reward_reasoning
 # Weights sum to 1.0 by design so total reward ∈ [0, 1].
 # ---------------------------------------------------------------------------
 REWARD_COMPONENTS: List[Tuple[str, Callable, float]] = [
-    ("reward_format",              _reward_format,              0.10),
+    ("reward_format",              _reward_format,              0.05),
     ("reward_caption",             _reward_caption,             0.15),
-    ("reward_grounding",           _reward_grounding,           0.20),
-    ("reward_violation_id",        _reward_violation_id,        0.25),
+    ("reward_grounding",           _reward_grounding,           0.25),
+    ("reward_violation_id",        _reward_violation_id,        0.30),
     ("reward_violation_grounding", _reward_violation_grounding, 0.15),
-    ("reward_reasoning",           _reward_reasoning,           0.15),
+    ("reward_reasoning",           _reward_reasoning,           0.10),
 ]
 
 # Repetition pathology penalty factor (applied multiplicatively to final score)

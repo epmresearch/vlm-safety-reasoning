@@ -156,3 +156,21 @@ class GPUMemoryLoggingCallback(TrainerCallback):
                 }, step=state.global_step)
         except Exception:
             pass
+
+class PersistentCheckpointCallback(TrainerCallback):
+    """Saves a permanent checkpoint every N steps that escapes save_total_limit rotation."""
+    
+    def __init__(self, persistent_freq: int = 200):
+        self.persistent_freq = persistent_freq
+
+    def on_save(self, args, state, control, **kwargs):
+        if state.global_step > 0 and state.global_step % self.persistent_freq == 0:
+            import os
+            import shutil
+            
+            current_ckpt = os.path.join(args.output_dir, f"checkpoint-{state.global_step}")
+            persistent_ckpt = os.path.join(args.output_dir, f"persistent-checkpoint-{state.global_step}")
+            
+            if os.path.exists(current_ckpt) and not os.path.exists(persistent_ckpt):
+                logger.info(f"Saving permanent checkpoint at step {state.global_step} to {persistent_ckpt}")
+                shutil.copytree(current_ckpt, persistent_ckpt)

@@ -96,7 +96,7 @@ def scale_1000_to_01(box_1000: BBox) -> List[float]:
     """[xmin, ymin, xmax, ymax] in [0,1000] → [0,1] (floats), clipped to the
     valid image region so hallucinated out-of-spec model coordinates can't
     silently corrupt downstream geometry (Shapely union/intersection)."""
-    return [min(1.0, max(0.0, c / 1000.0)) for c in box_1000]
+    return [min(1.0, max(0.0, float(c) / 1000.0)) for c in box_1000]
 
 
 # ---------------------------------------------------------------------------
