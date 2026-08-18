@@ -174,3 +174,15 @@ class PersistentCheckpointCallback(TrainerCallback):
             if os.path.exists(current_ckpt) and not os.path.exists(persistent_ckpt):
                 logger.info(f"Saving permanent checkpoint at step {state.global_step} to {persistent_ckpt}")
                 shutil.copytree(current_ckpt, persistent_ckpt)
+
+class ConsoleLogCallback(TrainerCallback):
+    """Prints training logs (like loss and rewards) directly to the console/SLURM log."""
+    
+    def on_log(self, args, state, control, logs=None, **kwargs):
+        if logs is None:
+            return
+            
+        reward_keys = {k: v for k, v in logs.items() if "reward" in k.lower() or k == "loss"}
+        if reward_keys:
+            msg = " | ".join(f"{k}: {v:.4f}" if isinstance(v, float) else f"{k}: {v}" for k, v in reward_keys.items())
+            logger.info(f"Step {state.global_step} - {msg}")

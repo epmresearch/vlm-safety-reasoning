@@ -22,7 +22,7 @@ from core.config import load_config, load_task_config
 from core.io import ensure_dir
 from core.logging import get_logger
 from core.wandb_utils import init_run, finish_run
-from core.callbacks import PersistentCheckpointCallback, GPUMemoryLoggingCallback
+from core.callbacks import PersistentCheckpointCallback, GPUMemoryLoggingCallback, ConsoleLogCallback
 from models.model_loader import get_model_info, load_model_for_training
 from core.io import get_drive_path
 from data.loader import load_processed_dataset
@@ -228,7 +228,8 @@ def run_grpo(
             processing_class=tokenizer,
             callbacks=[
                 PersistentCheckpointCallback(persistent_freq=200),
-                GPUMemoryLoggingCallback(every_n_steps=10)
+                GPUMemoryLoggingCallback(every_n_steps=10),
+                ConsoleLogCallback()
             ],
         )
         logger.info(
@@ -251,7 +252,8 @@ def run_grpo(
             processing_class=tokenizer,
             callbacks=[
                 PersistentCheckpointCallback(persistent_freq=200),
-                GPUMemoryLoggingCallback(every_n_steps=10)
+                GPUMemoryLoggingCallback(every_n_steps=10),
+                ConsoleLogCallback()
             ],
         )
         logger.info(
