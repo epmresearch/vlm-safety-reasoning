@@ -86,6 +86,13 @@ def run_grpo(
     # Override SFT context window with explicitly defined GRPO context window
     if "max_seq_length" in cfg:
         sft_cfg["max_seq_length"] = cfg["max_seq_length"]
+    
+    # Override gradient checkpointing so we can disable Unsloth offloading in GRPO
+    if "use_gradient_checkpointing" in cfg:
+        sft_cfg["use_gradient_checkpointing"] = cfg["use_gradient_checkpointing"]
+        
+    if "load_in_4bit" in cfg:
+        sft_cfg["load_in_4bit"] = cfg["load_in_4bit"]
 
     model, tokenizer, _ = load_model_for_training(
         model_name=hf_path,
