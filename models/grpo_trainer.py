@@ -129,8 +129,8 @@ def run_grpo(
         train_split = raw_dataset["train"]
         oversampled_indices, oversample_manifest = build_oversampled_indices(
             train_split,
-            rule24_multiplier=1,
-            rule3_multiplier=1,
+            rule24_multiplier=4,
+            rule3_multiplier=2,
         )
         train_split = train_split.select(oversampled_indices)
         logger.info(f"Oversample manifest: {oversample_manifest}")

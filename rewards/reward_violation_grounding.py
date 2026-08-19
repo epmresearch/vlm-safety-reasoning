@@ -28,10 +28,6 @@ def compute_reward(completion: str, ground_truth: dict, **kwargs) -> float:
         if has_pred and has_gt:
             common_rules.append(r)
 
-    # Perfect True Negative: Both correctly agree there are no violations
-    if not pred_rules and not gt_rules:
-        return 1.0
-
     if not common_rules:
         return 0.0  # No TPs to score
 

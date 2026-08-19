@@ -40,11 +40,6 @@ def compute_reward(completions: List[str], ground_truths: List[dict], **kwargs) 
             if has_pred and has_gt:
                 common_rules.append(r)
                 
-        # Perfect True Negative
-        if not pred_rules and not gt_rules:
-            rewards[i] = 1.0
-            continue
-            
         if not common_rules:
             continue
             
