@@ -26,6 +26,7 @@ def main():
     parser.add_argument("--variant", default="unified-grpo-v1", help="Variant name for GRPO")
     parser.add_argument("--max_samples", type=int, default=None, help="Cap dataset size for debugging")
     parser.add_argument("--sft_variant", default="unified-sft-v1", help="SFT variant name to load as starting adapter")
+    parser.add_argument("--adapter_path", default=None, help="Explicit full path to adapter (overrides sft_variant)")
     args = parser.parse_args()
 
     # Set up unique txt log file in the logs directory
@@ -36,9 +37,13 @@ def main():
 
     logger.info(f"Starting GRPO run for tier: {args.tier}, variant: {args.variant}, sft_variant: {args.sft_variant}")
 
-    # Build the path to the best SFT adapter for this tier
-    adapter_path = str(get_drive_path("checkpoints", f"qwen3vl-{args.tier}", args.sft_variant, "best"))
-    logger.info(f"Using explicitly specified SFT adapter path: {adapter_path}")
+    # Build the path to the best SFT adapter for this tier if explicit path is not provided
+    if args.adapter_path:
+        adapter_path = args.adapter_path
+        logger.info(f"Using explicitly specified adapter path: {adapter_path}")
+    else:
+        adapter_path = str(get_drive_path("checkpoints", f"qwen3vl-{args.tier}", args.sft_variant, "best"))
+        logger.info(f"Using SFT variant adapter path: {adapter_path}")
 
     # Run the GRPO training
     checkpoint_dir = run_grpo(
