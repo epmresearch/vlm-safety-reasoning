@@ -20,4 +20,6 @@ models:
     short_name: "qwen3vl-8b"
     size_label: "Large (8B)"
     per_device_train_batch_size: 32
-    gradient_accumulation_steps: 1    
+    per_device_eval_batch_size: 32
+    eval_accumulation_steps: 1
+    gradient_accumulation_steps: 1
