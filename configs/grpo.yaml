@@ -10,7 +10,7 @@ num_train_epochs: 1
 logging_steps: 5
 save_steps: 50
 save_total_limit: 3
-beta: 0.10                     # KL penalty coefficient
+beta: 0.04                     # KL penalty coefficient (lowered from 0.10 to allow more exploration)
 use_gspo: false                # not yet implemented; placeholder
 bf16: true
 optim: "adamw_8bit"

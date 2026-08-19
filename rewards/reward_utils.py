@@ -151,7 +151,7 @@ def _ngram_f1(pred: str, ref: str, n_range: tuple = (1, 2)) -> float:
     
     return 2 * precision * recall / (precision + recall)
 
-def _has_repetition_pathology(parsed: dict, threshold: int = 3) -> bool:
+def _has_repetition_pathology(parsed: dict, threshold: int = 5) -> bool:
     """Detects repeated boxes indicating a generation loop artifact."""
     all_boxes = []
     
