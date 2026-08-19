@@ -6,7 +6,7 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=80G
 #SBATCH --gres=gpu:h100:1
-#SBATCH --time=24:00:00
+#SBATCH --time=12:00:00
 #SBATCH --output=/home/%u/vlm-finetuning-project1/logs/grpo_v3_%j.out
 #SBATCH --error=/home/%u/vlm-finetuning-project1/logs/grpo_v3_%j.err
 #SBATCH --mail-type=BEGIN,END,FAIL
