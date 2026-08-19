@@ -40,23 +40,23 @@ HPC_DRIVE_ROOT="/home/$USER/vlm-finetuning-project1"
 export VLM_DATA_ROOT="$HPC_DRIVE_ROOT"
 
 echo "======================================================================"
-echo "[PHASE 1/3] Running Inference on GRPO V2 (checkpoint-836)"
+echo "[PHASE 1/3] SKIPPING INFERENCE (Already Complete)"
 echo "======================================================================"
-python -m experiments.run_inference \
-    --tier 2b \
-    --variant unified-grpo-v2 \
-    --checkpoint checkpoint-836 \
-    --batch_size 32
+# python -m experiments.run_inference \
+#     --tier 2b \
+#     --variant unified-grpo-v2 \
+#     --checkpoint checkpoint-836 \
+#     --batch_size 32
 
 PREDS_DIR="$HPC_DRIVE_ROOT/results/inference/unified-grpo-v2_checkpoint-836"
 PREDS_FILE="$PREDS_DIR/predictions.jsonl"
 
 echo "======================================================================"
-echo "[PHASE 2/3] Running Structural JSON Repair"
+echo "[PHASE 2/3] SKIPPING REPAIR (Already Complete)"
 echo "======================================================================"
-python preprocessing/structural_repair.py \
-    --input "$PREDS_FILE" \
-    --output "$PREDS_DIR/repair_applied/predictions_repaired.jsonl"
+# python preprocessing/structural_repair.py \
+#     --input "$PREDS_FILE" \
+#     --output "$PREDS_DIR/repair_applied/predictions_repaired.jsonl"
 
 echo "======================================================================"
 echo "[PHASE 3/3] Running Full Evaluation Pipeline"

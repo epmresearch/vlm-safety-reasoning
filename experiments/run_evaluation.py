@@ -124,9 +124,10 @@ def main():
         ensure_java8_active()
 
     if not _check_java_available():
-        raise RuntimeError(
-            "Java is not on PATH at all. Install a JRE before running evaluation, "
-            "e.g.: apt-get install -y openjdk-8-jdk-headless"
+        logger.warning(
+            "Java is not on PATH at all. METEOR and CIDEr-D metrics will be skipped. "
+            "To enable them, install a JRE (e.g., apt-get install -y openjdk-8-jdk-headless) "
+            "or run on a node with Java installed."
         )
 
     SPICE_CACHE_DIR = str(get_drive_path("tools", "spice_corenlp_cache"))
