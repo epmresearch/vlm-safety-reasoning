@@ -43,15 +43,21 @@ HPC_DRIVE_ROOT="/home/$USER/vlm-finetuning-project1"
 export VLM_DATA_ROOT="$HPC_DRIVE_ROOT"
 
 echo "======================================================================"
-echo "[PHASE 1/3] Running Inference on 8B GRPO Model"
+echo "[PHASE 1/3] Running Inference on 8B GRPO Model (Auto-detect Checkpoint)"
 echo "======================================================================"
+
+# Dynamically find the latest checkpoint folder
+CHK_DIR=$(ls -td $HPC_DRIVE_ROOT/checkpoints/qwen3vl-8b/unified-grpo-8b-v1/checkpoint-* | head -1)
+CHK_NAME=$(basename "$CHK_DIR")
+echo "Auto-detected latest checkpoint: $CHK_NAME"
+
 python -m experiments.run_inference \
     --tier 8b \
     --variant unified-grpo-8b-v1 \
-    --checkpoint checkpoint-836 \
+    --checkpoint "$CHK_NAME" \
     --batch_size 32
 
-PREDS_DIR="$HPC_DRIVE_ROOT/results/inference/unified-grpo-8b-v1_checkpoint-836"
+PREDS_DIR="$HPC_DRIVE_ROOT/results/inference/unified-grpo-8b-v1_$CHK_NAME"
 PREDS_FILE="$PREDS_DIR/predictions.jsonl"
 
 echo "======================================================================"
