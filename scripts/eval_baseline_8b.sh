@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-#SBATCH --job-name=vlm-eval-sft-8b
+#SBATCH --job-name=vlm-baseline-8b
 #SBATCH --partition=gpu-h100
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -7,8 +7,8 @@
 #SBATCH --mem=80G
 #SBATCH --gres=gpu:h100:1
 #SBATCH --time=12:00:00
-#SBATCH --output=/home/%u/vlm-finetuning-project1/logs/eval_sft_8b_%j.out
-#SBATCH --error=/home/%u/vlm-finetuning-project1/logs/eval_sft_8b_%j.err
+#SBATCH --output=/home/%u/vlm-finetuning-project1/logs/eval_baseline_8b_%j.out
+#SBATCH --error=/home/%u/vlm-finetuning-project1/logs/eval_baseline_8b_%j.err
 #SBATCH --mail-type=BEGIN,END,FAIL
 #SBATCH --mail-user=nabeel.shan@ucalgary.ca
 
@@ -42,15 +42,14 @@ HPC_DRIVE_ROOT="/home/$USER/vlm-finetuning-project1"
 export VLM_DATA_ROOT="$HPC_DRIVE_ROOT"
 
 echo "======================================================================"
-echo "[PHASE 1/3] Running Inference on 8B SFT Best Checkpoint"
+echo "[PHASE 1/3] Running Inference on BASELINE 8B Model (No Adapter)"
 echo "======================================================================"
 python -m experiments.run_inference \
     --tier 8b \
-    --variant unified-sft-8b-v1 \
-    --checkpoint best \
+    --run_name baseline_8b \
     --batch_size 32
 
-PREDS_DIR="$HPC_DRIVE_ROOT/results/inference/unified-sft-8b-v1_best"
+PREDS_DIR="$HPC_DRIVE_ROOT/results/inference/baseline_8b"
 PREDS_FILE="$PREDS_DIR/predictions.jsonl"
 
 echo "======================================================================"
@@ -71,9 +70,9 @@ python -m experiments.run_evaluation \
     --output_dir "$EVAL_OUT_DIR" \
     --skip_spice \
     --wandb_project "vlm-safety-evals" \
-    --wandb_run_name "qwen3-8b-sft-v1-repaired"
+    --wandb_run_name "qwen3-8b-baseline-repaired"
 
 echo "======================================================================"
-echo "SFT 8B Evaluation completed successfully: $(date)"
+echo "Baseline 8B Evaluation completed successfully: $(date)"
 echo "Metrics saved to: $EVAL_OUT_DIR/metrics.json"
 echo "======================================================================"
