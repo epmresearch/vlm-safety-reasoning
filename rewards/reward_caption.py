@@ -5,7 +5,7 @@ Uses semantic similarity, lexical overlap, and length calibration.
 
 import math
 from typing import List, Dict
-from rewards.reward_utils import _strict_parse, _safe_batch_reward, _embed_texts, _cosine_sim_batch, _ngram_f1
+from rewards.reward_utils import _strict_parse_for_task, _safe_batch_reward, _embed_texts, _cosine_sim_batch, _ngram_f1
 from core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -19,7 +19,8 @@ def compute_reward(completions: List[str], ground_truths: List[dict], **kwargs) 
     gt_caps = []
     
     for i, (completion, gt) in enumerate(zip(completions, ground_truths)):
-        parsed = _strict_parse(completion)
+        task = kwargs.get("task", "unified")
+        parsed = _strict_parse_for_task(completion, task=task)
         if parsed is None:
             continue
             

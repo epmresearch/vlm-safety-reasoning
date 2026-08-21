@@ -83,14 +83,22 @@ def main():
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--tier", default=default_tier, help="Model tier (e.g., 2b, 4b, 8b)")
+    parser.add_argument("--task", default="unified", help="Task name: 'unified' or 'violations_only'")
     args = parser.parse_args()
 
     model_info = get_model_info(args.tier)
     short_name = model_info["short_name"]
 
-    baseline_metrics = load_eval_json(short_name, "baseline")
-    sft_metrics = load_eval_json(short_name, "unified-sft-v1")
-    grpo_metrics = load_eval_json(short_name, "unified-grpo-v1")
+    if args.task == "unified":
+        baseline_metrics = load_eval_json(short_name, "baseline")
+        sft_metrics = load_eval_json(short_name, "unified-sft-v1")
+        grpo_metrics = load_eval_json(short_name, "unified-grpo-v1")
+    else:
+        # e.g. violations_only -> vo-sft-v1
+        prefix = "vo" if args.task == "violations_only" else args.task
+        baseline_metrics = load_eval_json(short_name, f"{prefix}-baseline")
+        sft_metrics = load_eval_json(short_name, f"{prefix}-sft-v1")
+        grpo_metrics = load_eval_json(short_name, f"{prefix}-grpo-v1")
 
     summary_rows = [
         flatten_metrics(baseline_metrics, "Base"),

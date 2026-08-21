@@ -3,7 +3,7 @@ Computes the object grounding IoU reward for GRPO.
 Calculates IoU for specific classes and correctly handles true negatives.
 """
 
-from rewards.reward_utils import _strict_parse, _safe_reward
+from rewards.reward_utils import _strict_parse_for_task, _safe_reward
 from data.box_utils import normalize_boxes, clean_boxes, scale_1000_to_01, compute_mask_union_iou
 from core.constants import GROUNDING_CLASSES
 from core.logging import get_logger
@@ -12,7 +12,8 @@ logger = get_logger(__name__)
 
 @_safe_reward
 def compute_reward(completion: str, ground_truth: dict, **kwargs) -> float:
-    parsed = _strict_parse(completion)
+    task = kwargs.get("task", "unified")
+    parsed = _strict_parse_for_task(completion, task=task)
     if parsed is None:
         return 0.0
 

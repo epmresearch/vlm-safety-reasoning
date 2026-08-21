@@ -2,7 +2,7 @@
 Violation bounding box IoU, conditioned on TP rules only (rules present in BOTH prediction and GT).
 """
 
-from rewards.reward_utils import _strict_parse, _safe_reward, _is_violation_present
+from rewards.reward_utils import _strict_parse_for_task, _safe_reward, _is_violation_present
 from data.box_utils import normalize_boxes, clean_boxes, scale_1000_to_01, compute_mask_union_iou
 from core.constants import RULES
 from core.logging import get_logger
@@ -11,7 +11,8 @@ logger = get_logger(__name__)
 
 @_safe_reward
 def compute_reward(completion: str, ground_truth: dict, **kwargs) -> float:
-    parsed = _strict_parse(completion)
+    task = kwargs.get("task", "unified")
+    parsed = _strict_parse_for_task(completion, task=task)
     if parsed is None:
         return 0.0
 

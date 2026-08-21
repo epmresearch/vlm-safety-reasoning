@@ -16,9 +16,9 @@ from core.io import ensure_dir, get_drive_path
 from core.logging import get_logger, attach_file_logger
 from core.run_manifest import save_run_manifest
 from data.loader import load_processed_dataset
-from data.preprocessor import build_ground_truth_dict
+from data.preprocessor import build_gt_dict
 
-from evaluation.output_parser import parse_model_output, validate_unified_output
+from evaluation.output_parser import parse_model_output, validate_unified_output, validate_output_for_task
 from evaluation.metrics_captioning import compute_all_caption_metrics, _check_java_available
 from evaluation.metrics_grounding import compute_grounding_metrics
 from evaluation.metrics_violations import compute_violation_metrics
@@ -63,7 +63,7 @@ def ensure_java8_active():
         logger.warning(f"Attempted Java 8 switch but verification failed: {verify}")
 
 
-def run_dual_pass(raw_predictions: List[str], references: List[Dict[str, Any]], images: List[Any], skip_spice: bool = False, spice_only: bool = False):
+def run_dual_pass(raw_predictions: List[str], references: List[Dict[str, Any]], images: List[Any], skip_spice: bool = False, spice_only: bool = False, task: str = "unified"):
     logger.info("Parsing and validating outputs...")
     
     parsed_preds = []
@@ -79,7 +79,10 @@ def run_dual_pass(raw_predictions: List[str], references: List[Dict[str, Any]], 
             parsed_preds.append(None)
             continue
             
-        validated = validate_unified_output(parsed)
+        if task == "unified":
+            validated = validate_unified_output(parsed)
+        else:
+            validated = validate_output_for_task(parsed, task=task)
         if validated is None:
             failures.append({"image_id": image_id, "error_type": "schema_validation_error", "raw_prediction": raw})
             parsed_preds.append(None)
@@ -90,7 +93,7 @@ def run_dual_pass(raw_predictions: List[str], references: List[Dict[str, Any]], 
     # Calculate Structural Metrics (FIXED SIGNATURE)
     structural_metrics = {}
     if not spice_only:
-        structural_metrics = compute_structural_metrics(raw_predictions)
+        structural_metrics = compute_structural_metrics(raw_predictions, task=task)
     
     # 2. Split the Lists
     # Strict
@@ -135,11 +138,13 @@ def run_dual_pass(raw_predictions: List[str], references: List[Dict[str, Any]], 
     logger.info("Running STRICT metrics pass...")
     strict_metrics = {}
     if len(pred_captions_strict) > 0:
-        strict_metrics.update(compute_all_caption_metrics(pred_captions_strict, gt_captions_strict, images_strict, include_spice=not skip_spice, spice_only=spice_only, prefix="captioning_"))
+        if task != "violations_only":
+            strict_metrics.update(compute_all_caption_metrics(pred_captions_strict, gt_captions_strict, images_strict, include_spice=not skip_spice, spice_only=spice_only, prefix="captioning_"))
         if not spice_only:
-            strict_metrics.update(compute_grounding_metrics(pred_objects_strict, gt_objects_strict))
+            if task != "violations_only":
+                strict_metrics.update(compute_grounding_metrics(pred_objects_strict, gt_objects_strict))
             strict_metrics.update(compute_violation_metrics(pred_violations_strict, gt_violations_strict))
-            strict_metrics.update(batch_score_reasoning(pred_violations_strict, gt_violations_strict, images=images_strict)) # Added missing images parameter
+            strict_metrics.update(batch_score_reasoning(pred_violations_strict, gt_violations_strict, images=images_strict))
 
     # 4. Pass 2: Valid
     if not failures:
@@ -150,9 +155,11 @@ def run_dual_pass(raw_predictions: List[str], references: List[Dict[str, Any]], 
         logger.info("Running VALID metrics pass...")
         valid_metrics = {}
         if len(pred_captions_valid) > 0:
-            valid_metrics.update(compute_all_caption_metrics(pred_captions_valid, gt_captions_valid, images_valid, include_spice=not skip_spice, spice_only=spice_only, prefix="captioning_"))
+            if task != "violations_only":
+                valid_metrics.update(compute_all_caption_metrics(pred_captions_valid, gt_captions_valid, images_valid, include_spice=not skip_spice, spice_only=spice_only, prefix="captioning_"))
             if not spice_only:
-                valid_metrics.update(compute_grounding_metrics(pred_objects_valid, gt_objects_valid))
+                if task != "violations_only":
+                    valid_metrics.update(compute_grounding_metrics(pred_objects_valid, gt_objects_valid))
                 valid_metrics.update(compute_violation_metrics(pred_violations_valid, gt_violations_valid))
                 valid_metrics.update(batch_score_reasoning(pred_violations_valid, gt_violations_valid, images=images_valid))
 
@@ -179,6 +186,7 @@ def main():
     parser.add_argument("--spice_only", action="store_true")
     parser.add_argument("--wandb_project", type=str, default=None, help="Weights & Biases project name")
     parser.add_argument("--wandb_run_name", type=str, default=None, help="Weights & Biases run name")
+    parser.add_argument("--task", default="unified", help="Task name: 'unified' or 'violations_only'")
     args = parser.parse_args()
 
     predictions_path = Path(args.predictions_path)
@@ -217,7 +225,7 @@ def main():
         records = records[:args.max_samples]
     
     raw_predictions = [r["raw_output"] for r in records]
-    references = [build_ground_truth_dict(r["sample"]) for r in records]
+    references = [build_gt_dict(r["sample"], task=args.task) for r in records]
 
     logger.info("Loading processed dataset to re-attach images...")
     splits = load_processed_dataset()
@@ -226,7 +234,7 @@ def main():
     images = [image_map.get(str(r.get("image_id"))) for r in records]
 
     # --- Run Dual Evaluation ---
-    eval_results = run_dual_pass(raw_predictions, references, images, skip_spice=args.skip_spice, spice_only=args.spice_only)
+    eval_results = run_dual_pass(raw_predictions, references, images, skip_spice=args.skip_spice, spice_only=args.spice_only, task=args.task)
 
     # --- Save Nested Metrics ---
     metrics_path = output_dir / "metrics.json"

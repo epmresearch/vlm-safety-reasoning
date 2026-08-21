@@ -1,8 +1,9 @@
 """
 Config loading and merging.
 
-Every experiment loads: base.yaml + a task yaml + (sft.yaml or grpo.yaml) +
-model_strategy.yaml, merged into a single dict-like object.
+Every experiment loads: base.yaml + model_registry.yaml + (sft.yaml or
+grpo.yaml) + task yaml, merged into a single dict-like object.
+Task config is applied last so task-specific overrides always win.
 """
 from pathlib import Path
 from typing import Any, Dict
@@ -56,13 +57,20 @@ def load_config(task: str = None, training_kind: str = None) -> Dict[str, Any]:
     """
     Convenience loader used by experiments/*.py.
 
+    Merge precedence (last wins):
+        base.yaml → model_registry.yaml → {sft,grpo}.yaml → tasks/{task}.yaml
+
+    Task config is applied LAST so that task-specific overrides (e.g.
+    violations_only.yaml setting max_completion_length: 1024) always take
+    priority over generic training defaults (e.g. grpo.yaml's 1000).
+
     Example:
-        cfg = load_config(task="rule_violation", training_kind="sft")
-        cfg["drive_root"], cfg["reward_weights"], cfg["lr"], etc. are all present.
+        cfg = load_config(task="violations_only", training_kind="grpo")
+        cfg["max_completion_length"]  # → 1024, from the task config
     """
     parts = [load_base_config(), load_model_strategy()]
-    if task:
-        parts.append(load_task_config(task))
     if training_kind:
         parts.append(load_training_config(training_kind))
+    if task:
+        parts.append(load_task_config(task))
     return merge_configs(*parts)

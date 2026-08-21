@@ -2,7 +2,7 @@
 Violation identification using F-beta (beta=2, recall-weighted) over predicted vs ground-truth rule sets.
 """
 
-from rewards.reward_utils import _strict_parse, _safe_reward, _is_violation_present
+from rewards.reward_utils import _strict_parse_for_task, _safe_reward, _is_violation_present
 from core.constants import RULES
 from core.logging import get_logger
 
@@ -10,7 +10,8 @@ logger = get_logger(__name__)
 
 @_safe_reward
 def compute_reward(completion: str, ground_truth: dict, **kwargs) -> float:
-    parsed = _strict_parse(completion)
+    task = kwargs.get("task", "unified")
+    parsed = _strict_parse_for_task(completion, task=task)
     if parsed is None:
         return 0.0
 

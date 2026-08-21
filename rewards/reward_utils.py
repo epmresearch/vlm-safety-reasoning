@@ -32,15 +32,15 @@ def _strict_parse_cached(text: str) -> Optional[dict]:
     Strictly parse JSON from text and cache the result.
     """
     try:
-        stripped = strip_fences(text)
-        if not stripped:
-            return None
-        parsed = json.loads(stripped)
-        if not isinstance(parsed, dict):
+        from evaluation.output_parser import parse_model_output, validate_unified_output
+        parsed = parse_model_output(text)
+        if parsed is None or not isinstance(parsed, dict):
             return None
         
-        # Validate using Pydantic schema
-        UnifiedOutput(**parsed)
+        # Validate using Pydantic schema via output_parser
+        if validate_unified_output(parsed) is None:
+            return None
+            
         return parsed
     except Exception as e:
         return None
@@ -219,3 +219,42 @@ def _safe_batch_reward(fn):
             )
             return [0.0] * len(completions)
     return wrapper
+
+# ---------------------------------------------------------------------------
+# Task-aware strict parsing
+# ---------------------------------------------------------------------------
+
+@functools.lru_cache(maxsize=128)
+def _strict_parse_with_schema_cached(text: str, schema_name: str) -> Optional[dict]:
+    """Parse JSON and validate against the schema identified by schema_name.
+    
+    Unlike _strict_parse_cached (which always validates against UnifiedOutput),
+    this function uses the schema registry to validate against the correct
+    schema for the given task.
+    """
+    try:
+        from evaluation.output_parser import parse_model_output, validate_output_for_task
+        parsed = parse_model_output(text)
+        if parsed is None or not isinstance(parsed, dict):
+            return None
+        # Validate against the appropriate schema
+        if validate_output_for_task(parsed, task=schema_name) is None:
+            return None
+        return parsed
+    except Exception:
+        return None
+
+
+def _strict_parse_for_task(text: Union[str, List[Dict]], task: str = "unified") -> Optional[dict]:
+    """Task-aware wrapper around cached parser.
+    
+    For task='unified', produces identical results to _strict_parse().
+    For task='violations_only', validates against ViolationsOnlyOutput
+    (which does NOT require caption or grounding class fields).
+    """
+    if isinstance(text, list):
+        text = text[-1].get("content", "") if text else ""
+    elif not isinstance(text, str):
+        text = str(text)
+    res = _strict_parse_with_schema_cached(text, task)
+    return copy.deepcopy(res) if res is not None else None

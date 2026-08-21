@@ -44,7 +44,7 @@ class RawSample(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Unified model output schema (the ONLY output schema)
+# Unified model output schema
 # What the VLM is trained to produce in a single JSON response.
 # ---------------------------------------------------------------------------
 
@@ -58,6 +58,49 @@ class UnifiedOutput(BaseModel):
     excavator: List[BBox] = Field(default_factory=list)
     rebar: List[BBox] = Field(default_factory=list)
     worker_with_white_hard_hat: List[BBox] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Violations-only model output schema
+# Only the 4 rule violations — no caption, no object grounding.
+# ---------------------------------------------------------------------------
+
+class ViolationsOnlyOutput(BaseModel):
+    """Output schema for the violations-only task.
+    Only the 4 rule violations — no caption, no object grounding."""
+    rule_1_violation: Optional[RuleViolation] = None
+    rule_2_violation: Optional[RuleViolation] = None
+    rule_3_violation: Optional[RuleViolation] = None
+    rule_4_violation: Optional[RuleViolation] = None
+
+
+# ---------------------------------------------------------------------------
+# Schema registry — maps task name to output Pydantic model
+# ---------------------------------------------------------------------------
+
+SCHEMA_REGISTRY = {
+    "unified": UnifiedOutput,
+    "violations_only": ViolationsOnlyOutput,
+}
+
+
+def get_output_schema(task: str) -> type:
+    """Returns the Pydantic output schema class for the given task.
+
+    Args:
+        task: Task name (e.g., 'unified', 'violations_only').
+
+    Returns:
+        The Pydantic BaseModel subclass for that task's output.
+
+    Raises:
+        ValueError: If the task name is not in the registry.
+    """
+    if task not in SCHEMA_REGISTRY:
+        raise ValueError(
+            f"Unknown task: {task!r}. Known tasks: {list(SCHEMA_REGISTRY.keys())}"
+        )
+    return SCHEMA_REGISTRY[task]
 
 
 # ---------------------------------------------------------------------------

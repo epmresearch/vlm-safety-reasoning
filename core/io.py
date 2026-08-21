@@ -49,11 +49,29 @@ def safe_load_json(path: PathLike) -> Dict[str, Any]:
 def append_to_csv(row: Dict[str, Any], path: PathLike) -> None:
     """Thread-unsafe but process-safe-enough append for single-process eval loops.
     Writes header only if the file doesn't exist yet."""
+    import os
     path = Path(path)
     ensure_dir(path.parent)
-    file_exists = path.exists()
+    
+    fieldnames = list(row.keys())
+    file_exists = path.exists() and os.path.getsize(path) > 0
+    
+    if file_exists:
+        with open(path, "r", newline="", encoding="utf-8") as f:
+            reader = csv.reader(f)
+            try:
+                existing_headers = next(reader)
+                if existing_headers:
+                    # Enforce the file's column order
+                    fieldnames = existing_headers
+                    
+                    # If this row has entirely new keys not in the file, we can't easily 
+                    # inject new headers mid-file. They will be dropped by extrasaction='ignore'.
+            except StopIteration:
+                pass
+
     with open(path, "a", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=list(row.keys()))
+        writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction='ignore')
         if not file_exists:
             writer.writeheader()
         writer.writerow(row)

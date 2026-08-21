@@ -15,22 +15,31 @@ MODELS = ["baseline", "sft", "grpo"]
 RESULTS_DIR = Path("evaluation_results")
 PLOTS_DIR = RESULTS_DIR / "plots"
 
-def load_metrics():
+def load_metrics(task: str = "unified"):
     metrics_data = {}
     repair_data = {}
-    for model in MODELS:
-        metrics_file = RESULTS_DIR / model / "metrics.json"
-        repair_file = RESULTS_DIR / model / "repair_report.json"
+    
+    if task == "unified":
+        models = ["baseline", "sft", "grpo"]
+        variants = ["baseline", "sft", "grpo"]
+    else:
+        prefix = "vo" if task == "violations_only" else task
+        models = ["baseline", "sft", "grpo"]
+        variants = [f"{prefix}-baseline", f"{prefix}-sft-v1", f"{prefix}-grpo-v1"]
+        
+    for model_key, variant in zip(models, variants):
+        metrics_file = RESULTS_DIR / variant / "metrics.json"
+        repair_file = RESULTS_DIR / variant / "repair_report.json"
         
         if metrics_file.exists():
             with open(metrics_file, "r") as f:
-                metrics_data[model] = json.load(f)
+                metrics_data[model_key] = json.load(f)
         else:
             print(f"Warning: {metrics_file} not found.")
             
         if repair_file.exists():
             with open(repair_file, "r") as f:
-                repair_data[model] = json.load(f)
+                repair_data[model_key] = json.load(f)
         else:
             print(f"Warning: {repair_file} not found.")
             
@@ -229,6 +238,11 @@ def plot_radar_summary(metrics_data):
         "violation_identification_f1_macro",
         "reasoning_text_similarity_bertscore_f1_macro"
     ]
+    # Filter out missing keys to gracefully support violations_only task
+    valid_indices = [i for i, k in enumerate(keys) if any(m_data.get(k) is not None for m_data in metrics_data.values())]
+    if not valid_indices: return
+    metrics = [metrics[i] for i in valid_indices]
+    keys = [keys[i] for i in valid_indices]
     
     # number of variable
     N = len(metrics)
@@ -392,6 +406,9 @@ def plot_overall_heatmap(metrics_data):
         "reasoning_text_similarity_bertscore_f1_macro",
         "reasoning_text_similarity_meteor_macro"
     ]
+    # Filter out missing keys for task awareness
+    selected_keys = [k for k in selected_keys if any(m_data.get(k) is not None for m_data in metrics_data.values())]
+    if not selected_keys: return
     
     data_matrix = []
     for k in selected_keys:
@@ -422,37 +439,51 @@ def plot_caption_word_stats(metrics_data):
     plt.close()
 
 def main():
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--task", default="unified", help="Task name")
+    args = parser.parse_args()
+
     print("Loading metrics...")
-    metrics_data, repair_data = load_metrics()
+    metrics_data, repair_data = load_metrics(args.task)
     if not metrics_data:
         print("No metrics found in evaluation_results/")
         return
         
     PLOTS_DIR.mkdir(parents=True, exist_ok=True)
     
-    print("Generating the 19 Comprehensive Plot Suite...")
+    print("Generating Comprehensive Plot Suite...")
     plot_formatting(metrics_data, repair_data)
-    plot_grounding_iou(metrics_data)
-    plot_grounding_presence(metrics_data)
-    plot_grounding_tn0_vs_tn1(metrics_data)
+    
+    if args.task != "violations_only":
+        plot_grounding_iou(metrics_data)
+        plot_grounding_presence(metrics_data)
+        plot_grounding_tn0_vs_tn1(metrics_data)
+        
     plot_safety_violations_f1(metrics_data)
     plot_iou_conditioned_violations(metrics_data)
     plot_violation_precision_recall(metrics_data)
     plot_violation_grounding(metrics_data)
-    plot_reasoning_vs_captioning(metrics_data)
+    
+    if args.task != "violations_only":
+        plot_reasoning_vs_captioning(metrics_data)
+        
     plot_reasoning_by_rule(metrics_data)
     
     plot_radar_summary(metrics_data)
-    plot_full_captioning_breakdown(metrics_data)
-    plot_grounding_counts(metrics_data)
-    plot_mask_vs_greedy_iou(metrics_data)
-    plot_exist_vs_all_iou(metrics_data)
+    if args.task != "violations_only":
+        plot_full_captioning_breakdown(metrics_data)
+        plot_grounding_counts(metrics_data)
+        plot_mask_vs_greedy_iou(metrics_data)
+        plot_exist_vs_all_iou(metrics_data)
+        plot_caption_word_stats(metrics_data)
+        
+    plot_radar_summary(metrics_data)
     plot_per_rule_prf1(metrics_data)
     plot_full_reasoning_metrics(metrics_data)
     plot_overall_heatmap(metrics_data)
-    plot_caption_word_stats(metrics_data)
     
-    print(f"All 19 plots successfully saved to {PLOTS_DIR.absolute()}")
+    print(f"Plots successfully saved to {PLOTS_DIR.absolute()}")
 
 if __name__ == "__main__":
     main()

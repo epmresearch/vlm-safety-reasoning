@@ -3,15 +3,18 @@ Metrics for structural evaluation (e.g., JSON validity).
 """
 from typing import List, Dict, Any, Optional
 
-from evaluation.output_parser import parse_model_output, validate_unified_output
+from evaluation.output_parser import parse_model_output, validate_output_for_task
 from core.logging import get_logger
 
 logger = get_logger(__name__)
 
-def compute_structural_metrics(raw_outputs: List[str]) -> Dict[str, float]:
+def compute_structural_metrics(raw_outputs: List[str], task: str = "unified") -> Dict[str, float]:
     """
     Computes JSON validity and schema adherence metrics.
-    raw_outputs: list of raw string responses from the model.
+
+    Args:
+        raw_outputs: list of raw string responses from the model.
+        task: Task name for schema-aware validation ('unified' or 'violations_only').
     """
     if not raw_outputs:
         raise ValueError(
@@ -26,7 +29,7 @@ def compute_structural_metrics(raw_outputs: List[str]) -> Dict[str, float]:
         parsed = parse_model_output(raw_str)
         if parsed is not None:
             valid_json_count += 1
-            validated = validate_unified_output(parsed)
+            validated = validate_output_for_task(parsed, task=task)
             if validated is not None:
                 valid_schema_count += 1
                 

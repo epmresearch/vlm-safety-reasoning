@@ -63,6 +63,7 @@ def main():
         "--repetition_penalty", type=float, default=None,
         help="Override generation repetition_penalty (default: 1.0, from configs/tasks/unified.yaml)"
     )
+    parser.add_argument("--task", default="unified", help="Task name: 'unified' or 'violations_only'")
     args = parser.parse_args()
 
     # --- Resolve run identity + paths ---
@@ -86,7 +87,7 @@ def main():
 
     # --- Config for max_new_tokens ---
     base_config = load_config(training_kind="sft")
-    task_config = load_task_config("unified")
+    task_config = load_task_config(args.task)
     max_new_tokens = (
         args.max_new_tokens
         or base_config.get("max_new_tokens")
@@ -99,8 +100,10 @@ def main():
     )
 
     # --- Manifest for reproducibility ---
+    from data.prompt_templates import get_prompt_for_task
     run_config = {
         "experiment": f"inference_{run_name}",
+        "task": args.task,
         "model_tier": args.tier,
         "variant": args.variant,
         "checkpoint": args.checkpoint if args.variant else None,
@@ -111,7 +114,7 @@ def main():
         "repetition_penalty": repetition_penalty,
         "prompts": {
             "system_prompt": SYSTEM_PROMPT,
-            "user_prompt": UNIFIED_INSPECTION_PROMPT,
+            "user_prompt": get_prompt_for_task(args.task),
         },
     }
     save_run_manifest(str(results_dir), run_config)
@@ -131,6 +134,7 @@ def main():
         tier=args.tier,
         adapter_path=adapter_path,
         max_seq_length=args.max_seq_length,
+        task=args.task,
     )
     logger.info("Model loaded successfully!")
 
@@ -141,6 +145,7 @@ def main():
         model=model,
         tokenizer=tokenizer,
         dataset=test_data,
+        task=args.task,
         batch_size=args.batch_size,
         max_new_tokens=max_new_tokens,
         max_samples=args.max_samples,

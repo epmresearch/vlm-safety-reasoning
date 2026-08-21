@@ -175,6 +175,7 @@ def load_model_for_inference(
     max_seq_length: Optional[int] = None,
     image_min_pixels: Optional[int] = None,
     image_max_pixels: Optional[int] = None,
+    task: str = "unified",
 ) -> Tuple:
     """Loads a model for inference (with optional LoRA adapter).
 
@@ -183,6 +184,7 @@ def load_model_for_inference(
         tier: Model tier. If None, uses default config tier.
         adapter_path: Path to saved LoRA adapter. If None, loads base model.
         max_seq_length: Maximum sequence length for the model.
+        task: Task name for config lookup.
 
     Returns:
         Tuple of (model, tokenizer).
@@ -192,7 +194,7 @@ def load_model_for_inference(
 
     # Auto-load defaults from SFT config to ensure inference matches training constraints
     cfg = load_config(training_kind="sft")
-    task_cfg = load_task_config("unified")
+    task_cfg = load_task_config(task)
 
     if model_name is None:
         model_name = get_model_info(tier)["hf_path"]

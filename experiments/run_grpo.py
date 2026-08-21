@@ -27,6 +27,7 @@ def main():
     parser.add_argument("--max_samples", type=int, default=None, help="Cap dataset size for debugging")
     parser.add_argument("--sft_variant", default="unified-sft-v1", help="SFT variant name to load as starting adapter")
     parser.add_argument("--adapter_path", default=None, help="Explicit full path to adapter (overrides sft_variant)")
+    parser.add_argument("--task", default="unified", help="Task name: 'unified' or 'violations_only'")
     args = parser.parse_args()
 
     # Set up unique txt log file in the logs directory
@@ -47,7 +48,7 @@ def main():
 
     # Run the GRPO training
     checkpoint_dir = run_grpo(
-        task="unified",  # The task config name used for training
+        task=args.task,  # The task config name used for training
         model_id=args.tier,
         variant_name=args.variant,
         max_samples=args.max_samples,

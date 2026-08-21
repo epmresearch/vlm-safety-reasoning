@@ -20,7 +20,7 @@ Two integration modes:
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from core.logging import get_logger
-from rewards.reward_utils import _strict_parse, _has_repetition_pathology
+from rewards.reward_utils import _strict_parse, _strict_parse_for_task, _has_repetition_pathology
 
 logger = get_logger(__name__)
 
@@ -110,6 +110,7 @@ def compute_reward(
     prediction: str,
     ground_truth: dict,
     weights: Optional[Dict[str, float]] = None,
+    task: str = "unified",
 ) -> float:
     """Composite reward: weighted sum of six components + repetition penalty.
 
@@ -137,12 +138,16 @@ def compute_reward(
     weighted_sum = 0.0
 
     for name, reward_fn, _ in REWARD_COMPONENTS:
-        score = reward_fn(prediction, ground_truth)
+        if getattr(reward_fn, "is_batched", False):
+            # Wrap single inputs into a batch and extract the single output
+            score = reward_fn([prediction], [ground_truth], task=task)[0]
+        else:
+            score = reward_fn(prediction, ground_truth, task=task)
         component_scores[name] = score
         weighted_sum += score * w[name]
 
     # Apply repetition pathology penalty
-    parsed = _strict_parse(prediction)
+    parsed = _strict_parse_for_task(prediction, task=task)
     if parsed is not None and _has_repetition_pathology(parsed):
         weighted_sum *= REPETITION_PENALTY_FACTOR
         logger.debug("Repetition pathology detected — penalty applied")
@@ -160,6 +165,7 @@ def compute_reward_with_breakdown(
     prediction: str,
     ground_truth: dict,
     weights: Optional[Dict[str, float]] = None,
+    task: str = "unified",
 ) -> Dict[str, float]:
     """Like compute_reward but also returns per-component scores.
 
@@ -177,12 +183,15 @@ def compute_reward_with_breakdown(
     weighted_sum = 0.0
 
     for name, reward_fn, _ in REWARD_COMPONENTS:
-        score = reward_fn(prediction, ground_truth)
+        if getattr(reward_fn, "is_batched", False):
+            score = reward_fn([prediction], [ground_truth], task=task)[0]
+        else:
+            score = reward_fn(prediction, ground_truth, task=task)
         result[name] = score
         weighted_sum += score * w[name]
 
     # Repetition check
-    parsed = _strict_parse(prediction)
+    parsed = _strict_parse_for_task(prediction, task=task)
     has_rep = parsed is not None and _has_repetition_pathology(parsed)
     result["repetition_penalty_applied"] = 1.0 if has_rep else 0.0
 
@@ -199,6 +208,7 @@ def compute_reward_with_breakdown(
 
 def build_grpo_reward_fn(
     weights: Optional[Dict[str, float]] = None,
+    task: str = "unified",
 ) -> Callable[[List[str]], List[float]]:
     """Build a single reward function matching TRL GRPOTrainer's signature.
 
@@ -210,6 +220,7 @@ def build_grpo_reward_fn(
 
     Args:
         weights: Optional per-component weight overrides.
+        task: Task name for schema-aware reward computation.
 
     Returns:
         A callable matching the GRPOTrainer reward function interface.
@@ -232,9 +243,93 @@ def build_grpo_reward_fn(
         scores = []
         for completion, gt in zip(completions, ground_truth):
             parsed_gt = json.loads(gt) if isinstance(gt, str) else gt
-            score = compute_reward(completion, parsed_gt, weights=weights)
+            score = compute_reward(completion, parsed_gt, weights=weights, task=task)
             scores.append(score)
         return scores
 
     unified_reward_fn.__name__ = "reward_unified"
     return unified_reward_fn
+
+# ---------------------------------------------------------------------------
+# Task-aware reward assembly
+# ---------------------------------------------------------------------------
+
+# Full registry of all available reward components (name -> (function, default_weight))
+ALL_REWARD_COMPONENTS = {
+    name: (fn, weight) for name, fn, weight in REWARD_COMPONENTS
+}
+
+
+def _make_task_aware_batch_reward(reward_fn: Callable, task: str) -> Callable:
+    """Wraps a reward function for task-aware batch execution.
+    
+    For the format reward, injects the task parameter so the correct schema
+    is used for validation. For all other rewards, injects task into
+    _strict_parse_for_task via a module-level context.
+    """
+    def batch_fn(prompts=None, completions=None, ground_truth=None, **kwargs):
+        if completions is None and prompts is not None:
+            completions = prompts
+        if completions is None:
+            return []
+        if ground_truth is None:
+            return [0.0] * len(completions)
+        
+        import json as _json
+        parsed_gts = [_json.loads(gt) if isinstance(gt, str) else gt for gt in ground_truth]
+
+        # For the format reward, pass task explicitly
+        if getattr(reward_fn, '__name__', '') == 'reward_format' and task != 'unified':
+            from rewards.reward_format import compute_reward_for_task
+            return [compute_reward_for_task(c, gt, task=task) for c, gt in zip(completions, parsed_gts)]
+
+        # For batched reward functions
+        if getattr(reward_fn, 'is_batched', False):
+            kwargs["task"] = task
+            return reward_fn(completions, parsed_gts, **kwargs)
+
+        return [reward_fn(c, gt, task=task) for c, gt in zip(completions, parsed_gts)]
+    batch_fn.__name__ = getattr(reward_fn, '__name__', 'reward_fn')
+    return batch_fn
+
+
+def get_reward_funcs_for_task(task: str = "unified") -> Tuple[List[Callable], List[float]]:
+    """Returns reward functions and weights for the specified task.
+    
+    For 'unified', returns the full 6-component set (identical to
+    get_reward_funcs_and_weights()).
+    For 'violations_only', returns only the violation-relevant subset
+    as specified in the task's YAML config.
+    
+    Args:
+        task: Task name ('unified' or 'violations_only').
+    
+    Returns:
+        Tuple of (list of batch-compatible reward functions, list of weights).
+    """
+    from core.config import load_task_config
+    task_cfg = load_task_config(task)
+    
+    # Get active components from task config, defaulting to all components
+    active_components = task_cfg.get(
+        "reward_components", [name for name, _, _ in REWARD_COMPONENTS]
+    )
+    weight_overrides = task_cfg.get("reward_weights", {})
+    
+    funcs = []
+    weights = []
+    for name in active_components:
+        if name not in ALL_REWARD_COMPONENTS:
+            raise ValueError(
+                f"Unknown reward component: {name!r}. "
+                f"Available: {list(ALL_REWARD_COMPONENTS.keys())}"
+            )
+        fn, default_weight = ALL_REWARD_COMPONENTS[name]
+        funcs.append(_make_task_aware_batch_reward(fn, task))
+        weights.append(weight_overrides.get(name, default_weight))
+    
+    logger.info(
+        f"Task '{task}' reward assembly: {len(funcs)} components, "
+        f"names={active_components}, weights={weights}"
+    )
+    return funcs, weights

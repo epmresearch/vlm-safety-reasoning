@@ -8,7 +8,7 @@ using image_id as the join key.
 This ensures all model sizes train on identical data/order.
 """
 import json
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from core.io import get_drive_path, ensure_dir
 from core.logging import get_logger
@@ -19,7 +19,8 @@ logger = get_logger(__name__)
 def save_preprocessed_cache(
     samples: List[Dict[str, Any]],
     filename: str = "unified_train_cache.jsonl",
-    subdir: str = "unified",
+    task: str = "unified",
+    image_ids: Optional[List[str]] = None,
 ) -> str:
     """Saves preprocessed sample metadata (without images) to JSONL on Drive.
 
@@ -29,16 +30,23 @@ def save_preprocessed_cache(
     Args:
         samples: List of conversation dicts from build_unified_sft_dataset.
         filename: Output filename.
-        subdir: Subdirectory under datasets/processed/.
+        task: Task subdirectory under datasets/processed/.
+        image_ids: Parallel list of image_id strings (same length as samples).
+                   Required for robust image re-attachment on reload.
 
     Returns:
         Path to the saved file.
     """
-    path = get_drive_path("datasets", "processed", subdir, filename)
+    if image_ids is not None and len(image_ids) != len(samples):
+        raise ValueError(
+            f"image_ids length ({len(image_ids)}) != samples length ({len(samples)})"
+        )
+
+    path = get_drive_path("datasets", "processed", task, filename)
     ensure_dir(path.parent)
 
     with open(path, "w", encoding="utf-8") as f:
-        for sample in samples:
+        for idx, sample in enumerate(samples):
             messages = sample["messages"]
             # Extract image_id from user content (image objects can't be serialized)
             # The assistant content contains the target JSON
@@ -48,11 +56,8 @@ def save_preprocessed_cache(
                 if isinstance(assistant_content, list)
                 else assistant_content
             )
-            # We need image_id to re-attach images later.
-            # It's not directly in the conversation dict, so we parse it from
-            # the target JSON or store it alongside.
-            # For now, we extract it from the target dict if available.
             cache_entry = {
+                "image_id": image_ids[idx] if image_ids is not None else f"unknown_{idx}",
                 "target_json": target_text,
             }
             f.write(json.dumps(cache_entry, ensure_ascii=False) + "\n")
@@ -63,17 +68,17 @@ def save_preprocessed_cache(
 
 def load_preprocessed_cache(
     filename: str = "unified_train_cache.jsonl",
-    subdir: str = "unified",
+    task: str = "unified",
 ) -> List[Dict[str, str]]:
     """Loads cached preprocessed metadata from JSONL.
 
-    Returns list of dicts with "target_json" key.
+    Returns list of dicts with "image_id" and "target_json" keys.
     PIL images must be re-attached separately from the raw HF dataset.
 
     Raises:
         FileNotFoundError: If cache file doesn't exist.
     """
-    path = get_drive_path("datasets", "processed", subdir, filename)
+    path = get_drive_path("datasets", "processed", task, filename)
     if not path.exists():
         raise FileNotFoundError(
             f"No cached dataset at {path} — run preprocessing first."
@@ -96,25 +101,33 @@ def rebuild_conversations_from_cache(
 ) -> List[Dict[str, Any]]:
     """Re-attaches PIL images from the raw HF dataset to cached targets.
 
+    Uses image_id as a join key to match cached targets to their images,
+    making the rebuild robust to dataset ordering changes.
+
     Args:
-        cache_entries: List of dicts from load_preprocessed_cache.
-        hf_dataset: The raw HF dataset split (must be same order/size).
+        cache_entries: List of dicts from load_preprocessed_cache
+                       (each must have "image_id" and "target_json" keys).
+        hf_dataset: The raw HF dataset split (must contain all image_ids).
         system_prompt: System prompt text.
         user_prompt: User prompt text.
 
     Returns:
         List of conversation dicts ready for SFTTrainer.
     """
-    if len(cache_entries) != len(hf_dataset):
-        raise ValueError(
-            f"Cache size ({len(cache_entries)}) != dataset size ({len(hf_dataset)}). "
-            "Cache may be stale — rebuild it."
-        )
+    # Build image_id → PIL image lookup from the HF dataset
+    image_map = {str(sample["image_id"]): sample["image"] for sample in hf_dataset}
 
+    missing_ids = []
     conversations = []
-    for entry, sample in zip(cache_entries, hf_dataset):
-        pil_image = sample["image"]
+    for entry in cache_entries:
+        image_id = entry.get("image_id")
         target_str = entry["target_json"]
+
+        if image_id is None or str(image_id) not in image_map:
+            missing_ids.append(image_id)
+            continue
+
+        pil_image = image_map[str(image_id)]
 
         conversations.append({
             "messages": [
@@ -135,6 +148,12 @@ def rebuild_conversations_from_cache(
                 },
             ]
         })
+
+    if missing_ids:
+        logger.warning(
+            f"{len(missing_ids)} cached entries had no matching image_id in the "
+            f"HF dataset — these samples were skipped. First few: {missing_ids[:5]}"
+        )
 
     logger.info(f"Re-attached images for {len(conversations)} samples")
     return conversations

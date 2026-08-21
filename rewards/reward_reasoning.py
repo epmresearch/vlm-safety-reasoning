@@ -6,7 +6,7 @@ import math
 from typing import List, Dict
 from collections import defaultdict
 from rewards.reward_utils import (
-    _strict_parse, _safe_batch_reward, _is_violation_present,
+    _strict_parse, _strict_parse_for_task, _safe_batch_reward, _is_violation_present,
     _embed_texts, _cosine_sim_batch, _ngram_f1,
 )
 from core.constants import RULES
@@ -23,7 +23,8 @@ def compute_reward(completions: List[str], ground_truths: List[dict], **kwargs) 
     task_mapping = [] 
     
     for i, (completion, ground_truth) in enumerate(zip(completions, ground_truths)):
-        parsed = _strict_parse(completion)
+        task = kwargs.get("task", "unified")
+        parsed = _strict_parse_for_task(completion, task=task)
         if parsed is None:
             continue
             

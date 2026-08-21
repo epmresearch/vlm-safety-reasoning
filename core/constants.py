@@ -11,6 +11,8 @@ Naming convention:
 # Task
 # ---------------------------------------------------------------------------
 UNIFIED_TASK_NAME = "unified"
+VIOLATIONS_ONLY_TASK_NAME = "violations_only"
+VALID_TASKS = [UNIFIED_TASK_NAME, VIOLATIONS_ONLY_TASK_NAME]
 
 # ---------------------------------------------------------------------------
 # Safety Rules

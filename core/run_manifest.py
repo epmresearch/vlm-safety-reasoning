@@ -33,8 +33,10 @@ def save_run_manifest(output_dir: str, config_dict: Dict[str, Any], filename: st
     }
     
     try:
-        with open(manifest_path, "w", encoding="utf-8") as f:
+        tmp_path = manifest_path + ".tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
             json.dump(manifest, f, indent=2, default=str)
+        os.replace(tmp_path, manifest_path)
         logger.info(f"Run manifest saved to {manifest_path}")
     except Exception as e:
         logger.error(f"Failed to save run manifest to {manifest_path}: {e}")

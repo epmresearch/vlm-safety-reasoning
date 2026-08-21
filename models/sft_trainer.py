@@ -113,7 +113,8 @@ def run_sft_unified(
     sft_cfg: Optional[Dict[str, Any]] = None,
     resume: bool = True,
     run_name: Optional[str] = None,
-    start_adapter_path: Optional[str] = None,   # <-- NEW
+    start_adapter_path: Optional[str] = None,
+    task: str = "unified",
 ) -> str:
     """Runs unified SFT training with full checkpointing, resume, and best-model saving.
 
@@ -232,10 +233,10 @@ def run_sft_unified(
         json.dump({**static_manifest_fields, "status": "starting"}, f, indent=2)
         
     # Dump the full merged configuration for local reproducibility
-    from data.prompt_templates import SYSTEM_PROMPT, UNIFIED_INSPECTION_PROMPT
+    from data.prompt_templates import SYSTEM_PROMPT, get_prompt_for_task
     from core.config import load_task_config
     try:
-        task_cfg = load_task_config("unified")
+        task_cfg = load_task_config(task)
     except FileNotFoundError:
         task_cfg = {}
         
@@ -257,11 +258,12 @@ def run_sft_unified(
         "model_info": model_info,
         "tier": tier,
         "variant": variant,
+        "task": task,
         "git_commit": git_commit,
         "git_is_dirty": git_is_dirty,
         "prompts": {
             "SYSTEM_PROMPT": SYSTEM_PROMPT,
-            "UNIFIED_INSPECTION_PROMPT": UNIFIED_INSPECTION_PROMPT
+            "TASK_PROMPT": get_prompt_for_task(task)
         }
     }
     with open(checkpoint_dir / "run_config.json", "w") as f:

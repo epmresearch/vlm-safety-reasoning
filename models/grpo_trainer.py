@@ -112,9 +112,11 @@ def run_grpo(
     use_native_weights = _check_trl_supports_reward_weights()
     logger.info(f"TRL native reward_weights support: {use_native_weights}")
 
+    from rewards.unified_reward import get_reward_funcs_for_task
+    _funcs, _weights = get_reward_funcs_for_task(task)
     # Log the component registry
-    for name, _, weight in REWARD_COMPONENTS:
-        logger.info(f"  Reward component: {name} (weight={weight:.2f})")
+    for func, weight in zip(_funcs, _weights):
+        logger.info(f"  Reward component: {func.__name__} (weight={weight:.2f})")
 
     # -----------------------------------------------------------------------
     # Build GRPO prompt dataset with oversampling
@@ -142,7 +144,8 @@ def run_grpo(
         train_split = raw_dataset["train"]
         logger.warning("Oversampling module not available, using raw train split")
 
-    train_data = build_grpo_dataset(train_split, max_samples=max_samples)
+    from data.preprocessor import build_grpo_dataset_for_task
+    train_data = build_grpo_dataset_for_task(train_split, task=task, max_samples=max_samples)
     logger.info(f"GRPO prompt dataset built: {len(train_data)} samples (Python list)")
 
     if not train_data:
@@ -190,7 +193,7 @@ def run_grpo(
         output_dir=output_dir,
         num_generations=cfg["num_generations"],
         max_prompt_length=cfg.get("max_prompt_length", 2048),
-        max_completion_length=cfg.get("max_completion_length", 1024),
+        max_completion_length=task_cfg.get("max_completion_length", cfg.get("max_completion_length", 1024)),
         learning_rate=cfg["learning_rate"],
         per_device_train_batch_size=cfg["per_device_train_batch_size"],
         gradient_accumulation_steps=cfg["gradient_accumulation_steps"],
@@ -215,7 +218,8 @@ def run_grpo(
         # ------------------------------------------------------------------
         # Mode 1: TRL native multi-reward (preferred — per-component logging)
         # ------------------------------------------------------------------
-        reward_funcs, reward_weights = get_reward_funcs_and_weights()
+        from rewards.unified_reward import get_reward_funcs_for_task
+        reward_funcs, reward_weights = get_reward_funcs_for_task(task)
         grpo_config_kwargs["reward_weights"] = reward_weights
 
         grpo_config = GRPOConfig(**grpo_config_kwargs)
@@ -240,7 +244,7 @@ def run_grpo(
         # ------------------------------------------------------------------
         # Mode 2: Fallback single composite reward (older TRL versions)
         # ------------------------------------------------------------------
-        reward_fn = build_grpo_reward_fn()
+        reward_fn = build_grpo_reward_fn(task=task)
 
         grpo_config = GRPOConfig(**grpo_config_kwargs)
 
@@ -271,8 +275,11 @@ def run_grpo(
 
     try:
         trainer.train(resume_from_checkpoint=resume_from_checkpoint)
-        logger.info(f"Saving adapter to {output_dir}")
-        trainer.save_model(output_dir)
+        
+        final_dir = os.path.join(output_dir, "final")
+        ensure_dir(final_dir)
+        logger.info(f"Saving final adapter to {final_dir}")
+        trainer.save_model(final_dir)
     except Exception as e:
         logger.error(f"Training failed: {e}", exc_info=True)
         raise

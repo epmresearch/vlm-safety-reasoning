@@ -4,7 +4,7 @@ Combines all metric functions into a unified evaluation pipeline.
 """
 from typing import Dict, List, Any
 
-from evaluation.output_parser import parse_model_output, validate_unified_output
+from evaluation.output_parser import parse_model_output, validate_unified_output, validate_output_for_task
 from evaluation.metrics_captioning import compute_all_caption_metrics
 from evaluation.metrics_grounding import compute_grounding_metrics
 from evaluation.metrics_violations import compute_violation_metrics
@@ -20,6 +20,7 @@ def run_full_evaluation(
     images: List[Any] = None,
     skip_spice: bool = False,
     spice_only: bool = False,
+    task: str = "unified",
 ) -> Dict[str, Any]:
     """
     Runs the complete evaluation pipeline.
@@ -53,7 +54,7 @@ def run_full_evaluation(
     # 1. Structural metrics & Parsing
     structural_metrics = {}
     if not spice_only:
-        structural_metrics = compute_structural_metrics(raw_predictions)
+        structural_metrics = compute_structural_metrics(raw_predictions, task=task)
         
     # Parse predictions and capture failures
     parsed_preds = []
@@ -73,7 +74,7 @@ def run_full_evaluation(
             continue
                 
         # 2. Schema Validation
-        validated = validate_unified_output(parsed)
+        validated = validate_output_for_task(parsed, task=task)
         if validated is None:
             parsed_preds.append(None)
             failures.append({
@@ -96,27 +97,30 @@ def run_full_evaluation(
     pred_violations = [p if p else {} for p in parsed_preds]
     gt_violations = references
     
-    # 2. Captioning metrics
-    logger.info("Computing captioning metrics...")
-    caption_metrics = compute_all_caption_metrics(
-        pred_captions, gt_captions, images=images, 
-        include_spice=not skip_spice, spice_only=spice_only, prefix="captioning_"
-    )
+    # 2. Captioning metrics (skip for violations_only)
+    caption_metrics = {}
+    if task != "violations_only":
+        logger.info("Computing captioning metrics...")
+        caption_metrics = compute_all_caption_metrics(
+            pred_captions, gt_captions, images=images, 
+            include_spice=not skip_spice, spice_only=spice_only, prefix="captioning_"
+        )
     
     grounding_metrics = {}
     violation_metrics = {}
     reasoning_metrics = {}
     
     if not spice_only:
-        # 3. Grounding metrics
-        logger.info("Computing grounding metrics...")
-        grounding_metrics = compute_grounding_metrics(pred_objects, gt_objects)
+        # 3. Grounding metrics (skip for violations_only)
+        if task != "violations_only":
+            logger.info("Computing grounding metrics...")
+            grounding_metrics = compute_grounding_metrics(pred_objects, gt_objects)
         
-        # 4. Violation metrics
+        # 4. Violation metrics (always computed)
         logger.info("Computing safety violation metrics...")
         violation_metrics = compute_violation_metrics(pred_violations, gt_violations)
         
-        # 5. Reasoning metrics
+        # 5. Reasoning metrics (always computed)
         logger.info("Computing reasoning metrics (Captioning Suite)...")
         reasoning_metrics = batch_score_reasoning(pred_violations, gt_violations, images=images)
     

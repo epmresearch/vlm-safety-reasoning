@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional
 
 from core.config import load_task_config
 from core.logging import get_logger
-from data.prompt_templates import SYSTEM_PROMPT, UNIFIED_INSPECTION_PROMPT
+from data.prompt_templates import SYSTEM_PROMPT, UNIFIED_INSPECTION_PROMPT, get_prompt_for_task
 
 logger = get_logger(__name__)
 DEFAULT_MAX_NEW_TOKENS = load_task_config("unified").get("max_new_tokens", 1000)
@@ -23,6 +23,7 @@ def generate_single(
     temperature: float = 0.0,
     do_sample: bool = False,
     repetition_penalty: float = 1.0,
+    task: str = "unified",
 ) -> str:
     """Generates a response for a single image using the unified prompt.
 
@@ -38,6 +39,8 @@ def generate_single(
         Raw output text string from the model.
     """
     from qwen_vl_utils import process_vision_info
+    
+    user_prompt = get_prompt_for_task(task)
 
     # Build the message in Qwen chat format
     messages = [
@@ -49,7 +52,7 @@ def generate_single(
             "role": "user",
             "content": [
                 {"type": "image", "image": pil_image},
-                {"type": "text", "text": UNIFIED_INSPECTION_PROMPT},
+                {"type": "text", "text": user_prompt},
             ],
         },
     ]
@@ -101,6 +104,7 @@ def run_inference(
     max_samples: Optional[int] = None,
     show_progress: bool = True,
     repetition_penalty: float = 1.0,
+    task: str = "unified",
 ) -> List[Dict[str, Any]]:
     """Runs inference on a dataset split, returning raw outputs.
 
@@ -140,6 +144,7 @@ def run_inference(
                 model, tokenizer, pil_image,
                 max_new_tokens=max_new_tokens,
                 repetition_penalty=repetition_penalty,
+                task=task,
             )
 
             elapsed = time.time() - start_time
@@ -175,6 +180,7 @@ def generate_batch(
     temperature: float = 0.0,
     do_sample: bool = False,
     repetition_penalty: float = 1.0,
+    task: str = "unified",
 ) -> List[str]:
     """Generates responses for a batch of images using the unified prompt."""
     from qwen_vl_utils import process_vision_info
@@ -185,12 +191,14 @@ def generate_batch(
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
+    user_prompt = get_prompt_for_task(task)
+
     batch_messages = [
         [
             {"role": "system", "content": [{"type": "text", "text": SYSTEM_PROMPT}]},
             {"role": "user", "content": [
                 {"type": "image", "image": img},
-                {"type": "text", "text": UNIFIED_INSPECTION_PROMPT},
+                {"type": "text", "text": user_prompt},
             ]},
         ]
         for img in pil_images
@@ -249,6 +257,7 @@ def run_inference_batched(
     show_progress: bool = True,
     output_path: Optional[str] = None,
     repetition_penalty: float = 1.0,
+    task: str = "unified",
 ) -> List[Dict[str, Any]]:
     """Runs batched inference on a dataset split with Auto-Resume support."""
     from tqdm import tqdm
@@ -305,7 +314,8 @@ def run_inference_batched(
             outputs = generate_batch(
                 model, tokenizer, pil_images, 
                 max_new_tokens=max_new_tokens,
-                repetition_penalty=repetition_penalty
+                repetition_penalty=repetition_penalty,
+                task=task
             )
             elapsed = time.time() - start_time
             per_image_latency = elapsed / len(pil_images)

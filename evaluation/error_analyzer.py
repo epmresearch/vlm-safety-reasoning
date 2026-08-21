@@ -11,15 +11,15 @@ from core.logging import get_logger
 
 logger = get_logger(__name__)
 
-def run_stratified_analysis(raw_predictions: List[str], references: List[Dict[str, Any]], metadata: List[Dict[str, Any]]) -> Dict[str, Dict[str, float]]:
+def run_stratified_analysis(raw_predictions: List[str], references: List[Dict[str, Any]], metadata: List[Dict[str, Any]], images: List[Any], task: str = "unified") -> Dict[str, Dict[str, float]]:
     """
     Runs evaluation stratified by metadata fields.
     metadata: list of dictionaries containing metadata for each sample (e.g., {"weather": "rainy", "lighting": "poor"})
     """
     logger.info("Starting stratified error analysis...")
     
-    if len(raw_predictions) != len(references) or len(raw_predictions) != len(metadata):
-        logger.error("Mismatched lengths for predictions, references, and metadata.")
+    if len(raw_predictions) != len(references) or len(raw_predictions) != len(metadata) or len(raw_predictions) != len(images):
+        logger.error("Mismatched lengths for predictions, references, metadata, or images.")
         return {}
         
     results_by_stratum = {}
@@ -37,11 +37,12 @@ def run_stratified_analysis(raw_predictions: List[str], references: List[Dict[st
                 
             stratum_preds = [raw_predictions[i] for i in indices]
             stratum_refs = [references[i] for i in indices]
+            stratum_images = [images[i] for i in indices]
             
             logger.info(f"Evaluating stratum: {field}={value} (n={len(indices)})")
             
             try:
-                eval_result = run_full_evaluation(stratum_preds, stratum_refs)
+                eval_result = run_full_evaluation(stratum_preds, stratum_refs, images=stratum_images, task=task)
                 stratum_key = f"{field}_{value}"
                 results_by_stratum[stratum_key] = eval_result["metrics"]
             except Exception as e:

@@ -243,3 +243,184 @@ def build_grpo_dataset(
         f"({skipped} skipped)"
     )
     return prompts
+
+
+def _build_violations_only_target_json(raw: Dict[str, Any]) -> str:
+    """Builds the minimized JSON target string wrapped in code fences for violations_only."""
+    target_dict = {}
+    
+    for i in range(1, 5):
+        v = raw.get(f"rule_{i}_violation")
+        if v is None:
+            target_dict[f"rule_{i}_violation"] = None
+        else:
+            raw_boxes = v.get("bounding_box") if isinstance(v, dict) else None
+            boxes = clean_boxes(normalize_boxes(raw_boxes))
+            target_dict[f"rule_{i}_violation"] = {
+                "bounding_box": [scale_01_to_1000(b) for b in boxes],
+                "reason": (v.get("reason", "") if isinstance(v, dict) else "") or "",
+            }
+            
+    # Minimized: no indent, compact separators
+    json_str = json.dumps(target_dict, separators=(",", ":"), ensure_ascii=False)
+    return f"```json\n{json_str}\n```"
+
+
+def build_violations_only_ground_truth(raw: Dict[str, Any]) -> Dict[str, Any]:
+    """Builds the ground-truth dict for evaluation comparison for violations_only."""
+    gt = {
+        "illumination": raw.get("illumination", ""),
+        "camera_distance": raw.get("camera_distance", ""),
+        "view": raw.get("view", ""),
+        "quality_of_info": raw.get("quality_of_info", ""),
+    }
+    
+    for i in range(1, 5):
+        v = raw.get(f"rule_{i}_violation")
+        if v is None:
+            gt[f"rule_{i}_violation"] = None
+        else:
+            raw_boxes = v.get("bounding_box") if isinstance(v, dict) else None
+            boxes = clean_boxes(normalize_boxes(raw_boxes))
+            gt[f"rule_{i}_violation"] = {
+                "bounding_box": [list(b) for b in boxes],
+                "reason": (v.get("reason", "") if isinstance(v, dict) else "") or "",
+            }
+            
+    return gt
+
+
+def build_target_json(raw: Dict[str, Any], task: str = 'unified') -> str:
+    """Router that calls the appropriate target builder based on task."""
+    if task == 'violations_only':
+        return _build_violations_only_target_json(raw)
+    return _build_target_json(raw)
+
+
+def build_gt_dict(raw: Dict[str, Any], task: str = 'unified') -> Dict[str, Any]:
+    """Router that calls the appropriate ground truth builder based on task."""
+    if task == 'violations_only':
+        return build_violations_only_ground_truth(raw)
+    return build_ground_truth_dict(raw)
+
+
+def raw_sample_to_conversation_for_task(raw: Dict[str, Any], pil_image, task: str = 'unified') -> Dict[str, Any]:
+    """Task-aware conversation builder."""
+    from data.prompt_templates import get_prompt_for_task
+    
+    target_str = build_target_json(raw, task)
+    prompt = get_prompt_for_task(task)
+
+    return {
+        "messages": [
+            {
+                "role": "system",
+                "content": [{"type": "text", "text": SYSTEM_PROMPT}],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image", "image": pil_image},
+                    {"type": "text", "text": prompt},
+                ],
+            },
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": target_str}],
+            },
+        ]
+    }
+
+
+def build_sft_dataset(
+    hf_dataset,
+    task: str = 'unified',
+    max_samples: Optional[int] = None,
+) -> List[Dict[str, Any]]:
+    """Task-aware SFT dataset builder."""
+    # The task-aware builder now handles 'unified' natively via raw_sample_to_conversation_for_task
+    dataset_iter = hf_dataset
+    if max_samples is not None:
+        dataset_iter = hf_dataset.select(range(min(max_samples, len(hf_dataset))))
+
+    conversations = []
+    skipped = 0
+    for sample in dataset_iter:
+        try:
+            pil_image = sample["image"]
+            conv = raw_sample_to_conversation_for_task(sample, pil_image, task)
+            conversations.append(conv)
+        except Exception as e:
+            skipped += 1
+            logger.warning(
+                f"Skipping sample {sample.get('image_id', '?')}: {e}"
+            )
+
+    logger.info(
+        f"Built {task} SFT dataset: {len(conversations)} samples "
+        f"({skipped} skipped)"
+    )
+    return conversations
+
+
+def to_grpo_prompt_for_task(raw: Dict[str, Any], pil_image, task: str = 'unified') -> Dict[str, Any]:
+    """Task-aware GRPO prompt builder."""
+    from data.prompt_templates import get_prompt_for_task
+    prompt = get_prompt_for_task(task)
+
+    prompt_messages = [
+        {
+            "role": "system",
+            "content": [{"type": "text", "text": SYSTEM_PROMPT}],
+        },
+        {
+            "role": "user",
+            "content": [
+                {"type": "image"},
+                {"type": "text", "text": prompt},
+            ],
+        },
+    ]
+
+    ground_truth = build_gt_dict(raw, task)
+
+    return {
+        "prompt": prompt_messages,
+        "ground_truth": json.dumps(ground_truth),
+        "image_id": raw.get("image_id", ""),
+        "images": [pil_image],
+    }
+
+
+def build_grpo_dataset_for_task(
+    hf_dataset,
+    task: str = 'unified',
+    max_samples: Optional[int] = None,
+) -> List[Dict[str, Any]]:
+    """Task-aware GRPO dataset builder."""
+    # The task-aware builder now handles 'unified' natively via to_grpo_prompt_for_task
+    dataset_iter = hf_dataset
+    if max_samples is not None:
+        if hasattr(hf_dataset, "select"):
+            dataset_iter = hf_dataset.select(range(min(max_samples, len(hf_dataset))))
+        else:
+            dataset_iter = hf_dataset[:max_samples]
+
+    prompts = []
+    skipped = 0
+    for sample in dataset_iter:
+        try:
+            pil_image = sample["image"]
+            prompt_dict = to_grpo_prompt_for_task(sample, pil_image, task)
+            prompts.append(prompt_dict)
+        except Exception as e:
+            skipped += 1
+            logger.warning(
+                f"Skipping sample {sample.get('image_id', '?')}: {e}"
+            )
+
+    logger.info(
+        f"Built {task} GRPO prompt dataset: {len(prompts)} samples "
+        f"({skipped} skipped)"
+    )
+    return prompts

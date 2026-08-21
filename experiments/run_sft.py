@@ -20,12 +20,18 @@ logger = get_logger(__name__)
 
 
 def main():
-    config = load_config()
+    # Parse just the task arg first to load config
+    parser_task = argparse.ArgumentParser(add_help=False)
+    parser_task.add_argument("--task", default="unified")
+    args_task, _ = parser_task.parse_known_args()
+
+    config = load_config(task=args_task.task)
     default_tier = config.get("active_tier", "2b")
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--tier", default=default_tier)
     parser.add_argument("--variant", default="unified-sft-v1")
+    parser.add_argument("--task", default="unified", help="Task name: 'unified' or 'violations_only'")
     parser.add_argument("--no-resume", action="store_true")
     args = parser.parse_args()
 
@@ -73,9 +79,10 @@ def main():
         logger.info("No 'resolution' column found in training dataset. Attempting to compute resolutions...")
         train_resolutions = get_resolutions(train_raw_oversampled)
 
-    logger.info("Preprocessing datasets for unified SFT...")
-    train_ds = build_unified_sft_dataset(train_raw_oversampled)
-    val_ds = build_unified_sft_dataset(splits["val"])
+    logger.info("Preprocessing datasets for SFT...")
+    from data.preprocessor import build_sft_dataset
+    train_ds = build_sft_dataset(train_raw_oversampled, task=args.task)
+    val_ds = build_sft_dataset(splits["val"], task=args.task)
 
     if train_resolutions is not None and len(train_resolutions) != len(train_ds):
         logger.warning(
@@ -93,6 +100,7 @@ def main():
         rare_mask=rare_mask,
         train_resolutions=train_resolutions,
         resume=not args.no_resume,
+        task=args.task,
     )
 
     logger.info(f"SFT run complete. Best/final checkpoint at {checkpoint_dir}")

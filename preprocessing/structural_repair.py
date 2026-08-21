@@ -535,7 +535,7 @@ def _build_alias_lookup() -> Dict[str, str]:
 _ALIAS_LOOKUP = _build_alias_lookup()
 
 
-def normalize_top_level_keys(d: dict, tracker: Optional[ChangeTracker] = None) -> dict:
+def normalize_top_level_keys(d: dict, tracker: Optional[ChangeTracker] = None, task: str = "unified") -> dict:
     """Renames known key aliases/typos/casing variants to the canonical
     schema key names. Unknown keys are left untouched (pydantic will ignore
     them as extras — nothing is lost, nothing is invented)."""
@@ -543,6 +543,10 @@ def normalize_top_level_keys(d: dict, tracker: Optional[ChangeTracker] = None) -
     for k, v in d.items():
         nk = _normalize_key_str(k)
         canonical = _ALIAS_LOOKUP.get(nk)
+        
+        if canonical and task == "violations_only" and canonical in ("caption", "excavator", "rebar", "worker_with_white_hard_hat"):
+            canonical = None
+            
         if canonical and canonical != k:
             if tracker:
                 tracker.log("key_renamed", field=canonical, detail=f"'{k}' -> '{canonical}'")
@@ -1035,29 +1039,30 @@ def normalize_violation_value(
 # =============================================================================
 
 def fix_prediction_structure(
-    parsed: dict, tracker: Optional[ChangeTracker] = None
+    parsed: dict, tracker: Optional[ChangeTracker] = None, task: str = "unified"
 ) -> Dict[str, Any]:
     """Applies ALL structural/key/type fixes to one parsed prediction dict.
     Never touches numeric values or text content — only reshapes/retypes/
     renames so the dict can satisfy the UnifiedOutput schema."""
     fixed = dict(parsed)
 
-    fixed = normalize_top_level_keys(fixed, tracker=tracker)
+    fixed = normalize_top_level_keys(fixed, tracker=tracker, task=task)
     fixed = reconstruct_violations_list(fixed, tracker=tracker)
     fixed = reconstruct_flattened_violations(fixed, tracker=tracker)
 
-    # Caption: only type-coerce (list of sentences -> joined string),
-    # never invent missing content.
-    if "caption" in fixed and isinstance(fixed["caption"], list):
-        if tracker:
-            tracker.log(
-                "caption_list_joined", field="caption",
-                detail=f"{len(fixed['caption'])} sentence(s) joined into a single caption string.",
-            )
-        fixed["caption"] = " ".join(str(x) for x in fixed["caption"] if x)
+    if task == "unified":
+        # Caption: only type-coerce (list of sentences -> joined string),
+        # never invent missing content.
+        if "caption" in fixed and isinstance(fixed["caption"], list):
+            if tracker:
+                tracker.log(
+                    "caption_list_joined", field="caption",
+                    detail=f"{len(fixed['caption'])} sentence(s) joined into a single caption string.",
+                )
+            fixed["caption"] = " ".join(str(x) for x in fixed["caption"] if x)
 
-    for cls in ("excavator", "rebar", "worker_with_white_hard_hat"):
-        fixed[cls] = normalize_boxes(fixed.get(cls, []), field=cls, tracker=tracker)
+        for cls in ("excavator", "rebar", "worker_with_white_hard_hat"):
+            fixed[cls] = normalize_boxes(fixed.get(cls, []), field=cls, tracker=tracker)
 
     for i in range(1, 5):
         key = f"rule_{i}_violation"
@@ -1131,7 +1136,7 @@ def _strict_parse_model_output(raw_str: str) -> Optional[Dict[str, Any]]:
         return None
 
 
-def repair_and_validate(raw_str: str, duplicate_box_threshold: int = 3) -> Dict[str, Any]:
+def repair_and_validate(raw_str: str, duplicate_box_threshold: int = 3, task: str = "unified") -> Dict[str, Any]:
     """Full pipeline for one record's raw model output.
 
     Returns:
@@ -1165,7 +1170,9 @@ def repair_and_validate(raw_str: str, duplicate_box_threshold: int = 3) -> Dict[
     strict_parsed = _strict_parse_model_output(raw_str)
     if strict_parsed is not None:
         try:
-            validated_raw = UnifiedOutput(**strict_parsed)
+            from data.schemas import get_output_schema
+            schema_cls = get_output_schema(task)
+            validated_raw = schema_cls(**strict_parsed)
             _check_duplicate_boxes(strict_parsed, tracker, threshold=duplicate_box_threshold)
             return {
                 "status": "valid_raw",
@@ -1203,10 +1210,12 @@ def repair_and_validate(raw_str: str, duplicate_box_threshold: int = 3) -> Dict[
             "warnings": tracker.warnings,
         }
 
-    fixed = fix_prediction_structure(parsed, tracker=tracker)
+    fixed = fix_prediction_structure(parsed, tracker=tracker, task=task)
     _check_duplicate_boxes(fixed, tracker, threshold=duplicate_box_threshold)
     try:
-        validated_fixed = UnifiedOutput(**fixed)
+        from data.schemas import get_output_schema
+        schema_cls = get_output_schema(task)
+        validated_fixed = schema_cls(**fixed)
         return {
             "status": "fixed_valid",
             "original_parsed": parsed,
@@ -1249,6 +1258,7 @@ def process_jsonl(
     broken_path: str,
     manifest_path: str,
     duplicate_box_threshold: int = 3,
+    task: str = "unified",
 ) -> Dict[str, Any]:
     records = load_jsonl(input_path)
     fixed_records = []
@@ -1264,7 +1274,7 @@ def process_jsonl(
     for r in records:
         image_id = r.get("image_id", "")
         raw = r.get("raw_output", "")
-        result = repair_and_validate(raw, duplicate_box_threshold=duplicate_box_threshold)
+        result = repair_and_validate(raw, duplicate_box_threshold=duplicate_box_threshold, task=task)
 
         # --- main repaired jsonl: ORIGINAL schema preserved, additive-only ---
         out_record = dict(r)
@@ -1379,6 +1389,7 @@ if __name__ == "__main__":
     parser.add_argument("--duplicate_box_threshold", type=int, default=3,
                          help="Flag a box as 'duplicate_box_detected' if it repeats more "
                               "than this many times within one field of one record.")
+    parser.add_argument("--task", default="unified", help="Task name: 'unified' or 'violations_only'")
     args = parser.parse_args()
 
     input_path = Path(args.input)
@@ -1392,6 +1403,7 @@ if __name__ == "__main__":
     report = process_jsonl(
         str(input_path), str(output_path), str(report_path), str(broken_path), str(manifest_path),
         duplicate_box_threshold=args.duplicate_box_threshold,
+        task=args.task,
     )
 
     print("\n=== REPAIR STATUS SUMMARY ===")

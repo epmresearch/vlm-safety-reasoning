@@ -32,7 +32,7 @@ from core.io import ensure_dir, get_drive_path
 from core.logging import get_logger, attach_file_logger
 from core.run_manifest import save_run_manifest
 from data.loader import load_processed_dataset
-from data.preprocessor import build_ground_truth_dict
+from data.preprocessor import build_gt_dict
 from evaluation.evaluator import run_full_evaluation
 from evaluation.spice_cache import restore_spice_cache, save_spice_cache
 from evaluation.metrics_captioning import _check_java_available
@@ -103,6 +103,7 @@ def main():
                          help="Weights & Biases project name")
     parser.add_argument("--wandb_run_name", type=str, default=None,
                          help="Weights & Biases run name")
+    parser.add_argument("--task", default="unified", help="Task name: 'unified' or 'violations_only'")
     args = parser.parse_args()
 
     predictions_path = Path(args.predictions_path)
@@ -157,7 +158,7 @@ def main():
     logger.info(f"Loaded {len(records)} prediction records.")
 
     raw_predictions = [r["raw_output"] for r in records]
-    references = [build_ground_truth_dict(r["sample"]) for r in records]
+    references = [build_gt_dict(r["sample"], task=args.task) for r in records]
 
     # --- Load dataset and build image_id -> PIL image map ---
     # Predictions were saved without images (see run_inference_batched), so we
@@ -180,7 +181,8 @@ def main():
     logger.info("Running full evaluation pipeline...")
     eval_results = run_full_evaluation(
         raw_predictions, references, images=images,
-        skip_spice=args.skip_spice, spice_only=args.spice_only
+        skip_spice=args.skip_spice, spice_only=args.spice_only,
+        task=args.task
     )
 
     metrics_path = output_dir / "metrics.json"

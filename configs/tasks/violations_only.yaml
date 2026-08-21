@@ -1,0 +1,27 @@
+task_name: "violations_only"
+prompt_key: "VIOLATIONS_ONLY_PROMPT"
+
+# Output format: minimized JSON wrapped in ```json ... ``` code fences.
+# Only contains rule_1_violation through rule_4_violation (no caption, no objects).
+output_format: "fenced_minimized_json"
+
+# Active reward components for GRPO — only violation-relevant subset.
+# Caption and object grounding rewards are excluded.
+reward_components:
+  - reward_format
+  - reward_violation_id
+  - reward_violation_grounding
+  - reward_reasoning
+
+reward_weights:
+  reward_format: 0.10
+  reward_violation_id: 0.40
+  reward_violation_grounding: 0.30
+  reward_reasoning: 0.20
+
+# Ultra-safe token lengths (matching unified task ceilings for VRAM safety)
+max_new_tokens: 1024
+max_completion_length: 1024
+max_prompt_length: 2048
+inference_max_seq_length: 3200
+repetition_penalty: 1.0
