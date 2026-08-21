@@ -47,7 +47,7 @@ def preload_model(tier):
     model_name = f"unsloth/Qwen3-VL-{tier_map.get(tier.lower(), tier.upper())}-Instruct"
     print(f"Pre-downloading {model_name} to HuggingFace cache to prevent SLURM file-lock collisions...")
     try:
-        subprocess.run(["huggingface-cli", "download", model_name], check=True)
+        subprocess.run(["hf", "download", model_name], check=True)
         print(f"Successfully cached {model_name}\n")
     except FileNotFoundError:
         print("Warning: huggingface-cli not found. Make sure your environment is activated before running this script.\n")
