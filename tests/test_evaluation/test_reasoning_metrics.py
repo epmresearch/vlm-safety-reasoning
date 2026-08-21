@@ -18,7 +18,7 @@ def test_batch_score_reasoning_splitting(mock_metrics):
         {"rule_1_violation": {"reason": "ref_r1_img2"}, "rule_2_violation": {"reason": "ref_r2_img2"}}, # Image 2
     ]
     
-    res = batch_score_reasoning(preds, refs)
+    res = batch_score_reasoning(preds, refs, images=["img1", "img2"])
     
     # compute_all_caption_metrics should be called exactly 3 times:
     # 1. Global (Macro) containing all 3 matching reasons
@@ -48,13 +48,13 @@ def test_batch_score_reasoning_empty():
     """Test fallback logic when there are completely empty lists or no common rules."""
     # Case 1: Empty lists - raises ValueError (N4 fix)
     with pytest.raises(ValueError, match="non-empty"):
-        batch_score_reasoning([], [])
+        batch_score_reasoning([], [], images=[])
     
     # Case 2: No overlapping rules (e.g., 100% False Positives and False Negatives)
     preds = [{"rule_1_violation": {"reason": "a"}}]
     refs = [{"rule_2_violation": {"reason": "b"}}]
     
-    res_no_overlap = batch_score_reasoning(preds, refs)
+    res_no_overlap = batch_score_reasoning(preds, refs, images=["img1"])
     assert res_no_overlap["reasoning_text_similarity_bertscore_f1_macro"] == 0.0
     assert res_no_overlap["reasoning_text_similarity_bertscore_f1_rule_1"] == 0.0
     assert res_no_overlap["reasoning_text_similarity_bertscore_f1_rule_2"] == 0.0

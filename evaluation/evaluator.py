@@ -41,7 +41,7 @@ def run_full_evaluation(
     # with missing keys that are indistinguishable from zero-score metrics.
     from evaluation.metrics_captioning import _check_java_available
     if not _check_java_available():
-        logger.warning(
+        raise RuntimeError(
             "Java is required for METEOR/CIDEr-D/SPICE evaluation but was "
             "not found on PATH. These metrics will be omitted from the results."
         )

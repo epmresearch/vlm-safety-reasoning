@@ -23,16 +23,16 @@ def _make_gt(caption=""):
 def test_invalid_json():
     completion = "not a json string"
     gt = _make_gt("A construction site")
-    assert compute_reward(completion, gt) == 0.0
+    assert compute_reward([completion], [gt])[0] == 0.0
 
 def test_empty_caption_returns_zero():
     completion = _make_completion("")
     gt = _make_gt("A worker is digging.")
-    assert compute_reward(completion, gt) == 0.0
+    assert compute_reward([completion], [gt])[0] == 0.0
 
     completion2 = _make_completion("A worker is digging.")
     gt2 = _make_gt("")
-    assert compute_reward(completion2, gt2) == 0.0
+    assert compute_reward([completion2], [gt2])[0] == 0.0
 
 def test_identical_captions():
     # Identical captions should have 1.0 semantic, 1.0 lexical, 1.0 length penalty -> 1.0 total
@@ -40,7 +40,7 @@ def test_identical_captions():
     completion = _make_completion(caption)
     gt = _make_gt(caption)
     
-    score = compute_reward(completion, gt)
+    score = compute_reward([completion], [gt])[0]
     assert score > 0.95
 
 def test_semantic_similarity_different_words():
@@ -48,7 +48,7 @@ def test_semantic_similarity_different_words():
     completion = _make_completion("An individual wearing a safety vest drives construction machinery.")
     gt = _make_gt("A worker in a yellow vest operates a bulldozer.")
     
-    score = compute_reward(completion, gt)
+    score = compute_reward([completion], [gt])[0]
     # Should be decent but not perfect (say 0.3 to 0.9)
     assert 0.3 < score < 0.95
 
@@ -56,7 +56,7 @@ def test_completely_unrelated_caption():
     completion = _make_completion("A cat sleeps on the sofa.")
     gt = _make_gt("A worker in a yellow vest operates a bulldozer.")
     
-    score = compute_reward(completion, gt)
+    score = compute_reward([completion], [gt])[0]
     assert score < 0.3
 
 def test_length_penalty_rambling():
@@ -66,7 +66,7 @@ def test_length_penalty_rambling():
     completion = _make_completion(rambling_caption)
     gt = _make_gt(gt_caption)
     
-    score = compute_reward(completion, gt)
+    score = compute_reward([completion], [gt])[0]
     # Even if semantic similarity is somehow okay because it contains the GT,
     # the length penalty (Gaussian) should crush the score.
     assert score < 0.4

@@ -80,8 +80,8 @@ class TestCompositeReward:
     def test_perfect_safe_prediction_high_score(self):
         """Correct safe prediction (no violations, matching GT) should score high."""
         score = compute_reward(_make_valid_completion("A construction site."), GT_SAFE)
-        # Format=1.0, ViolationID=1.0, Grounding=1.0 (all TN), Caption≈1.0
-        assert score > 0.69
+        # Format=1.0, ViolationID=0.10, Grounding=0.10, Caption≈1.0
+        assert score > 0.20
 
     def test_breakdown_total_matches_compute_reward(self):
         completion = _make_valid_completion()

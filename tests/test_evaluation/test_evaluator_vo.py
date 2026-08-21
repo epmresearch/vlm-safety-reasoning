@@ -42,12 +42,15 @@ def test_run_full_evaluation_vo():
     # This should run without crashing and skip caption/grounding
     # Since we are not providing images, if it tried to run caption metrics, it would crash
     from PIL import Image
-    res = run_full_evaluation(raw_preds, refs, images=[Image.new('RGB', (10, 10))], task="violations_only")
+    from unittest.mock import patch
+    
+    with patch("evaluation.metrics_captioning._check_java_available", return_value=True):
+        res = run_full_evaluation(raw_preds, refs, images=[Image.new('RGB', (10, 10))], task="violations_only")
     
     # Check that caption metrics and grounding metrics are excluded or empty
     assert not any(k.startswith("captioning_") for k in res['metrics'].keys())
     assert not any(k.startswith("grounding_") for k in res['metrics'].keys())
     
     # It should have violation metrics
-    assert "violation_rule_1_f1" in res['metrics']
-    assert "parse_success_rate" in res['metrics']
+    assert "violation_identification_f1_rule_1" in res['metrics']
+    assert "structural_json_validity_rate" in res['metrics']

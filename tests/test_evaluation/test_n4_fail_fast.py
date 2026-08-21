@@ -49,17 +49,17 @@ class TestCaptionMetricsFailFast:
     def test_empty_predictions(self):
         from evaluation.metrics_captioning import compute_all_caption_metrics
         with pytest.raises(ValueError, match="non-empty"):
-            compute_all_caption_metrics([], ["reference text"])
+            compute_all_caption_metrics([], ["reference text"], images=[])
 
     def test_empty_references(self):
         from evaluation.metrics_captioning import compute_all_caption_metrics
         with pytest.raises(ValueError, match="non-empty"):
-            compute_all_caption_metrics(["pred text"], [])
+            compute_all_caption_metrics(["pred text"], [], images=[])
 
     def test_length_mismatch(self):
         from evaluation.metrics_captioning import compute_all_caption_metrics
         with pytest.raises(ValueError, match="length mismatch"):
-            compute_all_caption_metrics(["a", "b"], ["a"])
+            compute_all_caption_metrics(["a", "b"], ["a"], images=["img1", "img2"])
 
 
 class TestStructuralMetricsFailFast:

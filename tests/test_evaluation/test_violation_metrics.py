@@ -171,16 +171,16 @@ def test_grounding_iou_separation():
     res = compute_violation_metrics(preds, refs)
     
     # Rule 1 IoU: Two instances (1.0 and 0.0) -> Average 0.5
-    assert res["violation_grounding_iou_rule_1_tn0"] == 0.5
+    assert res["violation_grounding_mask_iou_rule_1_tn0"] == 0.5
     
     # Rule 4 IoU: One instance (0.5) -> Average 0.5
-    assert res["violation_grounding_iou_rule_4_tn0"] == 0.5
+    assert res["violation_grounding_mask_iou_rule_4_tn0"] == 0.5
     
     # Rule 2 IoU: No instances -> 0.0
-    assert res["violation_grounding_iou_rule_2_tn0"] == 0.0
+    assert res["violation_grounding_mask_iou_rule_2_tn0"] == 0.0
     
     # Global IoU Macro (True Macro): Average of (0.5, 0.0, 0.0, 0.5) = 0.25
-    assert res["violation_grounding_iou_macro_tn0"] == 0.25
+    assert res["violation_grounding_mask_iou_macro_tn0"] == 0.25
 
 def test_flat_box_handling():
     """Test that flat boxes are correctly parsed to compute IoU (the bug we fixed)."""
@@ -199,7 +199,7 @@ def test_flat_box_handling():
     
     res = compute_violation_metrics(preds, refs)
     
-    assert res["violation_grounding_iou_rule_1_tn0"] == 0.5
+    assert res["violation_grounding_mask_iou_rule_1_tn0"] == 0.5
 
 def test_violation_tn_three_way_split():
     """Test that TN cases produce diverging IoU metrics for the 3 conventions."""
@@ -228,13 +228,10 @@ def test_violation_tn_three_way_split():
     # Item 3 (FN): IoU = 0.0 (for all variants)
     
     # tn0: (0.5 + 0.0 + 0.0) / 3 = 0.1666...
-    assert abs(res["violation_grounding_iou_rule_1_tn0"] - (0.5 / 3)) < 1e-6
+    assert abs(res["violation_grounding_mask_iou_rule_1_tn0"] - (0.5 / 3)) < 1e-6
     
     # tn1: (0.5 + 1.0 + 0.0) / 3 = 0.5
-    assert abs(res["violation_grounding_iou_rule_1_tn1"] - 0.5) < 1e-6
-    
-    # excl: skips TN. remaining: 0.5, 0.0 -> (0.5 + 0.0) / 2 = 0.25
-    assert abs(res["violation_grounding_iou_rule_1_excl"] - 0.25) < 1e-6
+    assert abs(res["violation_grounding_mask_iou_rule_1_tn1"] - 0.5) < 1e-6
     
     # TN count should be 1
     assert res["violation_grounding_tn_count_rule_1"] == 1

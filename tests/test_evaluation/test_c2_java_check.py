@@ -16,6 +16,7 @@ def test_java_missing_raises_runtime_error():
             run_full_evaluation(
                 raw_predictions=["test"],
                 references=[{"caption": "test"}],
+                images=["dummy"]
             )
 
 
@@ -32,6 +33,7 @@ def test_java_present_does_not_raise():
             run_full_evaluation(
                 raw_predictions=["test"],
                 references=[{"caption": "test"}],
+                images=["dummy"]
             )
         except RuntimeError as e:
             if "Java" in str(e):

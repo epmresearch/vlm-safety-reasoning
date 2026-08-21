@@ -24,7 +24,7 @@ def test_run_full_evaluation(mock_reasoning, mock_violation, mock_grounding, moc
     references = [{"caption": "safe_gt"}]
     
     # Run
-    res = run_full_evaluation(raw_predictions, references)
+    res = run_full_evaluation(raw_predictions, references, images=["dummy"])
     
     # Assert all sub-modules were called
     mock_structural.assert_called_once()

@@ -9,9 +9,9 @@ from evaluation.metrics_captioning import (
 def test_empty_inputs():
     """Test that empty/invalid inputs raise ValueError (fail-fast, N4 fix)."""
     with pytest.raises(ValueError, match="non-empty"):
-        compute_all_caption_metrics([], [])
+        compute_all_caption_metrics([], [], images=[])
     with pytest.raises(ValueError, match="length mismatch"):
-        compute_all_caption_metrics(["text1", "text2"], ["ref1"]) # Mismatched length
+        compute_all_caption_metrics(["text1", "text2"], ["ref1"], images=["img1", "img2"]) # Mismatched length
 
 @patch("evaluation.metrics_captioning.compute_clipscore")
 @patch("evaluation.metrics_captioning.compute_cider")
@@ -27,8 +27,8 @@ def test_all_caption_metrics_aggregation(mock_bert, mock_meteor, mock_cider, moc
     preds = ["A good caption", "   ", ""] # Includes whitespace and empty string
     refs = ["A great caption", "Also good", " "]
     
-    # Test without images
-    res = compute_all_caption_metrics(preds, refs)
+    # Test without images (passing None to indicate no images)
+    res = compute_all_caption_metrics(preds, refs, images=["img1", "img2", "img3"])
     
     # Check that sanitization worked before passing to the underlying functions
     args, _ = mock_bert.call_args
@@ -38,11 +38,7 @@ def test_all_caption_metrics_aggregation(mock_bert, mock_meteor, mock_cider, moc
     assert res["bertscore_f1"] == 0.8
     assert res["meteor"] == 0.7
     assert res["cider"] == 0.6
-    assert "clipscore" not in res # Images were not provided
-    
-    # Test with images
-    res_images = compute_all_caption_metrics(preds, refs, images=["img1", "img2", "img3"])
-    assert res_images["clipscore"] == 0.5
+    assert res["clipscore"] == 0.5
 
 def test_clipscore_mismatched_lengths():
     """Test CLIPScore fails safely with bad inputs."""

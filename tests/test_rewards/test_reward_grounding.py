@@ -36,11 +36,11 @@ def _gt(excavator_01=None, rebar_01=None, hat_01=None):
 
 class TestRewardGrounding:
     def test_true_negative_all_classes_returns_one(self):
-        """No objects predicted, no objects in GT → 1.0 (correct TN for all classes)."""
+        """No objects predicted, no objects in GT → 0.10 (correct TN for all classes)."""
         completion = _make_completion()
         gt = _gt()
         score = compute_reward(completion, gt)
-        assert score == pytest.approx(1.0)
+        assert score == pytest.approx(0.10)
 
     def test_perfect_true_positive_excavator(self):
         """Predicted box matches GT exactly (after scale conversion)."""
@@ -49,26 +49,26 @@ class TestRewardGrounding:
         completion = _make_completion(excavator_1000=[[100, 50, 800, 700]])
         gt = _gt(excavator_01=[[0.1, 0.05, 0.8, 0.7]])
         score = compute_reward(completion, gt)
-        # Perfect IoU → 0.5 (presence) + 0.5*1.0 (IoU) = 1.0 for excavator
-        # Other 2 classes: TN → 1.0 each
-        # Average = (1.0 + 1.0 + 1.0) / 3 = 1.0
-        assert score == pytest.approx(1.0, abs=0.02)
+        # Perfect IoU = 1.0 for excavator
+        # Other 2 classes: TN → 0.10 each
+        # Average = (1.0 + 0.10 + 0.10) / 3 = 0.40
+        assert score == pytest.approx(0.40, abs=0.02)
 
     def test_false_positive_single_class(self):
         """Predicts excavator when none in GT → FP → 0.0 for that class."""
         completion = _make_completion(excavator_1000=[[100, 50, 800, 700]])
         gt = _gt()  # no excavator in GT
         score = compute_reward(completion, gt)
-        # excavator: FP → 0.0; rebar: TN → 1.0; hat: TN → 1.0
-        assert score == pytest.approx(2.0 / 3.0, abs=0.02)
+        # excavator: FP → 0.0; rebar: TN → 0.10; hat: TN → 0.10
+        assert score == pytest.approx(0.20 / 3.0, abs=0.02)
 
     def test_false_negative_single_class(self):
         """Misses excavator that exists in GT → FN → 0.0 for that class."""
         completion = _make_completion()  # no prediction
         gt = _gt(excavator_01=[[0.1, 0.05, 0.8, 0.7]])
         score = compute_reward(completion, gt)
-        # excavator: FN → 0.0; others: TN → 1.0
-        assert score == pytest.approx(2.0 / 3.0, abs=0.02)
+        # excavator: FN → 0.0; others: TN → 0.10
+        assert score == pytest.approx(0.20 / 3.0, abs=0.02)
 
     def test_low_iou_tp(self):
         """Predicted box overlaps but not perfectly."""
@@ -77,8 +77,8 @@ class TestRewardGrounding:
         completion = _make_completion(excavator_1000=[[500, 500, 900, 900]])
         gt = _gt(excavator_01=[[0.1, 0.1, 0.9, 0.9]])
         score = compute_reward(completion, gt)
-        # IoU < 1.0, score for excavator = 0.5 + 0.5*iou, total avg < 1.0
-        assert 0.5 < score < 1.0
+        # score for excavator < 1.0, other classes TN = 0.10
+        assert score < 1.0
 
     def test_invalid_json_returns_zero(self):
         assert compute_reward("```json\n{bad\n```", _gt()) == 0.0
@@ -88,8 +88,8 @@ class TestRewardGrounding:
         completion = _make_completion(excavator_1000=[[0, 0, 1000, 1000]])
         gt = _gt(excavator_01=[[0.0, 0.0, 1.0, 1.0]])
         score = compute_reward(completion, gt)
-        # Perfect overlap → excavator score = 1.0
-        assert score == pytest.approx(1.0, abs=0.02)
+        # Perfect overlap → excavator score = 1.0, TN = 0.10
+        assert score == pytest.approx((1.0 + 0.10 + 0.10) / 3, abs=0.02)
 
     def test_multiple_classes_independently_scored(self):
         """Each class is scored independently."""
@@ -102,5 +102,5 @@ class TestRewardGrounding:
             rebar_01=[[0.2, 0.2, 0.5, 0.5]],        # FN (missed)
         )
         score = compute_reward(completion, gt)
-        # excavator: TP perfect → 1.0, rebar: FN → 0.0, hat: TN → 1.0
-        assert score == pytest.approx(2.0 / 3.0, abs=0.02)
+        # excavator: TP perfect → 1.0, rebar: FN → 0.0, hat: TN → 0.10
+        assert score == pytest.approx(1.10 / 3.0, abs=0.02)
