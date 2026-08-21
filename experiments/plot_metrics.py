@@ -15,17 +15,19 @@ MODELS = ["baseline", "sft", "grpo"]
 RESULTS_DIR = Path("evaluation_results")
 PLOTS_DIR = RESULTS_DIR / "plots"
 
-def load_metrics(task: str = "unified"):
+def load_metrics(task: str = "unified", tier: str = ""):
     metrics_data = {}
     repair_data = {}
     
+    suffix = f"_{tier}" if tier and tier != "2b" else ""
+    
     if task == "unified":
         models = ["baseline", "sft", "grpo"]
-        variants = ["baseline", "sft", "grpo"]
+        variants = [f"baseline{suffix}", f"sft{suffix}", f"grpo{suffix}"]
     else:
         prefix = "vo" if task == "violations_only" else task
         models = ["baseline", "sft", "grpo"]
-        variants = [f"{prefix}-baseline", f"{prefix}-sft-v1", f"{prefix}-grpo-v1"]
+        variants = [f"{prefix}-baseline{suffix}", f"{prefix}-sft-v1{suffix}", f"{prefix}-grpo-v1{suffix}"]
         
     for model_key, variant in zip(models, variants):
         metrics_file = RESULTS_DIR / variant / "metrics.json"
@@ -442,17 +444,22 @@ def main():
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--task", default="unified", help="Task name")
+    parser.add_argument("--tier", default="", help="Model tier (e.g., 2b, 4b, 8b). Empty defaults to 2b folder structure.")
     args = parser.parse_args()
 
-    print("Loading metrics...")
-    metrics_data, repair_data = load_metrics(args.task)
+    global PLOTS_DIR
+    if args.tier and args.tier != "2b":
+        PLOTS_DIR = RESULTS_DIR / f"plots_{args.tier}"
+
+    print(f"Loading metrics for tier: {args.tier or '2b'}...")
+    metrics_data, repair_data = load_metrics(args.task, args.tier)
     if not metrics_data:
         print("No metrics found in evaluation_results/")
         return
         
     PLOTS_DIR.mkdir(parents=True, exist_ok=True)
     
-    print("Generating Comprehensive Plot Suite...")
+    print(f"Generating Comprehensive Plot Suite in {PLOTS_DIR}...")
     plot_formatting(metrics_data, repair_data)
     
     if args.task != "violations_only":
