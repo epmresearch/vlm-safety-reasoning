@@ -53,11 +53,11 @@ echo "======================================================================"
 # We use a dummy variant name to save the results in a unique folder
 python -m experiments.run_inference \
     --tier ${TIER} \
-    --run_name vo-baseline-${TIER}-v1 \
+    --run_name vo-baseline-${TIER}-v2 \
     --batch_size 32 \
     --task violations_only
 
-PREDS_DIR="$HPC_DRIVE_ROOT/results/inference/vo-baseline-${TIER}-v1"
+PREDS_DIR="$HPC_DRIVE_ROOT/results/inference/vo-baseline-${TIER}-v2"
 PREDS_FILE="$PREDS_DIR/predictions.jsonl"
 
 echo "======================================================================"

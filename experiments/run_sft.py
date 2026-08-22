@@ -54,6 +54,14 @@ def main():
     from data.oversampling import build_oversampled_indices, build_rare_mask
     sft_cfg = load_training_config("sft")
 
+    # Dynamic tier-based learning rate scaling for SFT
+    if args.tier == "4b":
+        sft_cfg["learning_rate"] = min(sft_cfg.get("learning_rate", 1.0e-4), 5.0e-5)
+        logger.info(f"Scaled SFT learning rate to {sft_cfg['learning_rate']} for tier 4b")
+    elif args.tier == "8b":
+        sft_cfg["learning_rate"] = min(sft_cfg.get("learning_rate", 1.0e-4), 2.0e-5)
+        logger.info(f"Scaled SFT learning rate to {sft_cfg['learning_rate']} for tier 8b")
+
     logger.info("Building oversampled dataset...")
     oversample_indices, oversample_manifest = build_oversampled_indices(
         splits["train"],

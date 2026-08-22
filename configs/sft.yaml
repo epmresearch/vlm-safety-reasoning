@@ -44,8 +44,8 @@ use_stratified_rare_sampling: true     # NEW
 bucket_shuffle_seed: 42
 
 # --- Oversampling (new) ---
-oversample_rule24_multiplier: 4        # Rule 2 or Rule 4 present -> 4 total copies
-oversample_rule3_multiplier: 2         # Rule 3 present (and not 2/4) -> 2 total copies
+oversample_rule24_multiplier: 10       # Rule 2 or Rule 4 present -> 10 total copies
+oversample_rule3_multiplier: 10        # Rule 3 present (and not 2/4) -> 10 total copies
 
 # --- Memory-safety additions (new) ---
 auto_find_batch_size: false           # HF Trainer will halve batch size on CUDA OOM at startup

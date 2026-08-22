@@ -131,8 +131,8 @@ def run_grpo(
         train_split = raw_dataset["train"]
         oversampled_indices, oversample_manifest = build_oversampled_indices(
             train_split,
-            rule24_multiplier=4,
-            rule3_multiplier=2,
+            rule24_multiplier=10,
+            rule3_multiplier=10,
         )
         train_split = train_split.select(oversampled_indices)
         logger.info(f"Oversample manifest: {oversample_manifest}")
@@ -206,8 +206,8 @@ def run_grpo(
         lr_scheduler_type=cfg.get("lr_scheduler_type", "cosine"),
         max_grad_norm=cfg.get("max_grad_norm", 1.0),
         beta=cfg["beta"],
-        temperature=0.5,
-        top_p=0.9,
+        temperature=0.9,
+        top_p=0.95,
         bf16=cfg.get("bf16", True),
         optim=cfg.get("optim", "adamw_8bit"),
         report_to="wandb",
