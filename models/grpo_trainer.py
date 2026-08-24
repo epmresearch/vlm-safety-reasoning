@@ -207,6 +207,7 @@ def run_grpo(
         max_grad_norm=cfg.get("max_grad_norm", 1.0),
         beta=cfg["beta"],
         temperature=0.9,
+        do_sample=True,
         top_p=0.95,
         bf16=cfg.get("bf16", True),
         optim=cfg.get("optim", "adamw_8bit"),
@@ -231,7 +232,7 @@ def run_grpo(
             reward_funcs=reward_funcs,
             processing_class=tokenizer,
             callbacks=[
-                PersistentCheckpointCallback(persistent_freq=200),
+                PersistentCheckpointCallback(persistent_freq=100),
                 GPUMemoryLoggingCallback(every_n_steps=10),
                 ConsoleLogCallback()
             ],
@@ -255,7 +256,7 @@ def run_grpo(
             reward_funcs=[reward_fn],
             processing_class=tokenizer,
             callbacks=[
-                PersistentCheckpointCallback(persistent_freq=200),
+                PersistentCheckpointCallback(persistent_freq=100),
                 GPUMemoryLoggingCallback(every_n_steps=10),
                 ConsoleLogCallback()
             ],

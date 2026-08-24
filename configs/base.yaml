@@ -9,7 +9,7 @@ dataset:
   hf_repo: "LouisChen15/ConstructionSite"
   raw_cache_subdir: "datasets/raw"
   cleaned_subdir: "datasets/raw_cleaned"
-  processed_subdir: "datasets/processed"
+  processed_subdir: "datasets/augmented"
 
 paths:
   checkpoints_subdir: "checkpoints"

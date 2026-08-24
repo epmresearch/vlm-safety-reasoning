@@ -12,6 +12,7 @@ venv/
 .vscode/
 .idea/
 wandb/
+data/processed/
 struct.md
 setup_project_structure.py
 cb.py

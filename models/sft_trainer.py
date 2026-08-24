@@ -19,7 +19,7 @@ from typing import Any, Dict, List, Optional
 from core.config import load_base_config, load_training_config
 from core.io import get_drive_path, ensure_dir
 from core.logging import get_logger
-from core.callbacks import SaveBestModelCallback, ManifestUpdateCallback, GPUMemoryLoggingCallback, _ensure_preprocessor_config
+from core.callbacks import SaveBestModelCallback, ManifestUpdateCallback, GPUMemoryLoggingCallback, _ensure_preprocessor_config, PersistentCheckpointCallback
 from models.model_loader import load_model_for_training, get_model_info, get_batch_config, log_gpu_memory
 
 logger = get_logger(__name__)
@@ -271,6 +271,7 @@ def run_sft_unified(
 
     # --- Callbacks ---
     callbacks = [
+        PersistentCheckpointCallback(persistent_freq=100),
         SaveBestModelCallback(
             best_dir=str(best_dir),
             metric_name=sft_cfg.get("metric_for_best_model", "eval_loss"),
