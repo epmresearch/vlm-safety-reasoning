@@ -117,13 +117,9 @@ def main():
             num_augs = 10 if rule_4 else 4
             
             for aug_idx in range(1, num_augs + 1):
-                # Augment image
-                aug_img = apply_augmentation(pil_img, aug_pipeline)
-                
-                # Yield a new row identical to the old one, but with the new image
-                new_sample = {k: v for k, v in sample.items()}
-                new_sample["image_id"] = f"{new_sample.get('image_id', '')}_aug{aug_idx}"
-                new_sample["image"] = aug_img
+                # Augment image using the existing augment_sample function
+                new_sample = augment_sample(sample, aug_pipeline, aug_idx)
+                aug_img = new_sample["image"]
                 yield new_sample
                 
                 # Save first 5 examples for debugging
