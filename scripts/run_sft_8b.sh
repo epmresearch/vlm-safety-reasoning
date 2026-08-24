@@ -45,9 +45,9 @@ HPC_DRIVE_ROOT="/home/$USER/vlm-finetuning-project1"
 export VLM_DATA_ROOT="$HPC_DRIVE_ROOT"
 mkdir -p "$HPC_DRIVE_ROOT/checkpoints" "$HPC_DRIVE_ROOT/results" "$HPC_DRIVE_ROOT/logs"
 
-echo "Starting SFT on 8B model (2 Epochs)..."
+echo "Starting SFT on 8B model (1 Epoch)..."
 python -m experiments.run_sft \
     --tier 8b \
-    --variant unified-sft-8b-v1
+    --variant unified-sft-8b-v4
 
 echo "SFT 8B training completed: $(date)"

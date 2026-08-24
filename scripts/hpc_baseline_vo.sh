@@ -53,7 +53,7 @@ echo "======================================================================"
 # We use a dummy variant name to save the results in a unique folder
 python -m experiments.run_inference \
     --tier ${TIER} \
-    --run_name vo-baseline-${TIER}-v2 \
+    --run_name vo-baseline-${TIER}-v3 \
     --batch_size 32 \
     --task violations_only
 
@@ -79,7 +79,7 @@ python -m experiments.run_evaluation \
     --output_dir "$EVAL_OUT_DIR" \
     --skip_spice \
     --wandb_project "vlm-safety-evals" \
-    --wandb_run_name "qwen3-${TIER}-vo-baseline-repaired" \
+    --wandb_run_name "qwen3-${TIER}-vo-baseline-v3-repaired" \
     --task violations_only
 
 echo "======================================================================"

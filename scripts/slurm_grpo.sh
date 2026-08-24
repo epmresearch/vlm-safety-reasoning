@@ -64,8 +64,8 @@ mkdir -p "$HPC_DRIVE_ROOT/checkpoints" "$HPC_DRIVE_ROOT/results" "$HPC_DRIVE_ROO
 echo "Starting GRPO training..."
 python -m experiments.run_grpo \
     --tier 2b \
-    --variant unified-grpo-v2 \
-    --adapter_path "$HPC_DRIVE_ROOT/checkpoints/qwen3vl-2b/unified-grpo-v1/checkpoint-788"
+    --variant unified-grpo-v4 \
+    --adapter_path "$HPC_DRIVE_ROOT/checkpoints/qwen3vl-2b/unified-grpo-v4/checkpoint-788"
 
 echo "GRPO training completed: $(date)"
 

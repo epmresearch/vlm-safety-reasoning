@@ -48,7 +48,7 @@ mkdir -p "$HPC_DRIVE_ROOT/checkpoints" "$HPC_DRIVE_ROOT/results" "$HPC_DRIVE_ROO
 echo "Starting GRPO training for 8B model..."
 python -m experiments.run_grpo \
     --tier 8b \
-    --variant unified-grpo-8b-v1 \
-    --sft_variant unified-sft-8b-v1
+    --variant unified-grpo-8b-v4 \
+    --sft_variant unified-sft-8b-v4
 
 echo "GRPO 8B training completed: $(date)"

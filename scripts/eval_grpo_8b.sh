@@ -43,21 +43,16 @@ HPC_DRIVE_ROOT="/home/$USER/vlm-finetuning-project1"
 export VLM_DATA_ROOT="$HPC_DRIVE_ROOT"
 
 echo "======================================================================"
-echo "[PHASE 1/3] Running Inference on 8B GRPO Model (Auto-detect Checkpoint)"
+echo "[PHASE 1/3] Running Inference on 8B GRPO Model (Final Checkpoint)"
 echo "======================================================================"
-
-# Dynamically find the latest checkpoint folder
-CHK_DIR=$(ls -td $HPC_DRIVE_ROOT/checkpoints/qwen3vl-8b/unified-grpo-8b-v1/checkpoint-* | head -1)
-CHK_NAME=$(basename "$CHK_DIR")
-echo "Auto-detected latest checkpoint: $CHK_NAME"
 
 python -m experiments.run_inference \
     --tier 8b \
-    --variant unified-grpo-8b-v1 \
-    --checkpoint "$CHK_NAME" \
+    --variant unified-grpo-8b-v4 \
+    --checkpoint final \
     --batch_size 32
 
-PREDS_DIR="$HPC_DRIVE_ROOT/results/inference/unified-grpo-8b-v1_$CHK_NAME"
+PREDS_DIR="$HPC_DRIVE_ROOT/results/inference/unified-grpo-8b-v4_final"
 PREDS_FILE="$PREDS_DIR/predictions.jsonl"
 
 echo "======================================================================"
@@ -78,7 +73,7 @@ python -m experiments.run_evaluation \
     --output_dir "$EVAL_OUT_DIR" \
     --skip_spice \
     --wandb_project "vlm-safety-evals" \
-    --wandb_run_name "qwen3-8b-grpo-v1-repaired"
+    --wandb_run_name "qwen3-8b-grpo-v4-repaired"
 
 echo "======================================================================"
 echo "GRPO 8B Evaluation completed successfully: $(date)"

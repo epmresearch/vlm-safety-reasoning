@@ -105,7 +105,7 @@ def _build_bucketed_trainer_class(sampler_batch_size: int, resolutions: List[flo
 
 def run_sft_unified(
     tier: Optional[str] = None,
-    variant: str = "unified-sft-v1",
+    variant: str = "unified-sft-v4",
     train_dataset: Optional[List[Dict[str, Any]]] = None,
     val_dataset: Optional[List[Dict[str, Any]]] = None,
     rare_mask: Optional[List[bool]] = None,

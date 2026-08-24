@@ -26,7 +26,7 @@ def generate_bar_charts(out_dir):
     tier = config.get("active_tier", "2b")
     short_name = get_model_info(tier)["short_name"]
     base_metrics = load_metrics(short_name, "baseline")
-    sft_metrics = load_metrics(short_name, "unified-sft-v1")
+    sft_metrics = load_metrics(short_name, "unified-sft-v4")
     
     if not base_metrics or not sft_metrics:
         print("Metrics not found. Run evaluation first.")

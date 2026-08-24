@@ -88,17 +88,23 @@ def main():
 
     model_info = get_model_info(args.tier)
     short_name = model_info["short_name"]
+    prefix = args.task
+    tier = args.tier
 
-    if args.task == "unified":
-        baseline_metrics = load_eval_json(short_name, "baseline")
-        sft_metrics = load_eval_json(short_name, "unified-sft-v1")
-        grpo_metrics = load_eval_json(short_name, "unified-grpo-v1")
+    if prefix == "unified":
+        baseline_metrics = load_eval_json(short_name, f"baseline_{tier}_v4")
+        if not baseline_metrics:
+            baseline_metrics = load_eval_json(short_name, "baseline")
+        sft_metrics = load_eval_json(short_name, f"unified-sft-{tier}-v4_final")
+        grpo_metrics = load_eval_json(short_name, f"unified-grpo-{tier}-v4_final")
     else:
-        # e.g. violations_only -> vo-sft-v1
-        prefix = "vo" if args.task == "violations_only" else args.task
-        baseline_metrics = load_eval_json(short_name, f"{prefix}-baseline")
-        sft_metrics = load_eval_json(short_name, f"{prefix}-sft-v1")
-        grpo_metrics = load_eval_json(short_name, f"{prefix}-grpo-v1")
+        # e.g. violations_only -> vo-sft-v3
+        # Baseline might be prefixed or not depending on how it was run
+        baseline_metrics = load_eval_json(short_name, f"vo-baseline-{tier}-v3")
+        if not baseline_metrics:
+            baseline_metrics = load_eval_json(short_name, f"{prefix}-baseline")
+        sft_metrics = load_eval_json(short_name, f"vo-sft-{tier}-v3_final")
+        grpo_metrics = load_eval_json(short_name, f"vo-grpo-{tier}-v3_final")
 
     summary_rows = [
         flatten_metrics(baseline_metrics, "Base"),

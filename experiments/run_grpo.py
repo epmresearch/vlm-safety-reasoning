@@ -1,6 +1,6 @@
 """
 Entry point: runs GRPO/GSPO training on top of an SFT checkpoint.
-Usage: python experiments/run_grpo.py --tier 2b --variant unified-grpo-v1
+Usage: python experiments/run_grpo.py --tier 2b --variant unified-grpo-v4
 """
 import argparse
 import time
@@ -23,9 +23,9 @@ def main():
     
     parser = argparse.ArgumentParser()
     parser.add_argument("--tier", default=default_tier, help="Model tier (e.g., 2b, 4b, 8b)")
-    parser.add_argument("--variant", default="unified-grpo-v1", help="Variant name for GRPO")
+    parser.add_argument("--variant", default="unified-grpo-v4", help="Variant name for GRPO")
     parser.add_argument("--max_samples", type=int, default=None, help="Cap dataset size for debugging")
-    parser.add_argument("--sft_variant", default="unified-sft-v1", help="SFT variant name to load as starting adapter")
+    parser.add_argument("--sft_variant", default="unified-sft-v4", help="SFT variant name to load as starting adapter")
     parser.add_argument("--adapter_path", default=None, help="Explicit full path to adapter (overrides sft_variant)")
     parser.add_argument("--task", default="unified", help="Task name: 'unified' or 'violations_only'")
     args = parser.parse_args()
@@ -43,7 +43,7 @@ def main():
         adapter_path = args.adapter_path
         logger.info(f"Using explicitly specified adapter path: {adapter_path}")
     else:
-        adapter_path = str(get_drive_path("checkpoints", f"qwen3vl-{args.tier}", args.sft_variant, "best"))
+        adapter_path = str(get_drive_path("checkpoints", f"qwen3vl-{args.tier}", args.sft_variant, "final"))
         logger.info(f"Using SFT variant adapter path: {adapter_path}")
 
     # Run the GRPO training

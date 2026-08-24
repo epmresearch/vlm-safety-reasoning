@@ -44,8 +44,8 @@ mkdir -p "$HPC_DRIVE_ROOT/checkpoints" "$HPC_DRIVE_ROOT/results" "$HPC_DRIVE_ROO
 echo "Starting GRPO SMOKE TEST..."
 python -m experiments.run_grpo \
     --tier 2b \
-    --variant unified-grpo-test-v1 \
-    --sft_variant unified-sft-v1 \
+    --variant unified-grpo-test-v4 \
+    --sft_variant unified-sft-v4 \
     --max_samples 10
 
 echo "GRPO test completed: $(date)"

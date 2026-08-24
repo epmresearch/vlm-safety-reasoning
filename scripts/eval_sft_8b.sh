@@ -46,11 +46,11 @@ echo "[PHASE 1/3] Running Inference on 8B SFT Best Checkpoint"
 echo "======================================================================"
 python -m experiments.run_inference \
     --tier 8b \
-    --variant unified-sft-8b-v1 \
-    --checkpoint best \
+    --variant unified-sft-8b-v4 \
+    --checkpoint final \
     --batch_size 32
 
-PREDS_DIR="$HPC_DRIVE_ROOT/results/inference/unified-sft-8b-v1_best"
+PREDS_DIR="$HPC_DRIVE_ROOT/results/inference/unified-sft-8b-v4_final"
 PREDS_FILE="$PREDS_DIR/predictions.jsonl"
 
 echo "======================================================================"
@@ -71,7 +71,7 @@ python -m experiments.run_evaluation \
     --output_dir "$EVAL_OUT_DIR" \
     --skip_spice \
     --wandb_project "vlm-safety-evals" \
-    --wandb_run_name "qwen3-8b-sft-v1-repaired"
+    --wandb_run_name "qwen3-8b-sft-v4-repaired"
 
 echo "======================================================================"
 echo "SFT 8B Evaluation completed successfully: $(date)"

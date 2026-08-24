@@ -8,13 +8,13 @@ Usage:
     python -m experiments.run_inference --tier 2b
 
     # A specific fine-tuned checkpoint
-    python -m experiments.run_inference --tier 2b --variant unified-sft-v1 --checkpoint best
+    python -m experiments.run_inference --tier 2b --variant unified-sft-v4 --checkpoint best
 
     # A specific intermediate checkpoint
-    python -m experiments.run_inference --tier 2b --variant unified-sft-v1 --checkpoint checkpoint-300
+    python -m experiments.run_inference --tier 2b --variant unified-sft-v4 --checkpoint checkpoint-300
 
     # Limit samples for a quick smoke test
-    python -m experiments.run_inference --tier 2b --variant unified-sft-v1 --checkpoint best --max_samples 32
+    python -m experiments.run_inference --tier 2b --variant unified-sft-v4 --checkpoint best --max_samples 32
 """
 import unsloth
 import argparse
@@ -41,7 +41,7 @@ def main():
     parser.add_argument("--tier", default=default_tier, help="Model tier (e.g., 2b, 4b, 8b)")
     parser.add_argument(
         "--variant", default=None,
-        help="SFT checkpoint variant name (e.g., unified-sft-v1). "
+        help="SFT checkpoint variant name (e.g., unified-sft-v4). "
              "Omit for baseline (no-adapter) inference."
     )
     parser.add_argument(

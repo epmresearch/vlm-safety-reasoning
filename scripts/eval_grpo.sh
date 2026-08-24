@@ -68,16 +68,16 @@ echo ""
 echo "======================================================================"
 echo "[PHASE 1/3] Running Inference on GRPO (Final Checkpoint)"
 echo "======================================================================"
-# Note: we use unified-grpo-v1 and checkpoint 'final'. 
+# Note: we use unified-grpo-v4 and checkpoint 'final'. 
 # This runs the model across all 3004 test samples.
 python -m experiments.run_inference \
     --tier 2b \
-    --variant unified-grpo-v1 \
+    --variant unified-grpo-v4 \
     --checkpoint final \
     --batch_size 32
 
 # The above command outputs predictions to:
-PREDS_DIR="$HPC_DRIVE_ROOT/results/inference/unified-grpo-v1_final"
+PREDS_DIR="$HPC_DRIVE_ROOT/results/inference/unified-grpo-v4_final"
 PREDS_FILE="$PREDS_DIR/predictions.jsonl"
 
 

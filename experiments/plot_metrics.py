@@ -23,11 +23,14 @@ def load_metrics(task: str = "unified", tier: str = ""):
     
     if task == "unified":
         models = ["baseline", "sft", "grpo"]
-        variants = [f"baseline{suffix}", f"sft{suffix}", f"grpo{suffix}"]
+        if tier == "8b":
+            variants = ["baseline_8b_v4", "unified-sft-8b-v4_final", "unified-grpo-8b-v4_final"]
+        else:
+            variants = [f"baseline_{tier}_v4", f"unified-sft-{tier}-v4_final", f"unified-grpo-{tier}-v4_final"]
     else:
         prefix = "vo" if task == "violations_only" else task
         models = ["baseline", "sft", "grpo"]
-        variants = [f"{prefix}-baseline{suffix}", f"{prefix}-sft-v1{suffix}", f"{prefix}-grpo-v1{suffix}"]
+        variants = [f"{prefix}-baseline-{tier}-v3", f"{prefix}-sft-{tier}-v3_final", f"{prefix}-grpo-{tier}-v3_final"]
         
     for model_key, variant in zip(models, variants):
         metrics_file = RESULTS_DIR / variant / "metrics.json"

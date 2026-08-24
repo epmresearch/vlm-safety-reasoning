@@ -51,7 +51,7 @@ fi
 HPC_DRIVE_ROOT="/home/$USER/vlm-finetuning-project1"
 export VLM_DATA_ROOT="$HPC_DRIVE_ROOT"
 
-VARIANT="vo-sft-${TIER}-v2"
+VARIANT="vo-sft-${TIER}-v3"
 
 echo "======================================================================"
 echo "[STEP 1/4] Running SFT on ${TIER} model (Violations Only Task)"
@@ -62,16 +62,16 @@ python -m experiments.run_sft \
     --task violations_only
 
 echo "======================================================================"
-echo "[STEP 2/4] Running Inference on Best SFT Checkpoint"
+echo "[STEP 2/4] Running Inference on Final SFT Checkpoint"
 echo "======================================================================"
 python -m experiments.run_inference \
     --tier ${TIER} \
     --variant ${VARIANT} \
-    --checkpoint best \
+    --checkpoint final \
     --batch_size 32 \
     --task violations_only
 
-PREDS_DIR="$HPC_DRIVE_ROOT/results/inference/${VARIANT}_best"
+PREDS_DIR="$HPC_DRIVE_ROOT/results/inference/${VARIANT}_final"
 PREDS_FILE="$PREDS_DIR/predictions.jsonl"
 
 echo "======================================================================"
@@ -93,7 +93,7 @@ python -m experiments.run_evaluation \
     --output_dir "$EVAL_OUT_DIR" \
     --skip_spice \
     --wandb_project "vlm-safety-evals" \
-    --wandb_run_name "qwen3-${TIER}-vo-sft-v2-repaired" \
+    --wandb_run_name "qwen3-${TIER}-vo-sft-v3-repaired" \
     --task violations_only
 
 echo "======================================================================"

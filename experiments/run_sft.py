@@ -1,6 +1,6 @@
 """
 Entry point: runs SFT training for the unified task.
-Usage: python experiments/run_sft.py --tier 2b --variant unified-sft-v1
+Usage: python experiments/run_sft.py --tier 2b --variant unified-sft-v4
 """
 import unsloth
 import argparse
@@ -29,8 +29,8 @@ def main():
     default_tier = config.get("active_tier", "2b")
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--tier", default=default_tier)
-    parser.add_argument("--variant", default="unified-sft-v1")
+    parser.add_argument("--tier", default=default_tier, help="Model tier (e.g., 2b, 4b, 8b)")
+    parser.add_argument("--variant", default="unified-sft-v4")
     parser.add_argument("--task", default="unified", help="Task name: 'unified' or 'violations_only'")
     parser.add_argument("--no-resume", action="store_true")
     args = parser.parse_args()

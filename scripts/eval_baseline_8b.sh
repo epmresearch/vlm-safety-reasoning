@@ -7,8 +7,8 @@
 #SBATCH --mem=80G
 #SBATCH --gres=gpu:h100:1
 #SBATCH --time=12:00:00
-#SBATCH --output=/home/%u/vlm-finetuning-project1/logs/eval_baseline_8b_%j.out
-#SBATCH --error=/home/%u/vlm-finetuning-project1/logs/eval_baseline_8b_%j.err
+#SBATCH --output=/home/%u/vlm-finetuning-project1/logs/eval_baseline_8b_v4_%j.out
+#SBATCH --error=/home/%u/vlm-finetuning-project1/logs/eval_baseline_8b_v4_%j.err
 #SBATCH --mail-type=BEGIN,END,FAIL
 #SBATCH --mail-user=nabeel.shan@ucalgary.ca
 
@@ -46,10 +46,10 @@ echo "[PHASE 1/3] Running Inference on BASELINE 8B Model (No Adapter)"
 echo "======================================================================"
 python -m experiments.run_inference \
     --tier 8b \
-    --run_name baseline_8b \
+    --run_name baseline_8b_v4 \
     --batch_size 32
 
-PREDS_DIR="$HPC_DRIVE_ROOT/results/inference/baseline_8b"
+PREDS_DIR="$HPC_DRIVE_ROOT/results/inference/baseline_8b_v4"
 PREDS_FILE="$PREDS_DIR/predictions.jsonl"
 
 echo "======================================================================"
@@ -70,7 +70,7 @@ python -m experiments.run_evaluation \
     --output_dir "$EVAL_OUT_DIR" \
     --skip_spice \
     --wandb_project "vlm-safety-evals" \
-    --wandb_run_name "qwen3-8b-baseline-repaired"
+    --wandb_run_name "qwen3-8b-baseline-v4-repaired"
 
 echo "======================================================================"
 echo "Baseline 8B Evaluation completed successfully: $(date)"
