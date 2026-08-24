@@ -8,7 +8,7 @@ and text descriptions ("on the left", "on the right") remain perfectly accurate.
 import os
 import argparse
 import numpy as np
-from datasets import load_from_disk, concatenate_datasets
+from datasets import load_from_disk, concatenate_datasets, Dataset
 from PIL import Image
 from tqdm import tqdm
 from core.io import get_drive_path, ensure_dir
@@ -98,61 +98,54 @@ def main():
         return
         
     # 2. Generate augmented variations
-    transform = get_pixel_augmentation_pipeline()
-    augmented_samples_dict = {col: [] for col in train_split.column_names}
+    aug_pipeline = get_pixel_augmentation_pipeline()
     
     # Create a debug folder to save a few visual examples
     debug_dir = os.path.join(os.getcwd(), "debug_augmentations")
     ensure_dir(debug_dir)
-    debug_samples_saved = 0
     
-    logger.info("Generating dynamic augmentations to balance at ~500 images per rule...")
-    for idx in tqdm(rare_indices, desc="Augmenting"):
-        original_sample = train_split[idx]
-        
-        has_rule4 = original_sample.get("rule_4_violation") is not None
-        has_rule3 = original_sample.get("rule_3_violation") is not None
-        
-        if has_rule4:
-            num_augs = 10  # 46 * 11 = ~506
-        elif has_rule3:
-            num_augs = 4   # 109 * 5 = ~545
-        else:
-            num_augs = args.num_augmentations
+    # We will use a generator to yield samples one by one instead of holding 700 images in memory
+    def generate_augmented_samples():
+        debug_samples_saved = 0
+        for i in tqdm(rare_indices, desc="Augmenting"):
+            sample = train_split[i]
+            pil_img = sample["image"]
+            rule_3 = sample.get("rule_3_violation", False)
+            rule_4 = sample.get("rule_4_violation", False)
             
-        for aug_idx in range(1, num_augs + 1):
-            aug_sample = augment_sample(original_sample, transform, aug_idx)
-            for col in train_split.column_names:
-                augmented_samples_dict[col].append(aug_sample[col])
+            # Rule 4 is rarer (46 imgs), needs 10x. Rule 3 (109 imgs) needs 4x.
+            num_augs = 10 if rule_4 else 4
+            
+            for aug_idx in range(1, num_augs + 1):
+                # Augment image
+                aug_img = apply_augmentation(pil_img, aug_pipeline)
                 
-            # Save the first 5 generated augmentations (and their originals) for visual inspection
-            if debug_samples_saved < 5:
-                orig_img = original_sample["image"]
-                aug_img = aug_sample["image"]
+                # Yield a new row identical to the old one, but with the new image
+                new_sample = {k: v for k, v in sample.items()}
+                new_sample["image_id"] = f"{new_sample.get('image_id', '')}_aug{aug_idx}"
+                new_sample["image"] = aug_img
+                yield new_sample
                 
-                # Create a side-by-side comparison
-                total_width = orig_img.width + aug_img.width
-                max_height = max(orig_img.height, aug_img.height)
-                
-                comparison = Image.new('RGB', (total_width, max_height))
-                comparison.paste(orig_img, (0, 0))
-                comparison.paste(aug_img, (orig_img.width, 0))
-                
-                rule_name = "Rule4" if has_rule4 else "Rule3"
-                save_path = os.path.join(debug_dir, f"debug_{rule_name}_{debug_samples_saved}.jpg")
-                comparison.save(save_path)
-                debug_samples_saved += 1
-                
-    if debug_samples_saved > 0:
-        logger.info(f"Saved {debug_samples_saved} before/after comparison images to {debug_dir} for you to inspect!")
-                
-    # Create a new dataset from the augmented dict
-    from datasets import Dataset
-    aug_dataset = Dataset.from_dict(augmented_samples_dict)
-    logger.info(f"Generated {len(aug_dataset)} new augmented samples.")
+                # Save first 5 examples for debugging
+                if debug_samples_saved < 5:
+                    comparison = Image.new('RGB', (pil_img.width * 2, pil_img.height))
+                    comparison.paste(pil_img, (0, 0))
+                    comparison.paste(aug_img, (pil_img.width, 0))
+                    rule_name = "Rule4" if rule_4 else "Rule3"
+                    save_path = os.path.join(debug_dir, f"debug_{rule_name}_{debug_samples_saved}.jpg")
+                    comparison.save(save_path)
+                    debug_samples_saved += 1
+                    
+        logger.info(f"Saved 5 before/after comparison images to {debug_dir} for you to inspect!")
+
+    logger.info("Generating dynamic augmentations to balance at ~500 images per rule...")
+    
+    # Using from_generator is RAM-efficient and prevents OOM on HPC login nodes
+    augmented_ds = Dataset.from_generator(generate_augmented_samples)
+    logger.info(f"Generated {len(augmented_ds)} new augmented samples.")
     
     # 3. Concatenate and shuffle
-    combined_train = concatenate_datasets([train_split, aug_dataset])
+    combined_train = concatenate_datasets([train_split, augmented_ds])
     combined_train = combined_train.shuffle(seed=42)
     logger.info(f"New combined train split size: {len(combined_train)}")
     
