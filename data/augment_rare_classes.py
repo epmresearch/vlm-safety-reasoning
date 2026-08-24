@@ -111,46 +111,39 @@ def main():
     debug_dir = os.path.join(os.getcwd(), "debug_augmentations")
     ensure_dir(debug_dir)
     
-    # We will use a generator to yield samples one by one instead of holding 700 images in memory
-    def generate_augmented_samples():
-        debug_samples_saved = 0
-        for i in tqdm(rare_indices, desc="Augmenting"):
-            sample = train_split[i]
-            pil_img = sample["image"]
-            rule_3 = sample.get("rule_3_violation", False)
-            rule_4 = sample.get("rule_4_violation", False)
-            
-            # Rule 4 is rarer (46 imgs), needs 10x. Rule 3 (109 imgs) needs 4x.
-            num_augs = 10 if rule_4 else 4
-            
-            for aug_idx in range(1, num_augs + 1):
-                # Augment image using the existing augment_sample function
-                new_sample = augment_sample(sample, aug_pipeline, aug_idx)
-                aug_img = new_sample["image"]
-                yield new_sample
-                
-                # Save first 5 examples for debugging
-                if debug_samples_saved < 5:
-                    comparison = Image.new('RGB', (pil_img.width * 2, pil_img.height))
-                    comparison.paste(pil_img, (0, 0))
-                    comparison.paste(aug_img, (pil_img.width, 0))
-                    rule_name = "Rule4" if rule_4 else "Rule3"
-                    save_path = os.path.join(debug_dir, f"debug_{rule_name}_{debug_samples_saved}.jpg")
-                    comparison.save(save_path)
-                    debug_samples_saved += 1
-                    
-        logger.info(f"Saved 5 before/after comparison images to {debug_dir} for you to inspect!")
-
-    logger.info("Generating dynamic augmentations to balance at ~500 images per rule...")
+    augmented_samples = []
+    debug_samples_saved = 0
     
-    # Using from_generator is RAM-efficient and prevents OOM on HPC login nodes
-    # We MUST pass features=train_split.features to prevent it from inferring types by buffering
-    # We MUST pass writer_batch_size=20 so it flushes to disk frequently and doesn't hoard RAM
-    augmented_ds = Dataset.from_generator(
-        generate_augmented_samples, 
-        features=train_split.features,
-        writer_batch_size=20
-    )
+    for i in tqdm(rare_indices, desc="Augmenting"):
+        sample = train_split[i]
+        pil_img = sample["image"]
+        rule_3 = sample.get("rule_3_violation", False)
+        rule_4 = sample.get("rule_4_violation", False)
+        
+        # Rule 4 is rarer (46 imgs), needs 10x. Rule 3 (109 imgs) needs 4x.
+        num_augs = 10 if rule_4 else 4
+        
+        for aug_idx in range(1, num_augs + 1):
+            # Augment image using the existing augment_sample function
+            new_sample = augment_sample(sample, aug_pipeline, aug_idx)
+            aug_img = new_sample["image"]
+            augmented_samples.append(new_sample)
+            
+            # Save first 5 examples for debugging
+            if debug_samples_saved < 5:
+                comparison = Image.new('RGB', (pil_img.width * 2, pil_img.height))
+                comparison.paste(pil_img, (0, 0))
+                comparison.paste(aug_img, (pil_img.width, 0))
+                rule_name = "Rule4" if rule_4 else "Rule3"
+                save_path = os.path.join(debug_dir, f"debug_{rule_name}_{debug_samples_saved}.jpg")
+                comparison.save(save_path)
+                debug_samples_saved += 1
+                
+    logger.info(f"Saved 5 before/after comparison images to {debug_dir} for you to inspect!")
+
+    logger.info("Converting generated samples to HuggingFace Dataset...")
+    
+    augmented_ds = Dataset.from_list(augmented_samples)
     logger.info(f"Generated {len(augmented_ds)} new augmented samples.")
     
     # 3. Concatenate and shuffle
