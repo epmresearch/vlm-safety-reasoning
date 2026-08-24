@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=vlm-augment
-#SBATCH --partition=cpu
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
