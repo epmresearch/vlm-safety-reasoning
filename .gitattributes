@@ -1,0 +1,4 @@
+# Enforce Unix line endings (LF) to prevent SLURM DOS errors
+*.sh text eol=lf
+*.py text eol=lf
+*.yaml text eol=lf
