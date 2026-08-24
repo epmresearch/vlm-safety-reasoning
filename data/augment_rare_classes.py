@@ -22,6 +22,13 @@ except ImportError:
 
 logger = get_logger(__name__)
 
+# HPC login nodes often have tiny /tmp drives or strict quotas on ~/.cache
+# We must force HuggingFace to use a safe scratch directory to prevent "Killed" disk-quota OOMs
+if os.path.exists(os.path.expanduser("~/scratch")):
+    safe_cache = os.path.expanduser("~/scratch/hf_datasets_cache")
+    os.makedirs(safe_cache, exist_ok=True)
+    os.environ["HF_DATASETS_CACHE"] = safe_cache
+
 # Define the robust pixel-level augmentation pipeline
 def get_pixel_augmentation_pipeline():
     return A.Compose([
@@ -137,7 +144,13 @@ def main():
     logger.info("Generating dynamic augmentations to balance at ~500 images per rule...")
     
     # Using from_generator is RAM-efficient and prevents OOM on HPC login nodes
-    augmented_ds = Dataset.from_generator(generate_augmented_samples)
+    # We MUST pass features=train_split.features to prevent it from inferring types by buffering
+    # We MUST pass writer_batch_size=20 so it flushes to disk frequently and doesn't hoard RAM
+    augmented_ds = Dataset.from_generator(
+        generate_augmented_samples, 
+        features=train_split.features,
+        writer_batch_size=20
+    )
     logger.info(f"Generated {len(augmented_ds)} new augmented samples.")
     
     # 3. Concatenate and shuffle
@@ -152,7 +165,8 @@ def main():
     
     ds["train"] = combined_train
     logger.info(f"Saving fully augmented dataset to {output_dir}")
-    ds.save_to_disk(str(output_dir))
+    # Use max_shard_size="100MB" to prevent memory spikes when saving Arrow files
+    ds.save_to_disk(str(output_dir), max_shard_size="100MB")
     logger.info("Success! Run your data processing script again, but point it to this augmented folder.")
 
 if __name__ == "__main__":
