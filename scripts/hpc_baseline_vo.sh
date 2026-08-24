@@ -57,7 +57,7 @@ python -m experiments.run_inference \
     --batch_size 32 \
     --task violations_only
 
-PREDS_DIR="$HPC_DRIVE_ROOT/results/inference/vo-baseline-${TIER}-v2"
+PREDS_DIR="$HPC_DRIVE_ROOT/results/inference/vo-baseline-${TIER}-v3"
 PREDS_FILE="$PREDS_DIR/predictions.jsonl"
 
 echo "======================================================================"

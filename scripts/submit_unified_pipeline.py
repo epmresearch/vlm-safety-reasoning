@@ -68,7 +68,7 @@ def main():
     
     time_config = {
         "baseline": "12:00:00",
-        "sft": "12:00:00",
+        "sft": "24:00:00",
         "grpo": "24:00:00"
     }
     
