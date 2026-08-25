@@ -222,6 +222,7 @@ def run_grpo(
         beta=cfg["beta"],
         temperature=0.9,
         top_p=0.95,
+        generation_kwargs={"do_sample": True},
         bf16=cfg.get("bf16", True),
         optim=cfg.get("optim", "adamw_8bit"),
         report_to="wandb",
