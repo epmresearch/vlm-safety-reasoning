@@ -107,6 +107,20 @@ def run_grpo(
         tokenizer.pad_token = tokenizer.eos_token
 
     # -----------------------------------------------------------------------
+    # Force stochastic sampling at the model level (TRL ignores do_sample kwarg)
+    # -----------------------------------------------------------------------
+    from transformers import GenerationConfig
+    model.generation_config = GenerationConfig(
+        do_sample=True,
+        temperature=0.9,
+        top_p=0.95,
+        top_k=50,
+        max_new_tokens=task_cfg.get("max_completion_length", cfg.get("max_completion_length", 1024)),
+        pad_token_id=tokenizer.pad_token_id,
+    )
+    logger.info(f"Forced generation_config on model: {model.generation_config}")
+
+    # -----------------------------------------------------------------------
     # Build reward configuration
     # -----------------------------------------------------------------------
     use_native_weights = _check_trl_supports_reward_weights()
@@ -207,7 +221,6 @@ def run_grpo(
         max_grad_norm=cfg.get("max_grad_norm", 1.0),
         beta=cfg["beta"],
         temperature=0.9,
-        do_sample=True,
         top_p=0.95,
         bf16=cfg.get("bf16", True),
         optim=cfg.get("optim", "adamw_8bit"),
