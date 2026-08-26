@@ -5,7 +5,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=80G                         # needs RAM for dataset + sentence transformers
-#SBATCH --gres=gpu:h200:1                 # ← Requesting 1x H200 GPU
+#SBATCH --gres=gpu:h100:1                 # ← Requesting 1x H100 GPU
 #SBATCH --time=00:30:00                   # 30 mins is plenty for 10 samples
 #SBATCH --output=/home/%u/vlm-finetuning-project1/logs/test_eval_grpo_%j.out
 #SBATCH --error=/home/%u/vlm-finetuning-project1/logs/test_eval_grpo_%j.err
