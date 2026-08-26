@@ -51,8 +51,8 @@ fi
 HPC_DRIVE_ROOT="/home/$USER/vlm-finetuning-project1"
 export VLM_DATA_ROOT="$HPC_DRIVE_ROOT"
 
-VARIANT="vo-grpo-${TIER}-v3"
-SFT_VARIANT="vo-sft-${TIER}-v3"
+VARIANT="vo-grpo-${TIER}-v4"
+SFT_VARIANT="vo-sft-${TIER}-v4"
 
 echo "======================================================================"
 echo "[STEP 1/4] Running GRPO on ${TIER} model (Violations Only Task)"
@@ -95,7 +95,7 @@ python -m experiments.run_evaluation \
     --output_dir "$EVAL_OUT_DIR" \
     --skip_spice \
     --wandb_project "vlm-safety-evals" \
-    --wandb_run_name "qwen3-${TIER}-vo-grpo-v3-repaired" \
+    --wandb_run_name "qwen3-${TIER}-vo-grpo-v4-repaired" \
     --task violations_only
 
 echo "======================================================================"

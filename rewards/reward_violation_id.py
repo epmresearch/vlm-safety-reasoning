@@ -24,10 +24,10 @@ def compute_reward(completion: str, ground_truth: dict, **kwargs) -> float:
             gt_rules.add(r)
 
     # Both empty = correctly identified as safe
-    # We return 0.10 instead of 1.0 to mathematically balance the Expected Value
+    # We return 0.15 instead of 1.0 to mathematically balance the Expected Value
     # against the 91% class imbalance, preventing the "Predict Safe Always" local minimum.
     if not pred_rules and not gt_rules:
-        return 0.10
+        return 0.15
 
     tp = len(pred_rules & gt_rules)
     fp = len(pred_rules - gt_rules)

@@ -23,7 +23,7 @@ def compute_reward(completion: str, ground_truth: dict, **kwargs) -> float:
         gt_boxes = clean_boxes(normalize_boxes(ground_truth.get(cls, [])))
 
         if not gt_boxes and not pred_boxes:
-            class_scores.append(0.10)  # Balanced True Negative (prevents empty array hacking)
+            class_scores.append(0.15)  # Balanced True Negative (prevents empty array hacking)
         elif not gt_boxes and pred_boxes:
             class_scores.append(0.0)  # False Positive: hallucinated
         elif gt_boxes and not pred_boxes:

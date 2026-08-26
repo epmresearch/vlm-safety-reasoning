@@ -53,11 +53,11 @@ echo "======================================================================"
 # We use a dummy variant name to save the results in a unique folder
 python -m experiments.run_inference \
     --tier ${TIER} \
-    --run_name vo-baseline-${TIER}-v3 \
+    --run_name vo-baseline-${TIER}-v4 \
     --batch_size 32 \
     --task violations_only
 
-PREDS_DIR="$HPC_DRIVE_ROOT/results/inference/vo-baseline-${TIER}-v3"
+PREDS_DIR="$HPC_DRIVE_ROOT/results/inference/vo-baseline-${TIER}-v4"
 PREDS_FILE="$PREDS_DIR/predictions.jsonl"
 
 echo "======================================================================"
@@ -79,7 +79,7 @@ python -m experiments.run_evaluation \
     --output_dir "$EVAL_OUT_DIR" \
     --skip_spice \
     --wandb_project "vlm-safety-evals" \
-    --wandb_run_name "qwen3-${TIER}-vo-baseline-v3-repaired" \
+    --wandb_run_name "qwen3-${TIER}-vo-baseline-v4-repaired" \
     --task violations_only
 
 echo "======================================================================"

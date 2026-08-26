@@ -42,10 +42,11 @@ def get_pixel_augmentation_pipeline():
     ])
 
 def is_rare_class(sample: dict) -> bool:
-    """Returns True if the sample contains Rule 3 or Rule 4 violations."""
+    """Returns True if the sample contains Rule 2, 3, or 4 violations."""
+    has_rule2 = sample.get("rule_2_violation") is not None
     has_rule3 = sample.get("rule_3_violation") is not None
     has_rule4 = sample.get("rule_4_violation") is not None
-    return has_rule3 or has_rule4
+    return has_rule2 or has_rule3 or has_rule4
 
 def augment_sample(sample: dict, transform: A.Compose, aug_index: int) -> dict:
     """Applies augmentation to a single dataset sample, returning a new dictionary."""
@@ -117,11 +118,21 @@ def main():
     for i in tqdm(rare_indices, desc="Augmenting"):
         sample = train_split[i]
         pil_img = sample["image"]
-        rule_3 = sample.get("rule_3_violation", False)
-        rule_4 = sample.get("rule_4_violation", False)
+        has_r2 = sample.get("rule_2_violation") is not None
+        has_r3 = sample.get("rule_3_violation") is not None
+        has_r4 = sample.get("rule_4_violation") is not None
         
-        # Rule 4 is rarer (46 imgs), needs 10x. Rule 3 (109 imgs) needs 4x.
-        num_augs = 10 if rule_4 else 4
+        if has_r4:
+            num_augs = 16
+            rule_name = "Rule4"
+        elif has_r2:
+            num_augs = 12
+            rule_name = "Rule2"
+        elif has_r3:
+            num_augs = 6
+            rule_name = "Rule3"
+        else:
+            continue
         
         for aug_idx in range(1, num_augs + 1):
             # Augment image using the existing augment_sample function
@@ -134,7 +145,6 @@ def main():
                 comparison = Image.new('RGB', (pil_img.width * 2, pil_img.height))
                 comparison.paste(pil_img, (0, 0))
                 comparison.paste(aug_img, (pil_img.width, 0))
-                rule_name = "Rule4" if rule_4 else "Rule3"
                 save_path = os.path.join(debug_dir, f"debug_{rule_name}_{debug_samples_saved}.jpg")
                 comparison.save(save_path)
                 debug_samples_saved += 1

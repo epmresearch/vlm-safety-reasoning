@@ -44,7 +44,7 @@ def compute_reward(completions: List[str], ground_truths: List[dict], **kwargs) 
         if not common_rules:
             # If True Negative (safe image, correctly predicted safe), give baseline anti-hack reward
             if not pred_rules and not gt_rules:
-                rewards[i] = 0.10
+                rewards[i] = 0.15
             continue
             
         for r in common_rules:

@@ -137,7 +137,9 @@ def run_grpo(
     # -----------------------------------------------------------------------
     logger.info("Building GRPO prompt dataset...")
     from data.loader import load_processed_dataset
+    from datasets import concatenate_datasets
     raw_dataset = load_processed_dataset()
+    train_split = concatenate_datasets([raw_dataset["train"], raw_dataset["val"]])
 
     # Apply oversampling to match SFT strategy
     try:
@@ -145,8 +147,8 @@ def run_grpo(
         train_split = raw_dataset["train"]
         oversampled_indices, oversample_manifest = build_oversampled_indices(
             train_split,
-            rule24_multiplier=sft_cfg.get("oversample_rule24_multiplier", 1),
-            rule3_multiplier=sft_cfg.get("oversample_rule3_multiplier", 1),
+            rule24_multiplier=cfg.get("oversample_rule24_multiplier", 1),
+            rule3_multiplier=cfg.get("oversample_rule3_multiplier", 1),
         )
         train_split = train_split.select(oversampled_indices)
         logger.info(f"Oversample manifest: {oversample_manifest}")
@@ -155,8 +157,7 @@ def run_grpo(
             f"{len(train_split)} samples"
         )
     except ImportError:
-        train_split = raw_dataset["train"]
-        logger.warning("Oversampling module not available, using raw train split")
+        logger.warning("Oversampling module not available, using raw train+val split")
 
     from data.preprocessor import build_grpo_dataset_for_task
     train_data = build_grpo_dataset_for_task(train_split, task=task, max_samples=max_samples)

@@ -1,4 +1,6 @@
 # GRPO/GSPO training hyperparameters
+oversample_rule24_multiplier: 1
+oversample_rule3_multiplier: 1
 num_generations: 8
 max_prompt_length: 2048        # was 1024 — verified max is 1519 tokens (see unified.yaml comment)
 max_completion_length: 1000

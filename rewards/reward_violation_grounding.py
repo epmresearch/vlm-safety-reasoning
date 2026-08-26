@@ -32,7 +32,7 @@ def compute_reward(completion: str, ground_truth: dict, **kwargs) -> float:
     if not common_rules:
         # If True Negative (safe image, correctly predicted safe), give baseline anti-hack reward
         if not pred_rules and not gt_rules:
-            return 0.10
+            return 0.15
         return 0.0  # FP or FN (no TPs to score)
 
     ious = []
