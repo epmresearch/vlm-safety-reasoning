@@ -12,7 +12,7 @@ sns.set_theme(style="whitegrid", context="paper", font_scale=1.2)
 plt.rcParams['font.family'] = 'sans-serif'
 
 RESULTS_DIR = Path("evaluation_results")
-PLOTS_DIR = RESULTS_DIR / "plots_vo"
+PLOTS_DIR = RESULTS_DIR / "plots_vo_v4"
 PLOTS_DIR.mkdir(parents=True, exist_ok=True)
 
 TIERS = ["2b", "4b", "8b"]
@@ -25,7 +25,8 @@ def load_all_metrics():
     
     for tier in TIERS:
         for phase in PHASES:
-            folder_name = f"vo_{phase}_{tier}"
+            # Matches exactly how HPC creates the folders: vo-baseline-2b-v4
+            folder_name = f"vo-{phase}-{tier}-v4"
             folder = RESULTS_DIR / folder_name
             folder.mkdir(parents=True, exist_ok=True) # Create empty folder if user hasn't yet
             
@@ -144,7 +145,143 @@ def plot_radar_charts(data):
         plt.legend(loc='upper right', bbox_to_anchor=(0.1, 0.1))
         plt.title(f"Safety Radar Summary - {tier.upper()} Model")
         plt.savefig(PLOTS_DIR / f"07_radar_summary_{tier}.png", dpi=300, bbox_inches='tight')
-        plt.close()
+        plt.close('all')
+
+def plot_iou_conditioned_violations(data):
+    rows = []
+    has_data = False
+    for tier in TIERS:
+        for phase in PHASES:
+            for rule in [1, 2, "macro"]:
+                key = f"violation_identification_iou_conditioned_f1_rule_{rule}" if rule != "macro" else "violation_identification_iou_conditioned_f1_macro"
+                val = data[tier][phase].get(key, 0)
+                if val > 0: has_data = True
+                rows.append({"Model Size": tier.upper(), "Phase": phase.upper(), "Rule": f"Rule {rule}" if rule != "macro" else "Macro F1", "F1 Score": val})
+                
+    if not has_data: return
+    df = pd.DataFrame(rows)
+    g = sns.catplot(data=df, x="Rule", y="F1 Score", hue="Phase", col="Model Size", kind="bar", palette="dark", height=5, aspect=1)
+    g.set(ylim=(0, 1.0))
+    plt.savefig(PLOTS_DIR / "08_strict_iou_conditioned_f1.png", dpi=300, bbox_inches='tight')
+    plt.close('all')
+
+def plot_violation_precision_recall(data):
+    rows = []
+    has_data = False
+    for tier in TIERS:
+        for phase in PHASES:
+            metrics = ["Precision (Macro)", "Recall (Macro)", "IoU Cond. Precision", "IoU Cond. Recall"]
+            keys = ["violation_identification_precision_macro", "violation_identification_recall_macro", "violation_identification_iou_conditioned_precision_macro", "violation_identification_iou_conditioned_recall_macro"]
+            for metric, key in zip(metrics, keys):
+                val = data[tier][phase].get(key, 0)
+                if val > 0: has_data = True
+                rows.append({"Model Size": tier.upper(), "Phase": phase.upper(), "Metric": metric, "Score": val})
+                
+    if not has_data: return
+    df = pd.DataFrame(rows)
+    g = sns.catplot(data=df, x="Metric", y="Score", hue="Phase", col="Model Size", kind="bar", palette="Set2", height=5, aspect=1.2)
+    g.set(ylim=(0, 1.0))
+    for ax in g.axes.flat:
+        ax.tick_params(axis='x', rotation=45)
+    plt.savefig(PLOTS_DIR / "09_precision_vs_recall.png", dpi=300, bbox_inches='tight')
+    plt.close('all')
+
+def plot_per_rule_prf1(data):
+    rows = []
+    has_data = False
+    rules = [1, 2, 3, 4]
+    metrics = ["precision", "recall", "f1"]
+    for tier in TIERS:
+        for phase in PHASES:
+            for rule in rules:
+                for metric in metrics:
+                    key = f"violation_identification_{metric}_rule_{rule}"
+                    val = data[tier][phase].get(key, 0)
+                    if val > 0: has_data = True
+                    rows.append({"Model Size": tier.upper(), "Phase": phase.upper(), "Rule/Metric": f"R{rule} {metric.title()}", "Score": val})
+                    
+    if not has_data: return
+    df = pd.DataFrame(rows)
+    g = sns.catplot(data=df, x="Rule/Metric", y="Score", hue="Phase", row="Model Size", kind="bar", palette="tab10", height=4, aspect=3)
+    g.set(ylim=(0, 1.0))
+    plt.savefig(PLOTS_DIR / "10_per_rule_precision_recall_f1.png", dpi=300, bbox_inches='tight')
+    plt.close('all')
+
+def plot_reasoning_by_rule(data):
+    rows = []
+    has_data = False
+    for tier in TIERS:
+        for phase in PHASES:
+            for rule in [1, 2, "macro"]:
+                key = f"reasoning_text_similarity_bertscore_f1_rule_{rule}" if rule != "macro" else "reasoning_text_similarity_bertscore_f1_macro"
+                val = data[tier][phase].get(key, 0)
+                if val > 0: has_data = True
+                rows.append({"Model Size": tier.upper(), "Phase": phase.upper(), "Rule": f"Rule {rule}" if rule != "macro" else "Macro F1", "BERTScore F1": val})
+                
+    if not has_data: return
+    df = pd.DataFrame(rows)
+    g = sns.catplot(data=df, x="Rule", y="BERTScore F1", hue="Phase", col="Model Size", kind="bar", palette="husl", height=5, aspect=1)
+    g.set(ylim=(0, 1.0))
+    plt.savefig(PLOTS_DIR / "11_reasoning_bertscore_by_rule.png", dpi=300, bbox_inches='tight')
+    plt.close('all')
+
+def plot_full_reasoning_metrics(data):
+    rows = []
+    has_data = False
+    metrics = ["BERT P", "BERT R", "BERT F1", "METEOR", "CIDEr", "CLIP"]
+    keys = ["reasoning_text_similarity_bertscore_precision_macro", "reasoning_text_similarity_bertscore_recall_macro", "reasoning_text_similarity_bertscore_f1_macro", "reasoning_text_similarity_meteor_macro", "reasoning_text_similarity_ciderd_macro", "reasoning_text_similarity_clipscore_macro"]
+    for tier in TIERS:
+        for phase in PHASES:
+            for metric, key in zip(metrics, keys):
+                val = data[tier][phase].get(key, 0)
+                if val > 0: has_data = True
+                rows.append({"Model Size": tier.upper(), "Phase": phase.upper(), "Metric": metric, "Score": val})
+                
+    if not has_data: return
+    df = pd.DataFrame(rows)
+    g = sns.catplot(data=df, x="Metric", y="Score", hue="Phase", col="Model Size", kind="bar", palette="magma", height=5, aspect=1.2)
+    g.set(ylim=(0, 1.0))
+    for ax in g.axes.flat:
+        ax.tick_params(axis='x', rotation=45)
+    plt.savefig(PLOTS_DIR / "12_full_reasoning_linguistics.png", dpi=300, bbox_inches='tight')
+    plt.close('all')
+
+def plot_master_heatmap(data):
+    columns = [f"{tier.upper()} {phase.upper()}" for tier in TIERS for phase in PHASES]
+    selected_keys = [
+        "structural_schema_adherence_rate",
+        "violation_identification_f1_macro",
+        "violation_identification_recall_macro",
+        "violation_identification_precision_macro",
+        "violation_identification_iou_conditioned_f1_macro",
+        "violation_grounding_mask_iou_macro_tn0",
+        "reasoning_text_similarity_bertscore_f1_macro",
+        "reasoning_text_similarity_meteor_macro",
+        "reasoning_text_similarity_ciderd_macro"
+    ]
+    
+    has_data = False
+    for k in selected_keys:
+        if any(data[tier][phase].get(k, 0) > 0 for tier in TIERS for phase in PHASES):
+            has_data = True
+            break
+            
+    if not has_data: return
+    
+    matrix = []
+    for k in selected_keys:
+        row = [data[tier][phase].get(k, 0) for tier in TIERS for phase in PHASES]
+        matrix.append(row)
+        
+    df = pd.DataFrame(matrix, columns=columns, index=[k.replace('_', ' ').title() for k in selected_keys])
+    
+    plt.figure(figsize=(16, 8))
+    sns.heatmap(df, annot=True, cmap="YlGnBu", fmt=".3f", vmin=0, vmax=1)
+    plt.title("Master Metrics Heatmap Across All Tiers & Phases")
+    plt.tight_layout()
+    plt.savefig(PLOTS_DIR / "13_master_metrics_heatmap.png", dpi=300, bbox_inches='tight')
+    plt.close('all')
+
 
 def main():
     print("Initializing Violations Only 3x3 Evaluation Suite...")
@@ -181,7 +318,25 @@ def main():
     # 7. Radar Charts
     plot_radar_charts(data)
     
-    print(f"\nAll plots saved to: {PLOTS_DIR.absolute()}")
+    # 8. Strict IoU Conditioned F1
+    plot_iou_conditioned_violations(data)
+    
+    # 9. Precision vs Recall Breakdown
+    plot_violation_precision_recall(data)
+    
+    # 10. Per Rule PRF1
+    plot_per_rule_prf1(data)
+    
+    # 11. Reasoning BERTScore by Rule
+    plot_reasoning_by_rule(data)
+    
+    # 12. Full Reasoning Linguistics (BERT, METEOR, CIDEr)
+    plot_full_reasoning_metrics(data)
+    
+    # 13. Master Heatmap Matrix
+    plot_master_heatmap(data)
+    
+    print(f"\nAll 13 plots saved to: {PLOTS_DIR.absolute()}")
 
 if __name__ == "__main__":
     main()
