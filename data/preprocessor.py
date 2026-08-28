@@ -189,7 +189,7 @@ def to_grpo_prompt(raw: Dict[str, Any], pil_image) -> Dict[str, Any]:
         {
             "role": "user",
             "content": [
-                {"type": "image"},
+                {"type": "image", "image": pil_image},
                 {"type": "text", "text": UNIFIED_INSPECTION_PROMPT},
             ],
         },
@@ -376,7 +376,7 @@ def to_grpo_prompt_for_task(raw: Dict[str, Any], pil_image, task: str = 'unified
         {
             "role": "user",
             "content": [
-                {"type": "image"},
+                {"type": "image", "image": pil_image},
                 {"type": "text", "text": prompt},
             ],
         },
