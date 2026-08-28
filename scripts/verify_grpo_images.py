@@ -11,10 +11,8 @@ from models.model_loader import get_model_info, load_model_for_training
 
 def main():
     print("Loading a single sample from the dataset...")
-    # Load dataset from local data/processed folder
-    from datasets import load_from_disk
-    processed_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'data', 'processed'))
-    raw_dataset = load_from_disk(processed_path)
+    # This uses your .env file, which is correct for MobaXterm!
+    raw_dataset = load_processed_dataset()
     sample = raw_dataset["train"][0]
     pil_image = sample["image"]
     
