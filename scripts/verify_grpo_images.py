@@ -11,7 +11,7 @@ from models.model_loader import get_model_info, load_model_for_training
 
 def main():
     print("Loading a single sample from the dataset...")
-    # This uses your .env file, which is correct for MobaXterm!
+    # This is exactly how SFT and GRPO load data
     raw_dataset = load_processed_dataset()
     sample = raw_dataset["train"][0]
     pil_image = sample["image"]
