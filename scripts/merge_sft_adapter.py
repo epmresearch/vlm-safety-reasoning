@@ -44,7 +44,15 @@ def main():
     # Now save it as a standard HuggingFace model
     model.save_pretrained(args.output_path)
     tokenizer.save_pretrained(args.output_path)
-    
+
+    # Unsloth/Qwen3-VL quirk: tokenizer.save_pretrained() doesn't always write
+    # preprocessor_config.json, which leaves the reloaded processor with no
+    # image_processor (apply_pixel_bounds then has nothing to cap, and Unsloth's
+    # own VLM processor fallback can return None). Same backfill SFT checkpoints
+    # already use via SaveBestModelCallback.
+    from core.callbacks import _ensure_preprocessor_config
+    _ensure_preprocessor_config(args.output_path, hf_path)
+
     print(f">>> SUCCESS! Merged model saved to: {args.output_path}")
     print(f"You can now point your GRPO job to use this merged model as its base!")
 

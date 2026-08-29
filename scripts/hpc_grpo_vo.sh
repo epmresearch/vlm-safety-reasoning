@@ -84,7 +84,8 @@ python -m experiments.run_inference \
     --variant ${GRPO_VARIANT} \
     --checkpoint final \
     --batch_size 32 \
-    --task violations_only
+    --task violations_only \
+    --base_model_override "${MERGED_BASE}"
 
 PREDS_DIR="$HPC_DRIVE_ROOT/results/inference/${GRPO_VARIANT}_final"
 PREDS_FILE="$PREDS_DIR/predictions.jsonl"

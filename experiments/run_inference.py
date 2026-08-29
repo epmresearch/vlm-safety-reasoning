@@ -64,36 +64,43 @@ def main():
         help="Override generation repetition_penalty (default: 1.0, from configs/tasks/unified.yaml)"
     )
     parser.add_argument("--task", default="unified", help="Task name: 'unified' or 'violations_only'")
+    parser.add_argument(
+        "--base_model_override", default=None,
+        help="Explicit path to the base model to load (e.g. a merged SFT model, required for GRPO "
+             "checkpoints since their adapter was trained on top of that merged model, not the raw "
+             "HF base). Always preferred over the naming-convention auto-detect below."
+    )
     args = parser.parse_args()
 
     # --- Resolve run identity + paths ---
-    base_model_override = None
-    
+    base_model_override = args.base_model_override
+
     if args.variant:
         run_name = args.run_name or f"{args.variant}_{args.checkpoint}"
         adapter_path = str(
             get_drive_path("checkpoints", f"qwen3vl-{args.tier}", args.variant, args.checkpoint)
         )
-        
+
         # CRITICAL FIX for GRPO:
-        # If we are doing inference on a GRPO variant, its adapter was trained on top of
-        # the MERGED SFT model, NOT the raw huggingface base model!
-        # Therefore we MUST load the merged SFT model as the base for this inference run.
-        if "grpo" in args.variant.lower():
-            # e.g., vo-grpo-2b-v4 -> merged-sft-2b-v4
-            # We assume standard naming convention here, extracting the task prefix and tier.
-            # Example: variant="vo-grpo-2b-v4" -> prefix="vo", suffix="v4", tier="2b" -> merged-sft-2b-v4
-            # A safer generic fallback is just directly building the path:
+        # A GRPO adapter was trained on top of the MERGED SFT model, NOT the raw HF base model.
+        # If --base_model_override wasn't passed explicitly, fall back to a naming-convention
+        # guess — but if that guess also can't find a merged model, abort rather than silently
+        # evaluating Base+GRPO (which drops the entire SFT step from the result).
+        if base_model_override is None and "grpo" in args.variant.lower():
+            # e.g., vo-grpo-2b-v4 -> merged-sft-2b-v4 (assumes the standard naming convention)
             merged_base = get_drive_path("checkpoints", f"qwen3vl-{args.tier}", f"merged-sft-{args.tier}-v4")
-            
-            # Verify the merged model actually exists
+
             import os
             if os.path.exists(os.path.join(merged_base, "config.json")):
                 base_model_override = str(merged_base)
-                print(f"Detected GRPO inference! Setting base model to: {base_model_override}")
+                print(f"Detected GRPO inference! Auto-detected merged base model: {base_model_override}")
             else:
-                print(f"WARNING: Detected GRPO inference but no merged model found at {merged_base}!")
-                print("Inference will use raw base model, which means you are evaluating Base + GRPO, entirely missing the SFT step!")
+                raise SystemExit(
+                    f"Refusing to run inference: variant '{args.variant}' looks like a GRPO checkpoint, "
+                    f"but no --base_model_override was passed and no merged model was found at "
+                    f"{merged_base}. Running against the raw base model would silently evaluate "
+                    f"Base+GRPO instead of SFT+GRPO. Pass --base_model_override explicitly."
+                )
     else:
         run_name = args.run_name or "baseline"
         adapter_path = None
@@ -130,6 +137,7 @@ def main():
         "variant": args.variant,
         "checkpoint": args.checkpoint if args.variant else None,
         "adapter_path": adapter_path,
+        "base_model_override": base_model_override,
         "batch_size": args.batch_size,
         "max_samples": args.max_samples,
         "max_new_tokens": max_new_tokens,
