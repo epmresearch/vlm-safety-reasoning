@@ -54,6 +54,7 @@ def run_grpo(
     variant_name: str = "grpo_v1",
     max_samples: Optional[int] = None,
     adapter_path: Optional[str] = None,
+    base_model_override: Optional[str] = None,
 ) -> str:
     """Run GRPO training for the unified safety inspection task.
 
@@ -64,6 +65,10 @@ def run_grpo(
         max_samples: Optional cap on dataset size (for debugging).
         adapter_path: Optional explicit path to the SFT adapter to load. 
                       Overrides the default in the model registry.
+        base_model_override: If set, loads THIS local path as the base model
+                             instead of downloading from HuggingFace. Use this
+                             with a merged SFT model so that TRL's KL reference
+                             correctly points to the SFT policy, not the raw base.
 
     Returns:
         Path to the saved checkpoint directory.
@@ -72,7 +77,12 @@ def run_grpo(
     sft_cfg = load_config(task=task, training_kind="sft")
     task_cfg = load_task_config(task)
     entry = get_model_info(model_id)
-    hf_path = entry["hf_path"]
+    
+    # Use merged SFT model path if provided, otherwise use HuggingFace model path
+    hf_path = base_model_override if base_model_override else entry["hf_path"]
+    if base_model_override:
+        logger.info(f"Using MERGED SFT base model from disk: {base_model_override}")
+        logger.info("TRL reference model will correctly point to SFT policy (not raw base)")
     
     # Use the explicitly provided adapter_path if available, otherwise fallback to registry
     lora_path = adapter_path if adapter_path is not None else entry.get("lora_path")

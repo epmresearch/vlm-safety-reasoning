@@ -53,15 +53,28 @@ export VLM_DATA_ROOT="$HPC_DRIVE_ROOT"
 
 VARIANT="vo-grpo-${TIER}-v4"
 SFT_VARIANT="vo-sft-${TIER}-v4"
+MERGED_BASE="$HPC_DRIVE_ROOT/checkpoints/qwen3vl-${TIER}/merged-sft-${TIER}-v4"
 
 echo "======================================================================"
 echo "[STEP 1/4] Running GRPO on ${TIER} model (Violations Only Task)"
 echo "======================================================================"
-python -m experiments.run_grpo \
-    --tier ${TIER} \
-    --variant ${VARIANT} \
-    --sft_variant ${SFT_VARIANT} \
-    --task violations_only
+
+# The merged model MUST exist — it provides the correct KL reference model.
+# If it's missing, fail loudly rather than silently training with the wrong reference.
+if [ -d "${MERGED_BASE}" ] && [ -f "${MERGED_BASE}/config.json" ]; then
+    echo "Found merged SFT base model at: ${MERGED_BASE}"
+    echo "KL reference will correctly point to SFT policy."
+    python -m experiments.run_grpo \
+        --tier ${TIER} \
+        --variant ${VARIANT} \
+        --task violations_only \
+        --base_model_override "${MERGED_BASE}"
+else
+    echo "ERROR: Merged model not found at ${MERGED_BASE}!"
+    echo "Run hpc_merge_sft_vo.sh first, or check that the merge job completed successfully."
+    echo "Refusing to start GRPO with wrong KL reference model — aborting."
+    exit 1
+fi
 
 echo "======================================================================"
 echo "[STEP 2/4] Running Inference on Final GRPO Checkpoint"

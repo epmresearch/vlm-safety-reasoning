@@ -27,6 +27,7 @@ def main():
     parser.add_argument("--max_samples", type=int, default=None, help="Cap dataset size for debugging")
     parser.add_argument("--sft_variant", default="unified-sft-v4", help="SFT variant name to load as starting adapter")
     parser.add_argument("--adapter_path", default=None, help="Explicit full path to adapter (overrides sft_variant)")
+    parser.add_argument("--base_model_override", default=None, help="If set, loads THIS path as the base model instead of the HF model (use with merged SFT model for correct KL reference)")
     parser.add_argument("--task", default="unified", help="Task name: 'unified' or 'violations_only'")
     args = parser.parse_args()
 
@@ -38,8 +39,12 @@ def main():
 
     logger.info(f"Starting GRPO run for tier: {args.tier}, variant: {args.variant}, sft_variant: {args.sft_variant}")
 
-    # Build the path to the best SFT adapter for this tier if explicit path is not provided
-    if args.adapter_path:
+    # If a merged base model is provided, we load that as the base with NO adapter
+    # (the merged model IS the SFT model — TRL's reference will correctly point to SFT)
+    if args.base_model_override:
+        adapter_path = None  # Fresh LoRA on top of merged SFT model
+        logger.info(f"Using MERGED base model: {args.base_model_override} (adapter_path=None for correct KL reference)")
+    elif args.adapter_path:
         adapter_path = args.adapter_path
         logger.info(f"Using explicitly specified adapter path: {adapter_path}")
     else:
@@ -48,11 +53,12 @@ def main():
 
     # Run the GRPO training
     checkpoint_dir = run_grpo(
-        task=args.task,  # The task config name used for training
+        task=args.task,
         model_id=args.tier,
         variant_name=args.variant,
         max_samples=args.max_samples,
         adapter_path=adapter_path,
+        base_model_override=args.base_model_override,
     )
 
     logger.info(f"GRPO run complete. Final checkpoint saved at {checkpoint_dir}")

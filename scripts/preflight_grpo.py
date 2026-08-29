@@ -63,30 +63,115 @@ def run_preflight(task="violations_only", model_id="2b"):
     batch = next(iter(dl))
     
     print("\n================ PREFLIGHT RESULTS ================")
-    print("Batch keys and tensor shapes:")
-    for k, v in batch.items():
-        shape = v.shape if hasattr(v, 'shape') else type(v)
-        print(f"  {k}: {shape}")
+    print(f"Batch type: {type(batch)}")
+    
+    # TRL GRPO can return either a dict (collated tensors) or a list (raw samples)
+    if isinstance(batch, dict):
+        print("Batch keys and tensor shapes:")
+        for k, v in batch.items():
+            shape = v.shape if hasattr(v, 'shape') else type(v)
+            print(f"  {k}: {shape}")
+            
+        print("\n--- SANITY CHECKS ---")
+        has_pixels = "pixel_values" in batch or "pixel_values_2d" in batch or any("pixel" in k for k in batch.keys())
+        if has_pixels:
+            print("✅ SUCCESS: Image tensors (pixel_values) are in the PyTorch batch!")
+        else:
+            print("❌ FAIL: No pixel_values in batch — images are NOT reaching the model!")
+            
+        prompt_key = next((k for k in ["prompt_input_ids", "input_ids"] if k in batch), None)
+        if prompt_key:
+            prompt_len = batch[prompt_key].shape[-1]
+            print(f"Prompt sequence length: {prompt_len} tokens")
+            if prompt_len > 500:
+                print("✅ SUCCESS: Prompt length > 500 — vision tokens are present!")
+            else:
+                print(f"❌ FAIL: Prompt length is only {prompt_len} — no image tokens in prompt!")
+                
+    elif isinstance(batch, list):
+        # TRL multimodal GRPO returns a list of raw sample dicts before collation
+        print(f"Batch is a list of {len(batch)} samples")
+        print(f"First sample keys: {list(batch[0].keys()) if batch else 'empty'}")
         
-    print("\n--- SANITY CHECKS ---")
-    if "pixel_values" in batch or "pixel_values_2d" in batch:
-        print("✅ SUCCESS: Image tensors (pixel_values) are successfully reaching the PyTorch batch!")
-    else:
-        print("❌ FAIL: IMAGES NOT REACHING THE MODEL — ABORT (No pixel_values in batch)")
+        first = batch[0]
         
-    if "prompt_input_ids" in batch: # TRL renames the prompt column
-        prompt_len = batch["prompt_input_ids"].shape[-1]
-    elif "input_ids" in batch:
-        prompt_len = batch["input_ids"].shape[-1]
+        # Check if images survived into the batch
+        print("\n--- SANITY CHECK 1: Data structure ---")
+        has_images = "images" in first and first["images"] is not None and len(first["images"]) > 0
+        if has_images:
+            img = first["images"][0]
+            print(f"✅ Images present in batch! Type: {type(img)}, Size: {getattr(img, 'size', 'N/A')}")
+        else:
+            print("❌ FAIL: 'images' key missing or empty in batch samples!")
+            
+        # Check prompt content for image placeholder
+        prompt = first.get("prompt", [])
+        has_image_token = any(
+            item.get("type") == "image"
+            for msg in prompt
+            for item in (msg.get("content") if isinstance(msg.get("content"), list) else [])
+        )
+        if has_image_token:
+            print("✅ Image placeholder {'type': 'image'} found in prompt messages!")
+        else:
+            print("❌ FAIL: No image placeholder in prompt messages!")
     else:
-        prompt_len = 0
+        print(f"Unknown batch type: {type(batch)}")
+        print(f"Batch: {batch}")
         
-    print(f"Prompt sequence length: {prompt_len} tokens")
-    if prompt_len > 500:
-        print("✅ SUCCESS: Prompt length is > 500, which mathematically proves vision tokens exist!")
-    else:
-        print("❌ FAIL: Prompt length is too short. No image tokens in prompt — ABORT")
     print("===================================================")
+
+    # ------------------------------------------------------------------
+    # STEP 6 — THE DEFINITIVE PROOF: Manually call the processor
+    # This simulates exactly what TRL does internally during rollouts.
+    # If pixel_values appear with >500 tokens, images are injected correctly.
+    # ------------------------------------------------------------------
+    print("\n>>> 6. DEFINITIVE PROOF: Manually calling processor on first sample...")
+    try:
+        from qwen_vl_utils import process_vision_info
+        
+        # Grab the first raw sample from the dataset
+        first_sample = train_data[0]
+        prompt_messages = first_sample["prompt"]
+        pil_images = first_sample["images"]
+        
+        # Step A: Apply chat template (converts messages → text with <|image_pad|> placeholders)
+        text = tokenizer.apply_chat_template(
+            prompt_messages,
+            tokenize=False,
+            add_generation_prompt=True
+        )
+        
+        # Step B: Process vision info (extracts image tensors from messages)
+        image_inputs, video_inputs = process_vision_info(prompt_messages)
+        
+        # Step C: Run the full processor (combines text tokens + image pixel values)
+        inputs = tokenizer(
+            text=[text],
+            images=image_inputs if image_inputs else pil_images,
+            return_tensors="pt",
+            padding=True
+        )
+        
+        print("\n================ DEFINITIVE RESULTS ================")
+        print("Processor output keys:", list(inputs.keys()))
+        
+        token_len = inputs["input_ids"].shape[-1]
+        print(f"Total token length: {token_len}")
+        
+        if "pixel_values" in inputs or "pixel_values_videos" in inputs:
+            pv_key = "pixel_values" if "pixel_values" in inputs else "pixel_values_videos"
+            print(f"pixel_values shape: {inputs[pv_key].shape}")
+            print(f"\n✅✅ CONFIRMED: Images ARE being injected as vision tokens!")
+            print(f"✅✅ Token count {token_len} vs text-only ~233 — difference = {token_len - 233} image tokens")
+        else:
+            print(f"\n❌❌ FAIL: pixel_values NOT generated by processor!")
+            print(f"    Token count {token_len} — if ~233, images are being dropped!")
+        print("====================================================")
+        
+    except Exception as e:
+        print(f"Step 6 error: {e}")
+        import traceback; traceback.print_exc()
 
 if __name__ == "__main__":
     run_preflight()

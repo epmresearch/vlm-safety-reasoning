@@ -97,17 +97,28 @@ def main():
             time=time_config["sft"]
         )
         
-        # 3. GRPO + Evaluation (Depends on SFT finishing successfully)
+        # 3. Merge SFT adapter into base model (depends on SFT finishing)
+        # This creates the correct KL reference model for GRPO.
+        merge_mem = "80G"
+        merge_job = submit_job(
+            script_path="scripts/hpc_merge_sft_vo.sh",
+            args=[tier],
+            dependencies=[sft_job] if sft_job != "UNKNOWN" else None,
+            mem=merge_mem,
+            time="01:30:00"
+        )
+        
+        # 4. GRPO + Evaluation (Depends on Merge finishing successfully)
         grpo_mem = mem_config["grpo"].get(tier, "250G")
         grpo_job = submit_job(
             script_path="scripts/hpc_grpo_vo.sh",
             args=[tier],
-            dependencies=[sft_job] if sft_job != "UNKNOWN" else None,
+            dependencies=[merge_job] if merge_job != "UNKNOWN" else None,
             mem=grpo_mem,
             time=time_config["grpo"]
         )
         
-        print(f"Pipeline scheduled for {tier}: Baseline({baseline_job}), SFT({sft_job}) -> GRPO({grpo_job})")
+        print(f"Pipeline scheduled for {tier}: Baseline({baseline_job}), SFT({sft_job}) -> Merge({merge_job}) -> GRPO({grpo_job})")
 
 if __name__ == "__main__":
     main()
