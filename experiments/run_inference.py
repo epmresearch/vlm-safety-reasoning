@@ -27,7 +27,7 @@ from core.logging import get_logger, attach_file_logger
 from core.run_manifest import save_run_manifest
 from data.loader import load_processed_dataset
 from data.prompt_templates import SYSTEM_PROMPT, UNIFIED_INSPECTION_PROMPT
-from models.model_loader import load_model_for_inference
+from models.model_loader import load_model_for_inference, get_model_info
 from models.inference import run_inference_batched
 
 logger = get_logger(__name__)
@@ -169,6 +169,9 @@ def main():
         adapter_path=adapter_path,
         max_seq_length=args.max_seq_length,
         task=args.task,
+        # base_model_override may be a local merged checkpoint; always load the
+        # tokenizer/processor from the original HF repo (see model_loader for why).
+        tokenizer_name=get_model_info(args.tier)["hf_path"],
     )
     logger.info("Model loaded successfully!")
 

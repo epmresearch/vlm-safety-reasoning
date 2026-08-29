@@ -56,6 +56,7 @@ def load_model_for_training(
     tier: Optional[str] = None,
     sft_cfg: Optional[Dict[str, Any]] = None,
     adapter_path: Optional[str] = None,
+    tokenizer_name: Optional[str] = None,
 ) -> Tuple:
     """Loads a model with LoRA adapters for SFT training.
 
@@ -66,6 +67,13 @@ def load_model_for_training(
         adapter_path: If set, loads an EXISTING trained LoRA adapter from this
             path and continues training it (cooldown/continuation runs), instead
             of initializing a fresh LoRA adapter on top of the base model.
+        tokenizer_name: If set, loads the tokenizer/processor from THIS path instead
+            of model_name. Needed when model_name is a local merged checkpoint —
+            Unsloth's VLM processor auto-detection silently degrades to text-only
+            (no image_processor) when loading a local directory for qwen3_vl, so we
+            load weights from the local merged dir but the processor from the
+            original HF repo (SFT never touches the tokenizer/vocab, so this is
+            byte-identical to what a correct local load would produce anyway).
 
     Returns:
         Tuple of (model, tokenizer, model_info).
@@ -115,6 +123,7 @@ def load_model_for_training(
         logger.info(f"Loading base model + processor from: {model_name}, adapter from: {adapter_path}")
         model, tokenizer = FastVisionModel.from_pretrained(
             model_name,
+            tokenizer_name=tokenizer_name,
             load_in_4bit=load_in_4bit,
             use_gradient_checkpointing=use_gradient_checkpointing,
             max_seq_length=max_seq_length,
@@ -132,6 +141,7 @@ def load_model_for_training(
         logger.info(f"Loading BASE model: {model_name} (4-bit={load_in_4bit})")
         model, tokenizer = FastVisionModel.from_pretrained(
             model_name,
+            tokenizer_name=tokenizer_name,
             load_in_4bit=load_in_4bit,
             use_gradient_checkpointing=use_gradient_checkpointing,
             max_seq_length=max_seq_length,
@@ -177,6 +187,7 @@ def load_model_for_inference(
     image_min_pixels: Optional[int] = None,
     image_max_pixels: Optional[int] = None,
     task: str = "unified",
+    tokenizer_name: Optional[str] = None,
 ) -> Tuple:
     """Loads a model for inference (with optional LoRA adapter).
 
@@ -186,6 +197,9 @@ def load_model_for_inference(
         adapter_path: Path to saved LoRA adapter. If None, loads base model.
         max_seq_length: Maximum sequence length for the model.
         task: Task name for config lookup.
+        tokenizer_name: If set, loads the tokenizer/processor from THIS path instead
+            of model_name — see load_model_for_training for why (needed whenever
+            model_name is a local merged checkpoint, e.g. GRPO inference).
 
     Returns:
         Tuple of (model, tokenizer).
@@ -215,6 +229,7 @@ def load_model_for_inference(
         logger.info(f"Loading base model + processor from: {model_name}, adapter from: {adapter_path}")
         model, tokenizer = FastVisionModel.from_pretrained(
             model_name,
+            tokenizer_name=tokenizer_name,
             load_in_4bit=True,
             max_seq_length=max_seq_length,
         )
@@ -223,6 +238,7 @@ def load_model_for_inference(
     else:
         model, tokenizer = FastVisionModel.from_pretrained(
             model_name,
+            tokenizer_name=tokenizer_name,
             load_in_4bit=True,
             max_seq_length=max_seq_length,
         )

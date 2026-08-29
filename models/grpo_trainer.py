@@ -109,6 +109,10 @@ def run_grpo(
         tier=model_id,
         sft_cfg=sft_cfg,
         adapter_path=lora_path,
+        # hf_path may be a local merged checkpoint (base_model_override); Unsloth's VLM
+        # processor auto-detection degrades to text-only for a local qwen3_vl path, so
+        # always load the tokenizer/processor from the original HF repo instead.
+        tokenizer_name=entry["hf_path"],
     )
 
     # Left padding is required for GRPO batched generation rollouts
