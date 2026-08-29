@@ -67,11 +67,33 @@ def main():
     args = parser.parse_args()
 
     # --- Resolve run identity + paths ---
+    base_model_override = None
+    
     if args.variant:
         run_name = args.run_name or f"{args.variant}_{args.checkpoint}"
         adapter_path = str(
             get_drive_path("checkpoints", f"qwen3vl-{args.tier}", args.variant, args.checkpoint)
         )
+        
+        # CRITICAL FIX for GRPO:
+        # If we are doing inference on a GRPO variant, its adapter was trained on top of
+        # the MERGED SFT model, NOT the raw huggingface base model!
+        # Therefore we MUST load the merged SFT model as the base for this inference run.
+        if "grpo" in args.variant.lower():
+            # e.g., vo-grpo-2b-v4 -> merged-sft-2b-v4
+            # We assume standard naming convention here, extracting the task prefix and tier.
+            # Example: variant="vo-grpo-2b-v4" -> prefix="vo", suffix="v4", tier="2b" -> merged-sft-2b-v4
+            # A safer generic fallback is just directly building the path:
+            merged_base = get_drive_path("checkpoints", f"qwen3vl-{args.tier}", f"merged-sft-{args.tier}-v4")
+            
+            # Verify the merged model actually exists
+            import os
+            if os.path.exists(os.path.join(merged_base, "config.json")):
+                base_model_override = str(merged_base)
+                print(f"Detected GRPO inference! Setting base model to: {base_model_override}")
+            else:
+                print(f"WARNING: Detected GRPO inference but no merged model found at {merged_base}!")
+                print("Inference will use raw base model, which means you are evaluating Base + GRPO, entirely missing the SFT step!")
     else:
         run_name = args.run_name or "baseline"
         adapter_path = None
@@ -130,7 +152,11 @@ def main():
 
     # --- Load model ---
     logger.info(f"Loading model (tier={args.tier}, adapter={adapter_path or 'NONE — baseline'})")
+    if base_model_override:
+        logger.info(f"Using explicitly specified base model: {base_model_override}")
+        
     model, tokenizer, info = load_model_for_inference(
+        model_name=base_model_override, # overrides the default HF model
         tier=args.tier,
         adapter_path=adapter_path,
         max_seq_length=args.max_seq_length,

@@ -121,6 +121,7 @@ def load_model_for_training(
         )
         from peft import PeftModel
         model = PeftModel.from_pretrained(model, adapter_path, is_trainable=True)
+        
         for name, param in model.named_parameters():
             if "lora" in name.lower():
                 param.requires_grad = True

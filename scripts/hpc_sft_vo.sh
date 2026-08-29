@@ -12,8 +12,9 @@
 #SBATCH --mail-user=nabeel.shan@ucalgary.ca
 
 TIER=$1
-if [ -z "$TIER" ]; then
-    echo "Error: TIER argument missing (e.g., 2b, 4b, 8b)"
+VARIANT=$2
+if [ -z "$TIER" ] || [ -z "$VARIANT" ]; then
+    echo "Error: Arguments missing (Usage: hpc_sft_vo.sh <tier> <variant>)"
     exit 1
 fi
 
@@ -50,8 +51,6 @@ fi
 
 HPC_DRIVE_ROOT="/home/$USER/vlm-finetuning-project1"
 export VLM_DATA_ROOT="$HPC_DRIVE_ROOT"
-
-VARIANT="vo-sft-${TIER}-v4"
 
 echo "======================================================================"
 echo "[STEP 1/4] Running SFT on ${TIER} model (Violations Only Task)"
@@ -93,7 +92,7 @@ python -m experiments.run_evaluation \
     --output_dir "$EVAL_OUT_DIR" \
     --skip_spice \
     --wandb_project "vlm-safety-evals" \
-    --wandb_run_name "qwen3-${TIER}-vo-sft-v4-repaired" \
+    --wandb_run_name "qwen3-${TIER}-${VARIANT}-repaired" \
     --task violations_only
 
 echo "======================================================================"

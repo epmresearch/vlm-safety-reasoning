@@ -12,8 +12,10 @@
 #SBATCH --mail-user=nabeel.shan@ucalgary.ca
 
 TIER=$1
-if [ -z "$TIER" ]; then
-    echo "Error: TIER argument missing (e.g., 2b, 4b, 8b)"
+GRPO_VARIANT=$2
+MERGED_VARIANT_NAME=$3
+if [ -z "$TIER" ] || [ -z "$GRPO_VARIANT" ] || [ -z "$MERGED_VARIANT_NAME" ]; then
+    echo "Error: Arguments missing (Usage: hpc_grpo_vo.sh <tier> <grpo_variant> <merged_variant_name>)"
     exit 1
 fi
 
@@ -51,9 +53,7 @@ fi
 HPC_DRIVE_ROOT="/home/$USER/vlm-finetuning-project1"
 export VLM_DATA_ROOT="$HPC_DRIVE_ROOT"
 
-VARIANT="vo-grpo-${TIER}-v4"
-SFT_VARIANT="vo-sft-${TIER}-v4"
-MERGED_BASE="$HPC_DRIVE_ROOT/checkpoints/qwen3vl-${TIER}/merged-sft-${TIER}-v4"
+MERGED_BASE="$HPC_DRIVE_ROOT/checkpoints/qwen3vl-${TIER}/${MERGED_VARIANT_NAME}"
 
 echo "======================================================================"
 echo "[STEP 1/4] Running GRPO on ${TIER} model (Violations Only Task)"
@@ -66,7 +66,7 @@ if [ -d "${MERGED_BASE}" ] && [ -f "${MERGED_BASE}/config.json" ]; then
     echo "KL reference will correctly point to SFT policy."
     python -m experiments.run_grpo \
         --tier ${TIER} \
-        --variant ${VARIANT} \
+        --variant ${GRPO_VARIANT} \
         --task violations_only \
         --base_model_override "${MERGED_BASE}"
 else
@@ -81,12 +81,12 @@ echo "[STEP 2/4] Running Inference on Final GRPO Checkpoint"
 echo "======================================================================"
 python -m experiments.run_inference \
     --tier ${TIER} \
-    --variant ${VARIANT} \
+    --variant ${GRPO_VARIANT} \
     --checkpoint final \
     --batch_size 32 \
     --task violations_only
 
-PREDS_DIR="$HPC_DRIVE_ROOT/results/inference/${VARIANT}_final"
+PREDS_DIR="$HPC_DRIVE_ROOT/results/inference/${GRPO_VARIANT}_final"
 PREDS_FILE="$PREDS_DIR/predictions.jsonl"
 
 echo "======================================================================"
@@ -108,7 +108,7 @@ python -m experiments.run_evaluation \
     --output_dir "$EVAL_OUT_DIR" \
     --skip_spice \
     --wandb_project "vlm-safety-evals" \
-    --wandb_run_name "qwen3-${TIER}-vo-grpo-v4-repaired" \
+    --wandb_run_name "qwen3-${TIER}-${GRPO_VARIANT}-repaired" \
     --task violations_only
 
 echo "======================================================================"

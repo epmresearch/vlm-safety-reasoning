@@ -12,8 +12,10 @@
 #SBATCH --mail-user=nabeel.shan@ucalgary.ca
 
 TIER=$1
-if [ -z "$TIER" ]; then
-    echo "Error: TIER argument missing (e.g., 2b, 4b, 8b)"
+SFT_VARIANT=$2
+MERGED_VARIANT_NAME=$3
+if [ -z "$TIER" ] || [ -z "$SFT_VARIANT" ] || [ -z "$MERGED_VARIANT_NAME" ]; then
+    echo "Error: Arguments missing (Usage: hpc_merge_sft_vo.sh <tier> <sft_variant> <merged_variant_name>)"
     exit 1
 fi
 
@@ -41,9 +43,8 @@ fi
 HPC_DRIVE_ROOT="/home/$USER/vlm-finetuning-project1"
 export VLM_DATA_ROOT="$HPC_DRIVE_ROOT"
 
-SFT_VARIANT="vo-sft-${TIER}-v4"
 ADAPTER_PATH="$HPC_DRIVE_ROOT/checkpoints/qwen3vl-${TIER}/${SFT_VARIANT}/final"
-MERGED_OUTPUT="$HPC_DRIVE_ROOT/checkpoints/qwen3vl-${TIER}/merged-sft-${TIER}-v4"
+MERGED_OUTPUT="$HPC_DRIVE_ROOT/checkpoints/qwen3vl-${TIER}/${MERGED_VARIANT_NAME}"
 
 echo "======================================================================"
 echo "Merging SFT adapter for tier ${TIER}"

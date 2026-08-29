@@ -79,6 +79,11 @@ def main():
         # 0. Pre-download the model on the login node
         preload_model(tier)
         
+        # Dynamic variant naming
+        sft_variant = f"vo-sft-{tier}-v4"
+        merged_variant = f"merged-sft-{tier}-v4"
+        grpo_variant = f"vo-grpo-{tier}-v4"
+        
         # 1. Baseline Evaluation (No dependencies)
         baseline_mem = mem_config["baseline"].get(tier, "150G")
         baseline_job = submit_job(
@@ -92,7 +97,7 @@ def main():
         sft_mem = mem_config["sft"].get(tier, "150G")
         sft_job = submit_job(
             script_path="scripts/hpc_sft_vo.sh",
-            args=[tier],
+            args=[tier, sft_variant],
             mem=sft_mem,
             time=time_config["sft"]
         )
@@ -102,7 +107,7 @@ def main():
         merge_mem = "80G"
         merge_job = submit_job(
             script_path="scripts/hpc_merge_sft_vo.sh",
-            args=[tier],
+            args=[tier, sft_variant, merged_variant],
             dependencies=[sft_job] if sft_job != "UNKNOWN" else None,
             mem=merge_mem,
             time="01:30:00"
@@ -112,7 +117,7 @@ def main():
         grpo_mem = mem_config["grpo"].get(tier, "250G")
         grpo_job = submit_job(
             script_path="scripts/hpc_grpo_vo.sh",
-            args=[tier],
+            args=[tier, grpo_variant, merged_variant],
             dependencies=[merge_job] if merge_job != "UNKNOWN" else None,
             mem=grpo_mem,
             time=time_config["grpo"]
