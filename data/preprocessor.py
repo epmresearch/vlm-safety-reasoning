@@ -17,6 +17,7 @@ Bounding boxes are scaled from dataset [0,1] to Qwen3-VL [0,1000].
 """
 import json
 from typing import Any, Dict, List, Optional
+from datasets import Dataset, Image as HFImage, Sequence
 
 from data.prompt_templates import SYSTEM_PROMPT, UNIFIED_INSPECTION_PROMPT
 from data.box_utils import normalize_boxes, clean_boxes, scale_01_to_1000
@@ -189,7 +190,7 @@ def to_grpo_prompt(raw: Dict[str, Any], pil_image) -> Dict[str, Any]:
         {
             "role": "user",
             "content": [
-                {"type": "image", "image": pil_image},
+                {"type": "image"},
                 {"type": "text", "text": UNIFIED_INSPECTION_PROMPT},
             ],
         },
@@ -242,7 +243,9 @@ def build_grpo_dataset(
         f"Built GRPO prompt dataset: {len(prompts)} samples "
         f"({skipped} skipped)"
     )
-    return prompts
+    ds = Dataset.from_list(prompts)
+    ds = ds.cast_column("images", Sequence(HFImage()))
+    return ds
 
 
 def _build_violations_only_target_json(raw: Dict[str, Any]) -> str:
@@ -376,7 +379,7 @@ def to_grpo_prompt_for_task(raw: Dict[str, Any], pil_image, task: str = 'unified
         {
             "role": "user",
             "content": [
-                {"type": "image", "image": pil_image},
+                {"type": "image"},
                 {"type": "text", "text": prompt},
             ],
         },
@@ -423,4 +426,6 @@ def build_grpo_dataset_for_task(
         f"Built {task} GRPO prompt dataset: {len(prompts)} samples "
         f"({skipped} skipped)"
     )
-    return prompts
+    ds = Dataset.from_list(prompts)
+    ds = ds.cast_column("images", Sequence(HFImage()))
+    return ds
