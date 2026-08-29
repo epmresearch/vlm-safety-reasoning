@@ -8,23 +8,29 @@ from models.model_loader import get_model_info, load_model_for_training
 from data.loader import load_processed_dataset
 from data.preprocessor import build_grpo_dataset_for_task
 
-def run_preflight(task="violations_only", model_id="2b"):
+def run_preflight(task="violations_only", model_id="2b", base_model_override=None):
     print(">>> 1. Loading configs...")
     cfg = load_config(task=task, training_kind="grpo")
     sft_cfg = load_config(task=task, training_kind="sft")
     task_cfg = load_task_config(task)
     entry = get_model_info(model_id)
-    hf_path = entry["hf_path"]
-    
+    hf_path = base_model_override or entry["hf_path"]
+    if base_model_override:
+        print(f">>> Using MERGED base model override: {base_model_override}")
+        print(f">>> Tokenizer will be loaded from raw HF repo: {entry['hf_path']}")
+
     print(">>> 2. Loading model (this may take a minute)...")
     from unsloth import FastVisionModel, PatchFastRL
     PatchFastRL("GRPO", FastVisionModel)
-    
-    # We load the model normally just like the trainer does
+
+    # We load the model exactly like run_grpo() does — including tokenizer_name,
+    # since a local merged checkpoint needs the tokenizer/processor loaded from
+    # the original HF repo (see models/model_loader.py for why).
     model, tokenizer, _ = load_model_for_training(
         model_name=hf_path,
         tier=model_id,
         sft_cfg=sft_cfg,
+        tokenizer_name=entry["hf_path"],
     )
     tokenizer.padding_side = "left"
     if tokenizer.pad_token is None:
@@ -176,4 +182,15 @@ def run_preflight(task="violations_only", model_id="2b"):
         import traceback; traceback.print_exc()
 
 if __name__ == "__main__":
-    run_preflight()
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--base_model_override", default=None,
+        help="Point preflight at a local merged checkpoint instead of the raw HF base "
+             "(e.g. checkpoints/qwen3vl-2b/merged-sft-2b-v4) to test the exact model+"
+             "tokenizer_name loading path used by a real GRPO run.",
+    )
+    parser.add_argument("--tier", default="2b")
+    parser.add_argument("--task", default="violations_only")
+    args = parser.parse_args()
+    run_preflight(task=args.task, model_id=args.tier, base_model_override=args.base_model_override)
