@@ -34,8 +34,16 @@ def main():
     print(f">>> Merging adapter from {args.adapter_path} into base weights...")
     os.makedirs(args.output_path, exist_ok=True)
     
-    # Unsloth makes merging very easy!
-    model.save_pretrained_merged(args.output_path, tokenizer, save_method="merged_16bit")
+    # Unsloth's save_pretrained_merged sometimes fails to crush weights on vision models.
+    # We use standard PEFT merge_and_unload() to guarantee the LoRA weights are 
+    # physically added to the base matrices, removing the PEFT wrappers completely.
+    print("Crushing LoRA weights into base model (merge_and_unload)...")
+    model = model.merge_and_unload()
+    
+    print("Saving the crushed model...")
+    # Now save it as a standard HuggingFace model
+    model.save_pretrained(args.output_path)
+    tokenizer.save_pretrained(args.output_path)
     
     print(f">>> SUCCESS! Merged model saved to: {args.output_path}")
     print(f"You can now point your GRPO job to use this merged model as its base!")
