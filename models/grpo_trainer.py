@@ -228,6 +228,8 @@ def run_grpo(
         optim=cfg.get("optim", "adamw_8bit"),
         report_to="wandb",
         remove_unused_columns=False,
+        log_completions=True,
+        num_completions_to_print=4,
     )
 
     if use_native_weights:

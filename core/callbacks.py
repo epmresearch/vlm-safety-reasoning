@@ -1,6 +1,3 @@
-"""
-Custom TrainerCallbacks for crash-safe, resumable, well-logged SFT runs.
-"""
 import os
 import json
 import shutil
