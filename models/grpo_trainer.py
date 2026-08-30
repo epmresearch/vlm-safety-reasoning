@@ -207,17 +207,32 @@ def run_grpo(
         logger.info(f"  Reward component: {func.__name__} (weight={weight:.2f})")
 
     # -----------------------------------------------------------------------
-    # Load the pre-built, balanced GRPO training pool
+    # Load the GRPO training pool: prefer the pre-built, balanced pool
+    # (data/build_grpo_pool.py) if it's been built; otherwise fall back to
+    # the raw train split + oversampling so this still works standalone
+    # while the pool feature is still being finished/tested separately.
     # -----------------------------------------------------------------------
-    # Built offline by data/build_grpo_pool.py: full val split + every train
-    # violation image + a matching count of train safe images (~50/50 overall),
-    # drawn from the non-augmented base so no pixel-augmented or duplicated
-    # rows are in the pool (GRPO is a single epoch — duplicates would sit in
-    # the same rollout pool and produce redundant, correlated reward groups).
-    logger.info("Loading pre-built GRPO training pool...")
-    from data.loader import load_grpo_pool
-    train_split = load_grpo_pool()
-    logger.info(f"GRPO pool loaded: {len(train_split)} samples (already balanced)")
+    try:
+        from data.loader import load_grpo_pool
+        train_split = load_grpo_pool()
+        logger.info(f"GRPO pool loaded: {len(train_split)} samples (already balanced)")
+    except (ImportError, FileNotFoundError) as e:
+        logger.warning(f"GRPO pool not available ({e}); falling back to raw train split + oversampling")
+        from data.loader import load_processed_dataset
+        from data.oversampling import build_oversampled_indices
+        raw_dataset = load_processed_dataset()
+        train_split = raw_dataset["train"]
+        oversampled_indices, oversample_manifest = build_oversampled_indices(
+            train_split,
+            rule24_multiplier=cfg.get("oversample_rule24_multiplier", 1),
+            rule3_multiplier=cfg.get("oversample_rule3_multiplier", 1),
+        )
+        train_split = train_split.select(oversampled_indices)
+        logger.info(f"Oversample manifest: {oversample_manifest}")
+        logger.info(
+            f"Oversampled training set: {len(raw_dataset['train'])} → "
+            f"{len(train_split)} samples"
+        )
 
     from data.preprocessor import build_grpo_dataset_for_task
     train_data = build_grpo_dataset_for_task(train_split, task=task, max_samples=max_samples)
