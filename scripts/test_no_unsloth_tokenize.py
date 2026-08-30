@@ -64,16 +64,24 @@ _trl_import_utils.is_vllm_available = lambda: False
 # (periodic reference-model merging) we never use. Same stub-and-move-on
 # treatment as vllm above.
 if "mergekit" not in sys.modules:
-    def _make_stub2(name):
+    def _make_stub2(name, is_package=False):
         mod = types.ModuleType(name)
-        mod.__spec__ = importlib.machinery.ModuleSpec(name, loader=None)
+        spec = importlib.machinery.ModuleSpec(name, loader=None, is_package=is_package)
+        mod.__spec__ = spec
+        if is_package:
+            mod.__path__ = []  # marks it as a real package so submodule imports resolve
         sys.modules[name] = mod
         return mod
 
-    _mk = _make_stub2("mergekit")
+    _mk = _make_stub2("mergekit", is_package=True)
     _mk_config = _make_stub2("mergekit.config")
     _mk_config.MergeConfiguration = object
     _mk.config = _mk_config
+
+    _mk_merge = _make_stub2("mergekit.merge")
+    _mk_merge.MergeOptions = object
+    _mk_merge.run_merge = lambda *a, **kw: None
+    _mk.merge = _mk_merge
 
 from trl import GRPOTrainer, GRPOConfig
 
