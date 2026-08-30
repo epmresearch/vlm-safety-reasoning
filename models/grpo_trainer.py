@@ -104,6 +104,14 @@ def run_grpo(
     if "load_in_4bit" in cfg:
         sft_cfg["load_in_4bit"] = cfg["load_in_4bit"]
 
+    # Override SFT's vision resolution bounds with GRPO's own (memory-safety knob —
+    # GRPO now genuinely runs real images through the vision encoder + generation KV
+    # cache, unlike SFT's single forward pass, so it can need a tighter cap on H100).
+    if "image_max_pixels" in cfg:
+        sft_cfg["image_max_pixels"] = cfg["image_max_pixels"]
+    if "image_min_pixels" in cfg:
+        sft_cfg["image_min_pixels"] = cfg["image_min_pixels"]
+
     model, tokenizer, _ = load_model_for_training(
         model_name=hf_path,
         tier=model_id,

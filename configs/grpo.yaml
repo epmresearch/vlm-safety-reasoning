@@ -12,6 +12,13 @@ per_device_train_batch_size: 8  # H100 93GB memory limit: real images now actual
                                  # effective batch (8x32=256) via 2x gradient_accumulation_steps.
                                  # Raise back toward 16+ once training moves to H200 (141GB).
 gradient_accumulation_steps: 32
+# TEMPORARY, GRPO-only override of sft.yaml's vision resolution bounds (H100 memory
+# safety — the OOM traceback's failing allocation is a shape-dependent compiled buffer
+# tied to the image patch grid, and halving batch size alone did not reduce peak memory,
+# so this — not batch size — is the actual lever). Does NOT touch sft.yaml / SFT training.
+# ~602112px ≈ 776x776, roughly half the patches of SFT's 1204224 (~1097x1097) cap.
+# Raise back to match sft.yaml (or remove these two lines) once training moves to H200.
+image_max_pixels: 602112
 num_train_epochs: 1
 logging_steps: 5
 save_steps: 50
