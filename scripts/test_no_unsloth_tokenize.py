@@ -1,10 +1,13 @@
 """
-Isolated test: does the same "images collapse to 1 token in batched
-apply_chat_template" bug happen with ZERO Unsloth involvement?
+No-Unsloth path, step 1: does vanilla trl.GRPOTrainer correctly tokenize a
+batch of REAL, different prompts (your actual system+user+image structure,
+real construction-site photos) — and if not, does our per-conversation-loop
+fix work cleanly on it (unlike on Unsloth's fused, wrapped trainer)?
 
-Loads the merged model via plain transformers + peft (no unsloth import
-anywhere), builds a vanilla trl.GRPOTrainer, and runs the exact same
-_tokenize_prompts check we ran through Unsloth's patched trainer.
+Zero unsloth import anywhere. Uses your real data pipeline
+(data.preprocessor.build_grpo_dataset_for_task) so this isn't testing a
+simplified synthetic prompt shape — it's testing exactly what a real
+training step would send through _tokenize_prompts.
 
 Usage:
     python scripts/test_no_unsloth_tokenize.py \
@@ -13,9 +16,11 @@ Usage:
 """
 import argparse
 import importlib.machinery
+import os
 import sys
 import types
-from PIL import Image
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 # Deliberately no `import unsloth` anywhere in this file or its imports.
 import torch
@@ -56,13 +61,51 @@ _trl_import_utils.is_vllm_available = lambda: False
 from trl import GRPOTrainer, GRPOConfig
 
 
+class _PerImageGRPOTrainer(GRPOTrainer):
+    """Only relevant for vanilla trl.GRPOTrainer — this is a NORMAL subclass
+    override (unlike the Unsloth case, trl.GRPOTrainer is not fused/wrapped,
+    so overriding _tokenize_prompts here should actually take effect)."""
+
+    def _tokenize_prompts(self, prompts: list):
+        all_prompt_ids = []
+        all_images = []
+        merged_fields = {}
+        for prompt in prompts:
+            ids_list, imgs_list, fields = super()._tokenize_prompts([prompt])
+            all_prompt_ids.append(ids_list[0])
+            all_images.append(imgs_list[0] if imgs_list else None)
+            for k, v in fields.items():
+                merged_fields.setdefault(k, []).append(v)
+        merged_fields = {
+            k: torch.cat(v) if isinstance(v[0], torch.Tensor)
+            else [row for item in v for row in (item if isinstance(item, list) else [item])]
+            for k, v in merged_fields.items()
+        }
+        images = all_images if any(img is not None for img in all_images) else None
+        return all_prompt_ids, images, merged_fields
+
+
+def _embed_images_inline(prompts, train_data):
+    """_tokenize_prompts expects images already inline in message content
+    (that's how vanilla TRL's own upstream code hands prompts to it), so
+    embed them the same way here before calling it directly."""
+    for i, prompt in enumerate(prompts):
+        for msg in prompt:
+            if isinstance(msg.get("content"), list):
+                for part in msg["content"]:
+                    if part.get("type") == "image":
+                        part["image"] = train_data[i]["images"][0]
+    return prompts
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--merged_path", required=True)
     parser.add_argument("--raw_hf_path", default="unsloth/Qwen3-VL-2B-Instruct")
+    parser.add_argument("--task", default="violations_only")
     args = parser.parse_args()
 
-    print(">>> 1. Loading processor from the RAW HF repo (same tokenizer_name principle)...")
+    print(">>> 1. Loading processor from the RAW HF repo...")
     processor = AutoProcessor.from_pretrained(args.raw_hf_path)
 
     print(">>> 2. Loading model weights from the MERGED local checkpoint (bf16, no quantization)...")
@@ -74,19 +117,18 @@ def main():
 
     print(">>> 3. Applying a fresh LoRA adapter via plain peft (language layers only)...")
     lora_config = LoraConfig(
-        r=16,
-        lora_alpha=16,
-        lora_dropout=0.05,
-        bias="none",
-        target_modules=[
-            "q_proj", "k_proj", "v_proj", "o_proj",
-            "gate_proj", "up_proj", "down_proj",
-        ],
+        r=16, lora_alpha=16, lora_dropout=0.05, bias="none",
+        target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
     )
     model = get_peft_model(model, lora_config)
     model.print_trainable_parameters()
 
-    print(">>> 4. Building a vanilla trl.GRPOTrainer (no Unsloth patching involved)...")
+    print(">>> 4. Loading 4 REAL samples through your actual data pipeline...")
+    from data.loader import load_processed_dataset
+    from data.preprocessor import build_grpo_dataset_for_task
+    raw_dataset = load_processed_dataset()
+    train_split = raw_dataset["train"].select(range(4))
+    train_data = build_grpo_dataset_for_task(train_split, task=args.task)
 
     def mock_reward(prompts, completions, **kwargs):
         return [1.0] * len(prompts)
@@ -99,46 +141,42 @@ def main():
         report_to="none",
     )
 
-    # Minimal 2-row dataset so the trainer object exists; we only care about
-    # calling _tokenize_prompts ourselves below, not about actually training.
-    from datasets import Dataset
-    dummy_ds = Dataset.from_list([
-        {"prompt": [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "describe"}]}],
-         "images": [Image.new("RGB", (896, 896), color=(255, 0, 0))]},
-        {"prompt": [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "describe"}]}],
-         "images": [Image.new("RGB", (600, 400), color=(0, 255, 0))]},
-    ])
-    from datasets import Image as HFImage, Sequence
-    dummy_ds = dummy_ds.cast_column("images", Sequence(HFImage()))
-
-    trainer = GRPOTrainer(
-        model=model,
-        args=grpo_config,
-        train_dataset=dummy_ds,
-        reward_funcs=[mock_reward],
-        processing_class=processor,
+    print(">>> 5. Building vanilla trl.GRPOTrainer (baseline, UNMODIFIED)...")
+    baseline_trainer = GRPOTrainer(
+        model=model, args=grpo_config, train_dataset=train_data,
+        reward_funcs=[mock_reward], processing_class=processor,
     )
-
-    print(">>> 5. Calling the EXACT same _tokenize_prompts TRL uses internally, with 2 DIFFERENT images...")
-    prompts = [dummy_ds[0]["prompt"], dummy_ds[1]["prompt"]]
-    # Embed the real PIL images inline the same way TRL's prepare_multimodal_messages does
-    prompts[0][0]["content"][0]["image"] = dummy_ds[0]["images"][0]
-    prompts[1][0]["content"][0]["image"] = dummy_ds[1]["images"][0]
-
-    prompt_ids, images, multimodal_fields = trainer._tokenize_prompts(prompts)
-    lens = [len(p) for p in prompt_ids]
-    print(f"prompt_ids lengths (per conversation): {lens}")
-    print(f"multimodal_fields keys: {list(multimodal_fields.keys())}")
-    if "pixel_values" in multimodal_fields:
-        pv = multimodal_fields["pixel_values"]
-        print(f"pixel_values shape/len: {pv.shape if hasattr(pv, 'shape') else len(pv)}")
-
-    if min(lens) > 100:
-        print("\n✅✅ NO UNSLOTH: images correctly expanded in the batched, multi-image call!")
-        print("   => The bug is specific to Unsloth's patched trainer, not TRL/transformers itself.")
+    real_prompts_a = _embed_images_inline(
+        [train_data[i]["prompt"] for i in range(len(train_data))], train_data
+    )
+    prompt_ids, _, fields = baseline_trainer._tokenize_prompts(real_prompts_a)
+    lens_a = [len(p) for p in prompt_ids]
+    print(f"\n=== TEST A: vanilla trl._tokenize_prompts, 4 real different images, batched together ===")
+    print(f"Per-prompt token lengths: {lens_a}")
+    print(f"multimodal_fields keys: {list(fields.keys())}")
+    if min(lens_a) > 400:
+        print("✅ Vanilla trl ALREADY handles this correctly — no fix needed, the bug really was Unsloth-only.")
     else:
-        print("\n❌❌ NO UNSLOTH: still collapsed to a tiny prompt length!")
-        print("   => The bug lives in vanilla TRL/transformers, not something Unsloth introduced.")
+        print("❌ Vanilla trl ALSO collapses this — the bug is in trl 0.23.0 itself, not something Unsloth added.")
+
+    print("\n>>> 6. Building the SAME test through our per-conversation-loop fix (_PerImageGRPOTrainer)...")
+    fixed_trainer = _PerImageGRPOTrainer(
+        model=model, args=grpo_config, train_dataset=train_data,
+        reward_funcs=[mock_reward], processing_class=processor,
+    )
+    real_prompts_b = _embed_images_inline(
+        [train_data[i]["prompt"] for i in range(len(train_data))], train_data
+    )
+    prompt_ids_b, _, fields_b = fixed_trainer._tokenize_prompts(real_prompts_b)
+    lens_b = [len(p) for p in prompt_ids_b]
+    print(f"\n=== TEST B: our fix's _tokenize_prompts override, same 4 real images ===")
+    print(f"Per-prompt token lengths: {lens_b}")
+    print(f"multimodal_fields keys: {list(fields_b.keys())}")
+    if min(lens_b) > 400:
+        print("✅✅ FIX CONFIRMED on vanilla trl: every image properly expanded.")
+        print("    => No-Unsloth + this fix is a viable, working path for real GRPO training.")
+    else:
+        print("❌❌ Still collapsing even with the fix applied to vanilla trl — needs more investigation.")
 
 
 if __name__ == "__main__":
