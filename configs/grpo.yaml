@@ -6,8 +6,12 @@ max_prompt_length: 2048        # was 1024 — verified max is 1519 tokens (see u
 max_completion_length: 1000
 max_seq_length: 3250           # ADDED — must cover max_prompt + max_completion + margin
 learning_rate: 2.0e-7
-per_device_train_batch_size: 16
-gradient_accumulation_steps: 16
+per_device_train_batch_size: 8  # H100 93GB memory limit: real images now actually reach the
+                                 # model (vision encoder + KV cache per sequence), so 16 concurrent
+                                 # generations OOM'd at 92.97/93.12 GiB. Halving to 8 keeps the same
+                                 # effective batch (8x32=256) via 2x gradient_accumulation_steps.
+                                 # Raise back toward 16+ once training moves to H200 (141GB).
+gradient_accumulation_steps: 32
 num_train_epochs: 1
 logging_steps: 5
 save_steps: 50
