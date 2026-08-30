@@ -12,8 +12,11 @@ No GPU, no model weights, no Unsloth import needed — just the processor.
 Usage:
     python scripts/test_processor_batch_collapse.py \
         --raw_hf_path unsloth/Qwen3-VL-2B-Instruct \
-        --image_path /path/to/any/real/construction_photo.jpg \
         --batch_size 8
+
+    (pulls a real image straight from your processed dataset via the same
+    data.loader/data.preprocessor pipeline the real GRPO run uses — no need
+    to point at a loose image file)
 """
 import argparse
 import os
@@ -22,20 +25,34 @@ import sys
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from transformers import AutoProcessor
-from PIL import Image
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--raw_hf_path", default="unsloth/Qwen3-VL-2B-Instruct")
-    parser.add_argument("--image_path", required=True,
-                         help="Any real image, e.g. a sample from datasets/processed")
+    parser.add_argument("--image_path", default=None,
+                         help="Optional: path to a real image file to use instead of "
+                              "pulling one from datasets/processed")
+    parser.add_argument("--task", default="violations_only")
     parser.add_argument("--batch_size", type=int, default=8,
                          help="num_generations — how many copies of the SAME image/prompt to batch")
     args = parser.parse_args()
 
     processor = AutoProcessor.from_pretrained(args.raw_hf_path)
-    img = Image.open(args.image_path).convert("RGB")
+
+    if args.image_path:
+        from PIL import Image
+        img = Image.open(args.image_path).convert("RGB")
+    else:
+        print(">>> No --image_path given — pulling a real sample from datasets/processed "
+              "via the actual data pipeline...")
+        from data.loader import load_processed_dataset
+        from data.preprocessor import build_grpo_dataset_for_task
+        raw_dataset = load_processed_dataset()
+        train_split = raw_dataset["train"].select(range(1))
+        train_data = build_grpo_dataset_for_task(train_split, task=args.task)
+        img = train_data[0]["images"][0]
+        print(f"  Loaded image: type={type(img)}, size={getattr(img, 'size', 'N/A')}")
 
     text = (
         "<|im_start|>user\n<|vision_start|><|image_pad|><|vision_end|>"
