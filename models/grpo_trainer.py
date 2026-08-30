@@ -276,6 +276,10 @@ def run_grpo(
         learning_rate=cfg["learning_rate"],
         per_device_train_batch_size=cfg["per_device_train_batch_size"],
         gradient_accumulation_steps=cfg["gradient_accumulation_steps"],
+        # Keeps generation_batch_size == per_device_train_batch_size (no multiplication by
+        # gradient_accumulation_steps), so a generation call only ever spans one unique
+        # prompt when per_device_train_batch_size == num_generations. See configs/grpo.yaml.
+        steps_per_generation=cfg.get("steps_per_generation", 1),
         num_train_epochs=cfg["num_train_epochs"],
         logging_steps=cfg["logging_steps"],
         save_steps=cfg["save_steps"],
@@ -318,7 +322,10 @@ def run_grpo(
                 ConsoleLogCallback()
             ],
         )
-        patch_trainer_for_per_image_tokenization(trainer)
+        # patch_trainer_for_per_image_tokenization(trainer) — not needed: configs/grpo.yaml
+        # now sets per_device_train_batch_size == num_generations with steps_per_generation=1,
+        # so no generation call ever batches more than one unique image. See that function's
+        # docstring if this config approach ever needs to be revisited.
         logger.info(
             f"Using TRL native multi-reward mode: "
             f"{len(reward_funcs)} functions, weights={reward_weights}"
@@ -343,7 +350,8 @@ def run_grpo(
                 ConsoleLogCallback()
             ],
         )
-        patch_trainer_for_per_image_tokenization(trainer)
+        # patch_trainer_for_per_image_tokenization(trainer) — not needed, see the other
+        # branch above for why.
         logger.info(
             "Using single composite reward mode (TRL reward_weights not available)"
         )

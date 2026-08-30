@@ -6,8 +6,13 @@ max_prompt_length: 2048        # was 1024 — verified max is 1519 tokens (see u
 max_completion_length: 1000
 max_seq_length: 3250           # ADDED — must cover max_prompt + max_completion + margin
 learning_rate: 2.0e-7
-per_device_train_batch_size: 16
-gradient_accumulation_steps: 16
+per_device_train_batch_size: 8  # == num_generations, so every generation call handles exactly 1 unique image
+steps_per_generation: 1         # forces generation_batch_size = 8 (one prompt at a time) — avoids the
+                                 # confirmed multi-image batch bug (only the first image in a batched
+                                 # apply_chat_template call gets expanded to real vision tokens; every
+                                 # other prompt in the same call collapses to a single unexpanded token)
+gradient_accumulation_steps: 32 # doubled from 16 to keep the same effective batch: 8x32=256 completions,
+                                 # 256/8=32 unique prompts per optimizer step — identical to the old 16x16
 num_train_epochs: 1
 logging_steps: 5
 save_steps: 50

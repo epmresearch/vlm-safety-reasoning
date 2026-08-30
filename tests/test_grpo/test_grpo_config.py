@@ -57,11 +57,12 @@ class TestConfigMerge:
         from core.config import load_config
 
         cfg = load_config(task="unified", training_kind="grpo")
-        # grpo.yaml has per_device_train_batch_size: 16
+        # grpo.yaml has per_device_train_batch_size: 8 (== num_generations, so every
+        # generation call handles exactly one unique image — see configs/grpo.yaml)
         # model_registry.yaml has per_device_train_batch_size: 32 NESTED under models.2b
         # Top-level from grpo.yaml should win
-        assert cfg["per_device_train_batch_size"] == 16, (
-            "grpo.yaml per_device_train_batch_size should be 16, "
+        assert cfg["per_device_train_batch_size"] == 8, (
+            "grpo.yaml per_device_train_batch_size should be 8, "
             "but model registry nested value may be leaking through"
         )
 
