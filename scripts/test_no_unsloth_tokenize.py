@@ -58,6 +58,23 @@ import trl.import_utils as _trl_import_utils
 _trl_import_utils._vllm_available = False
 _trl_import_utils.is_vllm_available = lambda: False
 
+# trl.trainer.callbacks (imported unconditionally by trl.trainer.grpo_trainer
+# for SyncRefModelCallback) unconditionally imports mergekit_utils, which
+# unconditionally imports the optional `mergekit` package for a feature
+# (periodic reference-model merging) we never use. Same stub-and-move-on
+# treatment as vllm above.
+if "mergekit" not in sys.modules:
+    def _make_stub2(name):
+        mod = types.ModuleType(name)
+        mod.__spec__ = importlib.machinery.ModuleSpec(name, loader=None)
+        sys.modules[name] = mod
+        return mod
+
+    _mk = _make_stub2("mergekit")
+    _mk_config = _make_stub2("mergekit.config")
+    _mk_config.MergeConfiguration = object
+    _mk.config = _mk_config
+
 from trl import GRPOTrainer, GRPOConfig
 
 
