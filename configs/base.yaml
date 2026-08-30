@@ -10,6 +10,8 @@ dataset:
   raw_cache_subdir: "datasets/raw"
   cleaned_subdir: "datasets/raw_cleaned"
   processed_subdir: "datasets/augmented"
+  raw_processed_subdir: "datasets/processed"
+  grpo_pool_subdir: "datasets/grpo_pool"
 
 paths:
   checkpoints_subdir: "checkpoints"

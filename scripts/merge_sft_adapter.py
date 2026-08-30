@@ -10,12 +10,19 @@ def main():
     import argparse
     parser = argparse.ArgumentParser(description="Merge SFT adapter into base Qwen3-VL model")
     parser.add_argument("--tier", required=True, help="Model tier (e.g., 2b, 4b, 8b)")
-    parser.add_argument("--adapter_path", required=True, help="Path to your trained SFT adapter (e.g. results/vo-sft-2b-v4/final)")
+    parser.add_argument("--adapter_path", required=True, help="Path to your trained SFT adapter (e.g. results/vo-sft-2b-vN/final)")
     parser.add_argument("--output_path", required=True, help="Path to save the new merged base model")
+    parser.add_argument(
+        "--task", default="violations_only",
+        help="Task the SFT adapter was trained for (e.g. 'unified', 'violations_only'). "
+             "Determines which task-specific config overrides (e.g. max_seq_length) are "
+             "applied when loading the base model to merge into. Default kept as "
+             "'violations_only' for backward compatibility with existing callers."
+    )
     args = parser.parse_args()
 
-    print(f">>> Loading Base Model for tier: {args.tier}")
-    sft_cfg = load_config(task="violations_only", training_kind="sft")
+    print(f">>> Loading Base Model for tier: {args.tier}, task: {args.task}")
+    sft_cfg = load_config(task=args.task, training_kind="sft")
     entry = get_model_info(args.tier)
     hf_path = entry["hf_path"]
     

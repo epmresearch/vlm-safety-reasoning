@@ -1,5 +1,5 @@
 """
-Generate deep CSV comparison tables for Violations-Only (VO) v4 pipeline.
+Generate deep CSV comparison tables for the Violations-Only (VO) pipeline.
 
 For each model size (2B, 4B, 8B), produces a single CSV file with:
   - All metric values for Baseline, SFT, and GRPO
@@ -10,7 +10,7 @@ For each model size (2B, 4B, 8B), produces a single CSV file with:
 Also produces a combined "master" CSV with all 9 runs side by side.
 
 Usage:
-    python experiments/generate_comparison_csv.py
+    python experiments/generate_comparison_csv.py --version v5
 """
 
 import json
@@ -19,11 +19,14 @@ import os
 from pathlib import Path
 
 RESULTS_DIR = Path("evaluation_results")
-CSV_DIR = RESULTS_DIR / "csv_comparisons_v4"
-CSV_DIR.mkdir(parents=True, exist_ok=True)
 
 TIERS = ["2b", "4b", "8b"]
 PHASES = ["baseline", "sft", "grpo"]
+
+# Set by main() from --version; module-level so functions below (load_metrics,
+# generate_tier_csv, generate_master_csv) don't all need it threaded through.
+VERSION = None
+CSV_DIR = None
 
 # ---------------------------------------------------------------------------
 # Metric groups — organised by evaluation dimension for readability
@@ -171,7 +174,7 @@ METRIC_GROUPS = {
 
 def load_metrics(tier, phase):
     """Load a single metrics.json file for a given tier and phase."""
-    folder = RESULTS_DIR / f"vo-{phase}-{tier}-v4"
+    folder = RESULTS_DIR / f"vo-{phase}-{tier}-{VERSION}"
     metrics_file = folder / "metrics.json"
     if metrics_file.exists():
         with open(metrics_file, "r") as f:
@@ -238,14 +241,14 @@ def generate_tier_csv(tier):
     for phase in PHASES:
         data[phase] = load_metrics(tier, phase)
 
-    output_path = CSV_DIR / f"comparison_{tier}_v4.csv"
+    output_path = CSV_DIR / f"comparison_{tier}_{VERSION}.csv"
 
     with open(output_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
 
         # Header
         writer.writerow([
-            f"Qwen3-VL-{tier.upper()} — VO v4 Deep Comparison",
+            f"Qwen3-VL-{tier.upper()} — VO {VERSION} Deep Comparison",
             "", "", "", "", "", "", ""
         ])
         writer.writerow([])
@@ -332,7 +335,7 @@ def generate_master_csv(all_data):
     print(f"  Generating MASTER comparison CSV (all tiers)")
     print(f"{'='*60}")
 
-    output_path = CSV_DIR / "master_comparison_all_tiers_v4.csv"
+    output_path = CSV_DIR / f"master_comparison_all_tiers_{VERSION}.csv"
 
     with open(output_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
@@ -376,8 +379,23 @@ def generate_master_csv(all_data):
 
 
 def main():
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--version", required=True,
+        help="Run version tag of the VO results to summarize (e.g. v5, v6). "
+             "Determines both the result folders read (vo-<phase>-<tier>-<version>) "
+             "and the output directory (csv_comparisons_<version>)."
+    )
+    args = parser.parse_args()
+
+    global VERSION, CSV_DIR
+    VERSION = args.version
+    CSV_DIR = RESULTS_DIR / f"csv_comparisons_{VERSION}"
+    CSV_DIR.mkdir(parents=True, exist_ok=True)
+
     print("=" * 60)
-    print("  VO v4 Deep CSV Comparison Generator")
+    print(f"  VO {VERSION} Deep CSV Comparison Generator")
     print("=" * 60)
 
     all_data = {}
@@ -394,10 +412,10 @@ def main():
     print(f"  All CSVs saved to: {CSV_DIR.absolute()}")
     print(f"{'='*60}")
     print(f"\n  Files generated:")
-    print(f"    1. comparison_2b_v4.csv")
-    print(f"    2. comparison_4b_v4.csv")
-    print(f"    3. comparison_8b_v4.csv")
-    print(f"    4. master_comparison_all_tiers_v4.csv")
+    print(f"    1. comparison_2b_{VERSION}.csv")
+    print(f"    2. comparison_4b_{VERSION}.csv")
+    print(f"    3. comparison_8b_{VERSION}.csv")
+    print(f"    4. master_comparison_all_tiers_{VERSION}.csv")
 
 
 if __name__ == "__main__":

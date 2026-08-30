@@ -15,22 +15,23 @@ MODELS = ["baseline", "sft", "grpo"]
 RESULTS_DIR = Path("evaluation_results")
 PLOTS_DIR = RESULTS_DIR / "plots"
 
-def load_metrics(task: str = "unified", tier: str = ""):
+def load_metrics(task: str = "unified", tier: str = "", version: str = ""):
     metrics_data = {}
     repair_data = {}
-    
+
     suffix = f"_{tier}" if tier and tier != "2b" else ""
-    
+
     if task == "unified":
         models = ["baseline", "sft", "grpo"]
         if tier == "8b":
-            variants = ["baseline_8b_v4", "unified-sft-8b-v4_final", "unified-grpo-8b-v4_final"]
+            variants = [f"baseline_8b_{version}", f"unified-sft-8b-{version}_final", f"unified-grpo-8b-{version}_final"]
         else:
-            variants = [f"baseline_{tier}_v4", f"unified-sft-{tier}-v4_final", f"unified-grpo-{tier}-v4_final"]
+            variants = [f"baseline_{tier}_{version}", f"unified-sft-{tier}-{version}_final", f"unified-grpo-{tier}-{version}_final"]
     else:
-        prefix = "vo" if task == "violations_only" else task
+        from core.naming import task_prefix
+        prefix = task_prefix(task)
         models = ["baseline", "sft", "grpo"]
-        variants = [f"{prefix}-baseline-{tier}-v3", f"{prefix}-sft-{tier}-v3_final", f"{prefix}-grpo-{tier}-v3_final"]
+        variants = [f"{prefix}-baseline-{tier}-{version}", f"{prefix}-sft-{tier}-{version}_final", f"{prefix}-grpo-{tier}-{version}_final"]
         
     for model_key, variant in zip(models, variants):
         metrics_file = RESULTS_DIR / variant / "metrics.json"
@@ -448,6 +449,10 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--task", default="unified", help="Task name")
     parser.add_argument("--tier", default="", help="Model tier (e.g., 2b, 4b, 8b). Empty defaults to 2b folder structure.")
+    parser.add_argument(
+        "--version", required=True,
+        help="Run version tag of the results to plot (e.g. v4, v5)."
+    )
     args = parser.parse_args()
 
     global PLOTS_DIR
@@ -455,7 +460,7 @@ def main():
         PLOTS_DIR = RESULTS_DIR / f"plots_{args.tier}"
 
     print(f"Loading metrics for tier: {args.tier or '2b'}...")
-    metrics_data, repair_data = load_metrics(args.task, args.tier)
+    metrics_data, repair_data = load_metrics(args.task, args.tier, args.version)
     if not metrics_data:
         print("No metrics found in evaluation_results/")
         return

@@ -1,16 +1,22 @@
 #!/usr/bin/env bash
-#SBATCH --job-name=vlm-eval-grpo-v2
+#SBATCH --job-name=vlm-base-unified
 #SBATCH --partition=gpu-h100
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
-#SBATCH --mem=80G
 #SBATCH --gres=gpu:h100:1
 #SBATCH --time=12:00:00
-#SBATCH --output=/home/%u/vlm-finetuning-project1/logs/eval_grpo_v2_%j.out
-#SBATCH --error=/home/%u/vlm-finetuning-project1/logs/eval_grpo_v2_%j.err
+#SBATCH --output=/home/%u/vlm-finetuning-project1/logs/base_unified_%j.out
+#SBATCH --error=/home/%u/vlm-finetuning-project1/logs/base_unified_%j.err
 #SBATCH --mail-type=BEGIN,END,FAIL
 #SBATCH --mail-user=nabeel.shan@ucalgary.ca
+
+TIER=$1
+VERSION=$2
+if [ -z "$TIER" ] || [ -z "$VERSION" ]; then
+    echo "Error: Arguments missing (Usage: hpc_baseline_unified.sh <tier> <version>, e.g. 2b v5)"
+    exit 1
+fi
 
 echo "Job started: $(date)"
 echo "Node: $SLURMD_NODENAME"
@@ -20,7 +26,10 @@ nvidia-smi
 module purge
 module load gcc/13.3.0
 module load python/3.12.5
-module load java || true 
+
+# Inject Portable Java for pycocoevalcap metrics
+export PATH="$HOME/scratch/jdk-21.0.2/bin:$PATH"
+export JAVA_HOME="$HOME/scratch/jdk-21.0.2"
 
 source "$HOME/envs/vlm_grpo/bin/activate"
 cd "$HOME/vlm-safety-reasoning"
@@ -40,39 +49,42 @@ HPC_DRIVE_ROOT="/home/$USER/vlm-finetuning-project1"
 export VLM_DATA_ROOT="$HPC_DRIVE_ROOT"
 
 echo "======================================================================"
-echo "[PHASE 1/3] SKIPPING INFERENCE (Already Complete)"
+echo "[PHASE 1/3] Running Inference on ${TIER} Baseline Checkpoint (Unified)"
 echo "======================================================================"
-# python -m experiments.run_inference \
-#     --tier 2b \
-#     --variant unified-grpo-v2 \
-#     --checkpoint checkpoint-836 \
-#     --batch_size 32
+# Matches the legacy unified naming convention (baseline_<tier>_<version>,
+# no task prefix) that experiments/compare_results.py and plot_metrics.py
+# already expect for task=unified.
+python -m experiments.run_inference \
+    --tier ${TIER} \
+    --run_name baseline_${TIER}_${VERSION} \
+    --batch_size 32 \
+    --task unified
 
-PREDS_DIR="$HPC_DRIVE_ROOT/results/inference/unified-grpo-v2_checkpoint-836"
+PREDS_DIR="$HPC_DRIVE_ROOT/results/inference/baseline_${TIER}_${VERSION}"
 PREDS_FILE="$PREDS_DIR/predictions.jsonl"
 
 echo "======================================================================"
-echo "[PHASE 2/3] SKIPPING REPAIR (Already Complete)"
+echo "[PHASE 2/3] Running Structural Repair (Unified)"
 echo "======================================================================"
-# python preprocessing/structural_repair.py \
-#     --input "$PREDS_FILE" \
-#     --output "$PREDS_DIR/repair_applied/predictions_repaired.jsonl"
+python preprocessing/structural_repair.py \
+    --input "$PREDS_FILE" \
+    --output "$PREDS_DIR/repair_applied/predictions_repaired.jsonl" \
+    --task unified
 
 echo "======================================================================"
-echo "[PHASE 3/3] Running Full Evaluation Pipeline"
+echo "[PHASE 3/3] Running Full Evaluation Pipeline (Unified)"
 echo "======================================================================"
 REPAIRED_FILE="$PREDS_DIR/repair_applied/predictions_repaired.jsonl"
-EVAL_OUT_DIR="$PREDS_DIR/grpo_after_repair_results"
+EVAL_OUT_DIR="$PREDS_DIR/evaluation_results"
 
 python -m experiments.run_evaluation \
     --predictions_path "$REPAIRED_FILE" \
     --output_dir "$EVAL_OUT_DIR" \
-    --skip_java_switch \
     --skip_spice \
     --wandb_project "vlm-safety-evals" \
-    --wandb_run_name "qwen3-2b-grpo-v2-repaired"
+    --wandb_run_name "qwen3-${TIER}-baseline-${VERSION}-repaired" \
+    --task unified
 
 echo "======================================================================"
-echo "GRPO V2 Evaluation completed successfully: $(date)"
-echo "Metrics saved to: $EVAL_OUT_DIR/metrics.json"
+echo "Baseline Unified ${TIER} Evaluation completed successfully: $(date)"
 echo "======================================================================"

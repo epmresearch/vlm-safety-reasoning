@@ -42,10 +42,15 @@ export VLM_DATA_ROOT="$HPC_DRIVE_ROOT"
 mkdir -p "$HPC_DRIVE_ROOT/checkpoints" "$HPC_DRIVE_ROOT/results" "$HPC_DRIVE_ROOT/logs"
 
 echo "Starting GRPO SMOKE TEST..."
+# --allow_unmerged_reference: intentional for a fast smoke test — this only checks
+# that the training loop runs without crashing, so a correct KL reference (which
+# requires a merged SFT base model, see scripts/merge_sft_adapter.py) isn't needed.
+# Do NOT use this flag for a real training run.
 python -m experiments.run_grpo \
     --tier 2b \
     --variant unified-grpo-test-v4 \
     --sft_variant unified-sft-v4 \
-    --max_samples 10
+    --max_samples 10 \
+    --allow_unmerged_reference
 
 echo "GRPO test completed: $(date)"

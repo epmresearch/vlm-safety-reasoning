@@ -12,21 +12,24 @@ sns.set_theme(style="whitegrid", context="paper", font_scale=1.2)
 plt.rcParams['font.family'] = 'sans-serif'
 
 RESULTS_DIR = Path("evaluation_results")
-PLOTS_DIR = RESULTS_DIR / "plots_vo_v4"
-PLOTS_DIR.mkdir(parents=True, exist_ok=True)
 
 TIERS = ["2b", "4b", "8b"]
 PHASES = ["baseline", "sft", "grpo"]
+
+# Set by main() from --version; module-level so the plot_* functions (which
+# only take `data`) don't all need a version parameter threaded through them.
+VERSION = None
+PLOTS_DIR = None
 
 def load_all_metrics():
     """Loads all metrics into a nested dictionary: data[tier][phase]"""
     data = {tier: {} for tier in TIERS}
     missing_files = []
-    
+
     for tier in TIERS:
         for phase in PHASES:
-            # Matches exactly how HPC creates the folders: vo-baseline-2b-v4
-            folder_name = f"vo-{phase}-{tier}-v4"
+            # Matches exactly how HPC creates the folders: vo-baseline-2b-{VERSION}
+            folder_name = f"vo-{phase}-{tier}-{VERSION}"
             folder = RESULTS_DIR / folder_name
             folder.mkdir(parents=True, exist_ok=True) # Create empty folder if user hasn't yet
             
@@ -284,7 +287,22 @@ def plot_master_heatmap(data):
 
 
 def main():
-    print("Initializing Violations Only 3x3 Evaluation Suite...")
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--version", required=True,
+        help="Run version tag of the VO results to plot (e.g. v5, v6). Determines "
+             "both the result folders read (vo-<phase>-<tier>-<version>) and the "
+             "output directory (plots_vo_<version>)."
+    )
+    args = parser.parse_args()
+
+    global VERSION, PLOTS_DIR
+    VERSION = args.version
+    PLOTS_DIR = RESULTS_DIR / f"plots_vo_{VERSION}"
+    PLOTS_DIR.mkdir(parents=True, exist_ok=True)
+
+    print(f"Initializing Violations Only 3x3 Evaluation Suite (version={VERSION})...")
     data = load_all_metrics()
     
     print("\nGenerating comprehensive cross-model and cross-phase plots...")

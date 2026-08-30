@@ -12,8 +12,9 @@
 #SBATCH --mail-user=nabeel.shan@ucalgary.ca
 
 TIER=$1
-if [ -z "$TIER" ]; then
-    echo "Error: TIER argument missing (e.g., 2b, 4b, 8b)"
+VERSION=$2
+if [ -z "$TIER" ] || [ -z "$VERSION" ]; then
+    echo "Error: Arguments missing (Usage: hpc_baseline_vo.sh <tier> <version>, e.g. 2b v5)"
     exit 1
 fi
 
@@ -53,11 +54,11 @@ echo "======================================================================"
 # We use a dummy variant name to save the results in a unique folder
 python -m experiments.run_inference \
     --tier ${TIER} \
-    --run_name vo-baseline-${TIER}-v4 \
+    --run_name vo-baseline-${TIER}-${VERSION} \
     --batch_size 32 \
     --task violations_only
 
-PREDS_DIR="$HPC_DRIVE_ROOT/results/inference/vo-baseline-${TIER}-v4"
+PREDS_DIR="$HPC_DRIVE_ROOT/results/inference/vo-baseline-${TIER}-${VERSION}"
 PREDS_FILE="$PREDS_DIR/predictions.jsonl"
 
 echo "======================================================================"
@@ -79,7 +80,7 @@ python -m experiments.run_evaluation \
     --output_dir "$EVAL_OUT_DIR" \
     --skip_spice \
     --wandb_project "vlm-safety-evals" \
-    --wandb_run_name "qwen3-${TIER}-vo-baseline-v4-repaired" \
+    --wandb_run_name "qwen3-${TIER}-vo-baseline-${VERSION}-repaired" \
     --task violations_only
 
 echo "======================================================================"

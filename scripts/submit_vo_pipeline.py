@@ -3,6 +3,10 @@ import subprocess
 import argparse
 import sys
 import re
+import os
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from core.naming import merged_checkpoint_name
 
 def submit_job(script_path, args, dependencies=None, mem=None, time=None):
     cmd = ["sbatch"]
@@ -57,6 +61,12 @@ def preload_model(tier):
 def main():
     parser = argparse.ArgumentParser(description="Submit Violations Only Pipeline to SLURM")
     parser.add_argument("--tiers", nargs="+", default=["2b", "4b", "8b"], help="Model tiers to run")
+    parser.add_argument(
+        "--version", required=True,
+        help="Run version tag (e.g. v5, v6). Stamped into every variant name this "
+             "pipeline produces (baseline/SFT/merge/GRPO) — the only thing you need "
+             "to change to start a fresh versioned run."
+    )
     args = parser.parse_args()
     
     # Memory configurations (adjust as needed based on HPC constraints)
@@ -79,16 +89,18 @@ def main():
         # 0. Pre-download the model on the login node
         preload_model(tier)
         
-        # Dynamic variant naming
-        sft_variant = f"vo-sft-{tier}-v4"
-        merged_variant = f"merged-sft-{tier}-v4"
-        grpo_variant = f"vo-grpo-{tier}-v4"
-        
+        # Dynamic variant naming — args.version is the single source of truth.
+        # merged_variant is task-namespaced (merged-vo-sft-...) so it can never
+        # collide with the unified pipeline's merged checkpoint at the same version.
+        sft_variant = f"vo-sft-{tier}-{args.version}"
+        merged_variant = merged_checkpoint_name("violations_only", tier, args.version)
+        grpo_variant = f"vo-grpo-{tier}-{args.version}"
+
         # 1. Baseline Evaluation (No dependencies)
         baseline_mem = mem_config["baseline"].get(tier, "150G")
         baseline_job = submit_job(
             script_path="scripts/hpc_baseline_vo.sh",
-            args=[tier],
+            args=[tier, args.version],
             mem=baseline_mem,
             time=time_config["baseline"]
         )

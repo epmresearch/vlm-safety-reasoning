@@ -11,7 +11,7 @@ training step would send through _tokenize_prompts.
 
 Usage:
     python scripts/test_no_unsloth_tokenize.py \
-        --merged_path /home/$USER/vlm-finetuning-project1/checkpoints/qwen3vl-2b/merged-sft-2b-v4 \
+        --merged_path /home/$USER/vlm-finetuning-project1/checkpoints/qwen3vl-2b/merged-vo-sft-2b-vN \
         --raw_hf_path unsloth/Qwen3-VL-2B-Instruct
 """
 import argparse

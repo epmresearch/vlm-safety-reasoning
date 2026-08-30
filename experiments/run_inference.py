@@ -87,8 +87,16 @@ def main():
         # guess — but if that guess also can't find a merged model, abort rather than silently
         # evaluating Base+GRPO (which drops the entire SFT step from the result).
         if base_model_override is None and "grpo" in args.variant.lower():
-            # e.g., vo-grpo-2b-v4 -> merged-sft-2b-v4 (assumes the standard naming convention)
-            merged_base = get_drive_path("checkpoints", f"qwen3vl-{args.tier}", f"merged-sft-{args.tier}-v4")
+            # e.g., vo-grpo-2b-vN -> merged-vo-sft-2b-vN (task-namespaced so unified and
+            # violations_only merged checkpoints can never collide at the same version —
+            # see core.naming.merged_checkpoint_name). Derives the version from the
+            # variant itself (not hardcoded) so this guess stays correct across bumps.
+            import re as _re
+            from core.naming import merged_checkpoint_name
+            version_match = _re.search(r"-(v\d+)(?:_[^-]*)?$", args.variant)
+            version = version_match.group(1) if version_match else ""
+            merged_name = merged_checkpoint_name(args.task, args.tier, version)
+            merged_base = get_drive_path("checkpoints", f"qwen3vl-{args.tier}", merged_name)
 
             import os
             if os.path.exists(os.path.join(merged_base, "config.json")):

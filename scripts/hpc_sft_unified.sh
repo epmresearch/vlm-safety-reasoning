@@ -1,16 +1,22 @@
 #!/usr/bin/env bash
-#SBATCH --job-name=vlm-eval-grpo-v3
+#SBATCH --job-name=vlm-sft-unified
 #SBATCH --partition=gpu-h100
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
-#SBATCH --mem=80G
 #SBATCH --gres=gpu:h100:1
 #SBATCH --time=12:00:00
-#SBATCH --output=/home/%u/vlm-finetuning-project1/logs/eval_grpo_v3_%j.out
-#SBATCH --error=/home/%u/vlm-finetuning-project1/logs/eval_grpo_v3_%j.err
+#SBATCH --output=/home/%u/vlm-finetuning-project1/logs/sft_unified_%j.out
+#SBATCH --error=/home/%u/vlm-finetuning-project1/logs/sft_unified_%j.err
 #SBATCH --mail-type=BEGIN,END,FAIL
 #SBATCH --mail-user=nabeel.shan@ucalgary.ca
+
+TIER=$1
+VARIANT=$2
+if [ -z "$TIER" ] || [ -z "$VARIANT" ]; then
+    echo "Error: Arguments missing (Usage: hpc_sft_unified.sh <tier> <variant>)"
+    exit 1
+fi
 
 echo "Job started: $(date)"
 echo "Node: $SLURMD_NODENAME"
@@ -21,7 +27,6 @@ module purge
 module load gcc/13.3.0
 module load python/3.12.5
 
-# Inject Portable Java for pycocoevalcap metrics (METEOR/CIDEr)
 export PATH="$HOME/scratch/jdk-21.0.2/bin:$PATH"
 export JAVA_HOME="$HOME/scratch/jdk-21.0.2"
 
@@ -38,37 +43,46 @@ export WANDB_DIR="$HOME/scratch/wandb"
 mkdir -p "$WANDB_DIR"
 
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+export TOKENIZERS_PARALLELISM=false
+
+if [ -f ".env" ]; then
+    set -a; source .env; set +a
+fi
 
 HPC_DRIVE_ROOT="/home/$USER/vlm-finetuning-project1"
 export VLM_DATA_ROOT="$HPC_DRIVE_ROOT"
 
 echo "======================================================================"
-echo "[PHASE 1/3] Running Inference on 2B GRPO Model (Auto-detect Checkpoint)"
+echo "[STEP 1/4] Running SFT on ${TIER} model (Unified Task)"
 echo "======================================================================"
+python -m experiments.run_sft \
+    --tier ${TIER} \
+    --variant ${VARIANT} \
+    --task unified
 
-# Dynamically find the latest checkpoint folder
-CHK_DIR=$(ls -td $HPC_DRIVE_ROOT/checkpoints/qwen3vl-2b/unified-grpo-v3/checkpoint-* | head -1)
-CHK_NAME=$(basename "$CHK_DIR")
-echo "Auto-detected latest checkpoint: $CHK_NAME"
-
+echo "======================================================================"
+echo "[STEP 2/4] Running Inference on Final SFT Checkpoint"
+echo "======================================================================"
 python -m experiments.run_inference \
-    --tier 2b \
-    --variant unified-grpo-v3 \
-    --checkpoint "$CHK_NAME" \
-    --batch_size 32
+    --tier ${TIER} \
+    --variant ${VARIANT} \
+    --checkpoint final \
+    --batch_size 32 \
+    --task unified
 
-PREDS_DIR="$HPC_DRIVE_ROOT/results/inference/unified-grpo-v3_$CHK_NAME"
+PREDS_DIR="$HPC_DRIVE_ROOT/results/inference/${VARIANT}_final"
 PREDS_FILE="$PREDS_DIR/predictions.jsonl"
 
 echo "======================================================================"
-echo "[PHASE 2/3] Running Structural Repair"
+echo "[STEP 3/4] Running Structural Repair"
 echo "======================================================================"
 python preprocessing/structural_repair.py \
     --input "$PREDS_FILE" \
-    --output "$PREDS_DIR/repair_applied/predictions_repaired.jsonl"
+    --output "$PREDS_DIR/repair_applied/predictions_repaired.jsonl" \
+    --task unified
 
 echo "======================================================================"
-echo "[PHASE 3/3] Running Full Evaluation Pipeline"
+echo "[STEP 4/4] Running Full Evaluation Pipeline"
 echo "======================================================================"
 REPAIRED_FILE="$PREDS_DIR/repair_applied/predictions_repaired.jsonl"
 EVAL_OUT_DIR="$PREDS_DIR/evaluation_results"
@@ -78,9 +92,9 @@ python -m experiments.run_evaluation \
     --output_dir "$EVAL_OUT_DIR" \
     --skip_spice \
     --wandb_project "vlm-safety-evals" \
-    --wandb_run_name "qwen3-2b-grpo-v3-repaired"
+    --wandb_run_name "qwen3-${TIER}-${VARIANT}-repaired" \
+    --task unified
 
 echo "======================================================================"
-echo "GRPO V3 Evaluation completed successfully: $(date)"
-echo "Metrics saved to: $EVAL_OUT_DIR/metrics.json"
+echo "SFT and Evaluation completed successfully: $(date)"
 echo "======================================================================"

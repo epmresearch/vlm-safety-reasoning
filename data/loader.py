@@ -189,6 +189,35 @@ def load_processed_dataset() -> DatasetDict:
     return dataset
 
 
+def load_grpo_pool():
+    """Loads the pre-built, balanced GRPO training pool.
+
+    Built once, offline, by data/build_grpo_pool.py from the non-augmented
+    base dataset (datasets/processed): the full val split + every train
+    violation image + a matching count of train safe images, so the pool is
+    ~50/50 safe/violation. Deliberately excludes the pixel-augmented /
+    oversampled duplicate rows that datasets/augmented (used by SFT) has,
+    since GRPO trains for a single epoch (configs/grpo.yaml) and duplicate
+    or near-duplicate prompts in one pass produce redundant reward groups.
+
+    Returns:
+        A flat (non-split) HF Dataset — every row in it is already selected
+        for GRPO training, no further filtering/oversampling needed.
+    """
+    base_cfg = load_base_config()
+    pool_path = get_drive_path(base_cfg["dataset"].get("grpo_pool_subdir", "datasets/grpo_pool"))
+
+    if not Path(pool_path).exists():
+        raise FileNotFoundError(
+            f"No GRPO pool found at {pool_path}. Run `python data/build_grpo_pool.py` first."
+        )
+
+    logger.info(f"Loading GRPO training pool from disk: {pool_path}")
+    dataset = load_from_disk(str(pool_path))
+    logger.info(f"Loaded GRPO pool: {len(dataset)} samples")
+    return dataset
+
+
 if __name__ == "__main__":
     splits = load_processed_dataset()
     for name, split in splits.items():

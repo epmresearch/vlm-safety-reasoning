@@ -1,28 +1,41 @@
 #!/usr/bin/env python3
+"""
+Master SLURM orchestrator for the Unified task pipeline — mirrors
+scripts/submit_vo_pipeline.py exactly (same dependency chain, same
+per-phase scripts, same --version-driven naming) so both pipelines are
+submitted and reasoned about the same way.
+
+Usage:
+    python scripts/submit_unified_pipeline.py --tiers 2b 4b 8b --version v5
+"""
 import subprocess
 import argparse
 import sys
 import re
+import os
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from core.naming import merged_checkpoint_name
 
 def submit_job(script_path, args, dependencies=None, mem=None, time=None):
     cmd = ["sbatch"]
-    
+
     if dependencies:
         # dependencies can be a list of job ids
         deps_str = ":".join(str(d) for d in dependencies)
         cmd.append(f"--dependency=afterok:{deps_str}")
-        
+
     if mem:
         cmd.append(f"--mem={mem}")
-        
+
     if time:
         cmd.append(f"--time={time}")
-        
+
     cmd.append(script_path)
     cmd.extend(args)
-    
+
     print(f"Running: {' '.join(cmd)}")
-    
+
     # We use a dummy submission for local testing/Windows, but on HPC it will run sbatch
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, check=True)
@@ -55,83 +68,86 @@ def preload_model(tier):
         print(f"Warning: Failed to pre-download {model_name}. Jobs may experience cache locking issues.\n")
 
 def main():
-    parser = argparse.ArgumentParser(description="Submit Unified Pipeline to SLURM")
-    parser.add_argument("--tiers", nargs="+", default=["8b"], help="Model tiers to run (Unified only supports 8b right now)")
+    parser = argparse.ArgumentParser(description="Submit Unified Task Pipeline to SLURM")
+    parser.add_argument("--tiers", nargs="+", default=["2b", "4b", "8b"], help="Model tiers to run")
+    parser.add_argument(
+        "--version", required=True,
+        help="Run version tag (e.g. v4, v5). Stamped into every variant name this "
+             "pipeline produces (baseline/SFT/merge/GRPO) — the only thing you need "
+             "to change to start a fresh versioned run. Independent of the "
+             "violations_only pipeline's own --version — the two are versioned "
+             "separately (see submit_vo_pipeline.py)."
+    )
     args = parser.parse_args()
-    
+
     # Memory configurations (adjust as needed based on HPC constraints)
+    # GRPO is memory intensive due to multiple reference models in vram
     mem_config = {
-        "baseline": {"8b": "150G"},
-        "sft": {"8b": "150G"},
-        "grpo": {"8b": "250G"}
+        "baseline": {"2b": "150G", "4b": "150G", "8b": "150G"},
+        "sft": {"2b": "150G", "4b": "150G", "8b": "150G"},
+        "grpo": {"2b": "250G", "4b": "250G", "8b": "250G"}
     }
-    
+
     time_config = {
         "baseline": "12:00:00",
         "sft": "12:00:00",
         "grpo": "24:00:00"
     }
-    
+
     for tier in args.tiers:
-        if tier.lower() != "8b":
-            print(f"Skipping {tier} - Unified pipeline scripts currently only support 8b.")
-            continue
-            
         print(f"\n{'='*50}\nScheduling Unified Pipeline for Qwen3-VL-{tier.upper()}\n{'='*50}")
-        
+
         # 0. Pre-download the model on the login node
         preload_model(tier)
-        
+
+        # Dynamic variant naming — args.version is the single source of truth.
+        # sft_variant/grpo_variant follow the existing unified-<phase>-<tier>-<version>
+        # convention; merged_variant is task-namespaced (merged-unified-sft-...) so it
+        # can never collide with the VO pipeline's merged checkpoint at the same version.
+        sft_variant = f"unified-sft-{tier}-{args.version}"
+        merged_variant = merged_checkpoint_name("unified", tier, args.version)
+        grpo_variant = f"unified-grpo-{tier}-{args.version}"
+
         # 1. Baseline Evaluation (No dependencies)
         baseline_mem = mem_config["baseline"].get(tier, "150G")
         baseline_job = submit_job(
-            script_path=f"scripts/eval_baseline_8b.sh",
-            args=[],
+            script_path="scripts/hpc_baseline_unified.sh",
+            args=[tier, args.version],
             mem=baseline_mem,
             time=time_config["baseline"]
         )
-        
+
         # 2. SFT + Evaluation (No dependencies, runs in parallel with Baseline)
         sft_mem = mem_config["sft"].get(tier, "150G")
         sft_job = submit_job(
-            script_path=f"scripts/run_sft_8b.sh",
-            args=[],
+            script_path="scripts/hpc_sft_unified.sh",
+            args=[tier, sft_variant],
             mem=sft_mem,
             time=time_config["sft"]
         )
-        
-        # 3. Eval SFT (Depends on SFT finishing)
-        eval_sft_job = submit_job(
-            script_path=f"scripts/eval_sft_8b.sh",
-            args=[],
+
+        # 3. Merge SFT adapter into base model (depends on SFT finishing)
+        # This creates the correct KL reference model for GRPO.
+        merge_mem = "80G"
+        merge_job = submit_job(
+            script_path="scripts/hpc_merge_sft_unified.sh",
+            args=[tier, sft_variant, merged_variant],
             dependencies=[sft_job] if sft_job != "UNKNOWN" else None,
-            mem="150G",
-            time="04:00:00"
+            mem=merge_mem,
+            time="01:30:00"
         )
-        
-        # 4. GRPO (Depends on SFT finishing successfully)
+
+        # 4. GRPO + Evaluation (Depends on Merge finishing successfully)
         grpo_mem = mem_config["grpo"].get(tier, "250G")
         grpo_job = submit_job(
-            script_path=f"scripts/run_grpo_8b.sh",
-            args=[],
-            dependencies=[sft_job] if sft_job != "UNKNOWN" else None,
+            script_path="scripts/hpc_grpo_unified.sh",
+            args=[tier, grpo_variant, merged_variant],
+            dependencies=[merge_job] if merge_job != "UNKNOWN" else None,
             mem=grpo_mem,
             time=time_config["grpo"]
         )
-        
-        # 5. Eval GRPO (Depends on GRPO finishing successfully)
-        eval_grpo_job = submit_job(
-            script_path=f"scripts/eval_grpo_8b.sh",
-            args=[],
-            dependencies=[grpo_job] if grpo_job != "UNKNOWN" else None,
-            mem="150G",
-            time="04:00:00"
-        )
-        
-        print(f"Unified Pipeline scheduled for {tier}:")
-        print(f"  - Baseline: {baseline_job}")
-        print(f"  - SFT -> SFT_Eval: {sft_job} -> {eval_sft_job}")
-        print(f"  - SFT -> GRPO -> GRPO_Eval: {sft_job} -> {grpo_job} -> {eval_grpo_job}")
+
+        print(f"Pipeline scheduled for {tier}: Baseline({baseline_job}), SFT({sft_job}) -> Merge({merge_job}) -> GRPO({grpo_job})")
 
 if __name__ == "__main__":
     main()

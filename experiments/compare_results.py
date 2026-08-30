@@ -10,6 +10,7 @@ import pandas as pd
 from core.config import load_config
 from core.io import get_drive_path, ensure_dir
 from core.logging import get_logger
+from core.naming import task_prefix
 from models.model_loader import get_model_info
 
 logger = get_logger(__name__)
@@ -84,27 +85,34 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--tier", default=default_tier, help="Model tier (e.g., 2b, 4b, 8b)")
     parser.add_argument("--task", default="unified", help="Task name: 'unified' or 'violations_only'")
+    parser.add_argument(
+        "--version", required=True,
+        help="Run version tag of the results to compare (e.g. v4, v5). Must match "
+             "the version the baseline/SFT/GRPO runs were produced under."
+    )
     args = parser.parse_args()
 
     model_info = get_model_info(args.tier)
     short_name = model_info["short_name"]
     prefix = args.task
     tier = args.tier
+    version = args.version
 
     if prefix == "unified":
-        baseline_metrics = load_eval_json(short_name, f"baseline_{tier}_v4")
+        baseline_metrics = load_eval_json(short_name, f"baseline_{tier}_{version}")
         if not baseline_metrics:
             baseline_metrics = load_eval_json(short_name, "baseline")
-        sft_metrics = load_eval_json(short_name, f"unified-sft-{tier}-v4_final")
-        grpo_metrics = load_eval_json(short_name, f"unified-grpo-{tier}-v4_final")
+        sft_metrics = load_eval_json(short_name, f"unified-sft-{tier}-{version}_final")
+        grpo_metrics = load_eval_json(short_name, f"unified-grpo-{tier}-{version}_final")
     else:
-        # e.g. violations_only -> vo-sft-v3
+        # e.g. violations_only -> vo-sft-{version}
+        short_prefix = task_prefix(prefix)
         # Baseline might be prefixed or not depending on how it was run
-        baseline_metrics = load_eval_json(short_name, f"vo-baseline-{tier}-v3")
+        baseline_metrics = load_eval_json(short_name, f"{short_prefix}-baseline-{tier}-{version}")
         if not baseline_metrics:
             baseline_metrics = load_eval_json(short_name, f"{prefix}-baseline")
-        sft_metrics = load_eval_json(short_name, f"vo-sft-{tier}-v3_final")
-        grpo_metrics = load_eval_json(short_name, f"vo-grpo-{tier}-v3_final")
+        sft_metrics = load_eval_json(short_name, f"{short_prefix}-sft-{tier}-{version}_final")
+        grpo_metrics = load_eval_json(short_name, f"{short_prefix}-grpo-{tier}-{version}_final")
 
     summary_rows = [
         flatten_metrics(baseline_metrics, "Base"),

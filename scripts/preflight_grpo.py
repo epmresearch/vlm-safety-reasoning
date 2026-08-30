@@ -187,7 +187,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--base_model_override", default=None,
         help="Point preflight at a local merged checkpoint instead of the raw HF base "
-             "(e.g. checkpoints/qwen3vl-2b/merged-sft-2b-v4) to test the exact model+"
+             "(e.g. checkpoints/qwen3vl-2b/merged-vo-sft-2b-vN) to test the exact model+"
              "tokenizer_name loading path used by a real GRPO run.",
     )
     parser.add_argument("--tier", default="2b")
