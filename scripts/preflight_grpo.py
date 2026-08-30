@@ -98,6 +98,13 @@ def run_preflight(task="violations_only", model_id="2b", base_model_override=Non
         processing_class=tokenizer,
     )
 
+    print("\n>>> 4a. Introspecting the actual trainer class hierarchy (pure diagnostics, cannot crash)...")
+    mro = type(trainer).__mro__
+    print("MRO:", [f"{c.__module__}.{c.__name__}" for c in mro])
+    owners = [f"{c.__module__}.{c.__name__}" for c in mro if "_tokenize_prompts" in c.__dict__]
+    print("_tokenize_prompts defined directly on:", owners if owners else "NOWHERE IN MRO")
+    print("hasattr(trainer, '_tokenize_prompts'):", hasattr(trainer, "_tokenize_prompts"))
+
     print("\n>>> 4b. VERIFYING THE FIX: calling _tokenize_prompts on all 4 real, DIFFERENT images at once...")
     real_prompts = [train_data[i]["prompt"] for i in range(len(train_data))]
     for i in range(len(real_prompts)):
@@ -106,13 +113,19 @@ def run_preflight(task="violations_only", model_id="2b", base_model_override=Non
                 for part in msg["content"]:
                     if part.get("type") == "image":
                         part["image"] = train_data[i]["images"][0]
-    fixed_prompt_ids, _, _ = trainer._tokenize_prompts(real_prompts)
-    fixed_lens = [len(p) for p in fixed_prompt_ids]
-    print(f"Per-prompt token lengths (fixed): {fixed_lens}")
-    if min(fixed_lens) > 400:
-        print("✅✅ FIX CONFIRMED: every image in the batch is now properly expanded!")
-    else:
-        print("❌❌ Still collapsing — at least one prompt in the batch is still short.")
+    try:
+        fixed_prompt_ids, _, _ = trainer._tokenize_prompts(real_prompts)
+    except Exception as e:
+        print(f"\n❌❌ Step 4b raised: {type(e).__name__}: {e}")
+        print("(Step 4a's introspection above is the useful output from this run — share it.)")
+        fixed_prompt_ids = None
+    if fixed_prompt_ids is not None:
+        fixed_lens = [len(p) for p in fixed_prompt_ids]
+        print(f"Per-prompt token lengths (fixed): {fixed_lens}")
+        if min(fixed_lens) > 400:
+            print("✅✅ FIX CONFIRMED: every image in the batch is now properly expanded!")
+        else:
+            print("❌❌ Still collapsing — at least one prompt in the batch is still short.")
     
     print(">>> 5. Fetching the first PyTorch batch from the dataloader...")
     dl = trainer.get_train_dataloader()
