@@ -91,6 +91,66 @@ def run_grpo(
     PatchFastRL("GRPO", FastVisionModel)
     from trl import GRPOTrainer, GRPOConfig
 
+    class _PerImageGRPOTrainer(GRPOTrainer):
+        """Works around a confirmed TRL bug: when _tokenize_prompts batches
+        multiple different conversations (each with its own image) into a
+        single apply_chat_template(..., tokenize=True) call, only the FIRST
+        image in the batch gets expanded into real vision tokens — every
+        other prompt collapses to a single unexpanded <|image_pad|>
+        placeholder (confirmed directly: a 2-image batch test returned
+        [795, 239] tokens instead of two properly-expanded lengths, and the
+        real training run's logged prompts showed exactly one image_pad
+        token for every sample). This override tokenizes each conversation
+        one at a time instead, then merges the per-prompt multimodal fields
+        exactly the way TRL's own per-environment branch already does
+        (see the environment_factories branch in vanilla _tokenize_prompts).
+        """
+
+        def _tokenize_prompts(self, prompts: list):
+            import torch as _torch
+            from trl.data_utils import prepare_multimodal_messages
+
+            if not self._is_vlm:
+                return super()._tokenize_prompts(prompts)
+
+            prompts = [prepare_multimodal_messages(prompt) for prompt in prompts]
+
+            images = []
+            has_images = False
+            for prompt in prompts:
+                prompt_images = []
+                for message in prompt:
+                    if isinstance(message["content"], list):
+                        for part in message["content"]:
+                            if part["type"] == "image":
+                                prompt_images.append(part["image"])
+                                has_images = True
+                images.append(prompt_images if prompt_images else None)
+            images = images if has_images else None
+
+            prompt_ids = []
+            multimodal_fields = {}
+            for prompt in prompts:
+                tokenized = self.processing_class.apply_chat_template(
+                    conversation=[prompt],
+                    tools=self.tools or None,
+                    chat_template=self.chat_template,
+                    add_generation_prompt=True,
+                    tokenize=True,
+                    return_dict=True,
+                    **self.chat_template_kwargs,
+                )
+                prompt_ids.append(tokenized["input_ids"][0])
+                for k, v in tokenized.items():
+                    if k not in ("input_ids", "attention_mask"):
+                        multimodal_fields.setdefault(k, []).append(v)
+
+            multimodal_fields = {
+                k: _torch.cat(v) if isinstance(v[0], _torch.Tensor) else [row for prompt_v in v for row in prompt_v]
+                for k, v in multimodal_fields.items()
+            }
+            return prompt_ids, images, multimodal_fields
+
     logger.info(f"Loading model for GRPO: base={hf_path}, adapter={lora_path}")
     
     # Override SFT context window with explicitly defined GRPO context window
@@ -147,31 +207,17 @@ def run_grpo(
         logger.info(f"  Reward component: {func.__name__} (weight={weight:.2f})")
 
     # -----------------------------------------------------------------------
-    # Build GRPO prompt dataset with oversampling
+    # Load the pre-built, balanced GRPO training pool
     # -----------------------------------------------------------------------
-    logger.info("Building GRPO prompt dataset...")
-    from data.loader import load_processed_dataset
-    from datasets import concatenate_datasets
-    raw_dataset = load_processed_dataset()
-    train_split = concatenate_datasets([raw_dataset["train"], raw_dataset["val"]])
-
-    # Apply oversampling to match SFT strategy
-    try:
-        from data.oversampling import build_oversampled_indices
-        train_split = raw_dataset["train"]
-        oversampled_indices, oversample_manifest = build_oversampled_indices(
-            train_split,
-            rule24_multiplier=cfg.get("oversample_rule24_multiplier", 1),
-            rule3_multiplier=cfg.get("oversample_rule3_multiplier", 1),
-        )
-        train_split = train_split.select(oversampled_indices)
-        logger.info(f"Oversample manifest: {oversample_manifest}")
-        logger.info(
-            f"Oversampled training set: {len(raw_dataset['train'])} → "
-            f"{len(train_split)} samples"
-        )
-    except ImportError:
-        logger.warning("Oversampling module not available, using raw train+val split")
+    # Built offline by data/build_grpo_pool.py: full val split + every train
+    # violation image + a matching count of train safe images (~50/50 overall),
+    # drawn from the non-augmented base so no pixel-augmented or duplicated
+    # rows are in the pool (GRPO is a single epoch — duplicates would sit in
+    # the same rollout pool and produce redundant, correlated reward groups).
+    logger.info("Loading pre-built GRPO training pool...")
+    from data.loader import load_grpo_pool
+    train_split = load_grpo_pool()
+    logger.info(f"GRPO pool loaded: {len(train_split)} samples (already balanced)")
 
     from data.preprocessor import build_grpo_dataset_for_task
     train_data = build_grpo_dataset_for_task(train_split, task=task, max_samples=max_samples)
@@ -256,7 +302,7 @@ def run_grpo(
 
         grpo_config = GRPOConfig(**grpo_config_kwargs)
 
-        trainer = GRPOTrainer(
+        trainer = _PerImageGRPOTrainer(
             model=model,
             args=grpo_config,
             train_dataset=train_data,
@@ -280,7 +326,7 @@ def run_grpo(
 
         grpo_config = GRPOConfig(**grpo_config_kwargs)
 
-        trainer = GRPOTrainer(
+        trainer = _PerImageGRPOTrainer(
             model=model,
             args=grpo_config,
             train_dataset=train_data,

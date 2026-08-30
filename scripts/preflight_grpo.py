@@ -44,25 +44,92 @@ def run_preflight(task="violations_only", model_id="2b", base_model_override=Non
     
     print(">>> 4. Initializing GRPOTrainer (No training will happen)...")
     from trl import GRPOTrainer, GRPOConfig
-    
+
+    class _PerImageGRPOTrainer(GRPOTrainer):
+        """Same fix as models/grpo_trainer.py — see that file for the full
+        explanation. TRL's batched apply_chat_template call only expands the
+        FIRST image when given multiple different images at once; this
+        tokenizes each conversation individually instead."""
+
+        def _tokenize_prompts(self, prompts: list):
+            import torch as _torch
+            from trl.data_utils import prepare_multimodal_messages
+
+            if not self._is_vlm:
+                return super()._tokenize_prompts(prompts)
+
+            prompts = [prepare_multimodal_messages(prompt) for prompt in prompts]
+
+            images = []
+            has_images = False
+            for prompt in prompts:
+                prompt_images = []
+                for message in prompt:
+                    if isinstance(message["content"], list):
+                        for part in message["content"]:
+                            if part["type"] == "image":
+                                prompt_images.append(part["image"])
+                                has_images = True
+                images.append(prompt_images if prompt_images else None)
+            images = images if has_images else None
+
+            prompt_ids = []
+            multimodal_fields = {}
+            for prompt in prompts:
+                tokenized = self.processing_class.apply_chat_template(
+                    conversation=[prompt],
+                    tools=self.tools or None,
+                    chat_template=self.chat_template,
+                    add_generation_prompt=True,
+                    tokenize=True,
+                    return_dict=True,
+                    **self.chat_template_kwargs,
+                )
+                prompt_ids.append(tokenized["input_ids"][0])
+                for k, v in tokenized.items():
+                    if k not in ("input_ids", "attention_mask"):
+                        multimodal_fields.setdefault(k, []).append(v)
+
+            multimodal_fields = {
+                k: _torch.cat(v) if isinstance(v[0], _torch.Tensor) else [row for prompt_v in v for row in prompt_v]
+                for k, v in multimodal_fields.items()
+            }
+            return prompt_ids, images, multimodal_fields
+
     # Mock reward function just to satisfy the trainer
     def mock_reward(prompts, completions, **kwargs):
         return [1.0] * len(prompts)
-        
+
     grpo_config = GRPOConfig(
         output_dir="./tmp_preflight",
         per_device_train_batch_size=1,
         remove_unused_columns=False,
         report_to="none" # Disable wandb for this test
     )
-    
-    trainer = GRPOTrainer(
+
+    trainer = _PerImageGRPOTrainer(
         model=model,
         args=grpo_config,
         train_dataset=train_data,
         reward_funcs=[mock_reward],
         processing_class=tokenizer,
     )
+
+    print("\n>>> 4b. VERIFYING THE FIX: calling _tokenize_prompts on all 4 real, DIFFERENT images at once...")
+    real_prompts = [train_data[i]["prompt"] for i in range(len(train_data))]
+    for i in range(len(real_prompts)):
+        for msg in real_prompts[i]:
+            if isinstance(msg.get("content"), list):
+                for part in msg["content"]:
+                    if part.get("type") == "image":
+                        part["image"] = train_data[i]["images"][0]
+    fixed_prompt_ids, _, _ = trainer._tokenize_prompts(real_prompts)
+    fixed_lens = [len(p) for p in fixed_prompt_ids]
+    print(f"Per-prompt token lengths (fixed): {fixed_lens}")
+    if min(fixed_lens) > 400:
+        print("✅✅ FIX CONFIRMED: every image in the batch is now properly expanded!")
+    else:
+        print("❌❌ Still collapsing — at least one prompt in the batch is still short.")
     
     print(">>> 5. Fetching the first PyTorch batch from the dataloader...")
     dl = trainer.get_train_dataloader()
