@@ -44,40 +44,7 @@ def run_preflight(task="violations_only", model_id="2b", base_model_override=Non
     
     print(">>> 4. Initializing GRPOTrainer (No training will happen)...")
     from trl import GRPOTrainer, GRPOConfig
-
-    class _PerImageGRPOTrainer(GRPOTrainer):
-        """Same fix as models/grpo_trainer.py — see that file for the full
-        explanation. TRL's batched apply_chat_template call only expands the
-        FIRST image when given multiple different images at once; this
-        tokenizes each conversation individually instead."""
-
-        def _tokenize_prompts(self, prompts: list):
-            # Deliberately does NOT reimplement the original method's
-            # internals (self.tools, self.chat_template, prepare_multimodal_
-            # messages, etc.) — those differ across trl/Unsloth versions and
-            # kept breaking when hand-copied. Instead, call the ORIGINAL,
-            # inherited _tokenize_prompts once per conversation (a batch of
-            # exactly 1), which we've repeatedly confirmed produces correctly
-            # expanded image tokens. Only multi-conversation batches collapse.
-            import torch as _torch
-
-            all_prompt_ids = []
-            all_images = []
-            merged_fields = {}
-            for prompt in prompts:
-                ids_list, imgs_list, fields = super(_PerImageGRPOTrainer, self)._tokenize_prompts([prompt])
-                all_prompt_ids.append(ids_list[0])
-                all_images.append(imgs_list[0] if imgs_list else None)
-                for k, v in fields.items():
-                    merged_fields.setdefault(k, []).append(v)
-
-            merged_fields = {
-                k: _torch.cat(v) if isinstance(v[0], _torch.Tensor)
-                else [row for item in v for row in (item if isinstance(item, list) else [item])]
-                for k, v in merged_fields.items()
-            }
-            images = all_images if any(img is not None for img in all_images) else None
-            return all_prompt_ids, images, merged_fields
+    from models.grpo_trainer import patch_trainer_for_per_image_tokenization
 
     # Mock reward function just to satisfy the trainer
     def mock_reward(prompts, completions, **kwargs):
@@ -90,20 +57,18 @@ def run_preflight(task="violations_only", model_id="2b", base_model_override=Non
         report_to="none" # Disable wandb for this test
     )
 
-    trainer = _PerImageGRPOTrainer(
+    trainer = GRPOTrainer(
         model=model,
         args=grpo_config,
         train_dataset=train_data,
         reward_funcs=[mock_reward],
         processing_class=tokenizer,
     )
+    patch_trainer_for_per_image_tokenization(trainer)
 
-    print("\n>>> 4a. Introspecting the actual trainer class hierarchy (pure diagnostics, cannot crash)...")
-    mro = type(trainer).__mro__
-    print("MRO:", [f"{c.__module__}.{c.__name__}" for c in mro])
-    owners = [f"{c.__module__}.{c.__name__}" for c in mro if "_tokenize_prompts" in c.__dict__]
-    print("_tokenize_prompts defined directly on:", owners if owners else "NOWHERE IN MRO")
-    print("hasattr(trainer, '_tokenize_prompts'):", hasattr(trainer, "_tokenize_prompts"))
+    print("\n>>> 4a. Confirming the monkeypatch actually took effect on this instance...")
+    print("trainer._tokenize_prompts is now:", trainer._tokenize_prompts)
+    print("(should say '_per_image_tokenize_prompts', not an Unsloth/trl bound method)")
 
     print("\n>>> 4b. VERIFYING THE FIX: calling _tokenize_prompts on all 4 real, DIFFERENT images at once...")
     real_prompts = [train_data[i]["prompt"] for i in range(len(train_data))]

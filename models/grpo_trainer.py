@@ -37,6 +37,55 @@ from rewards.unified_reward import (
 logger = get_logger(__name__)
 
 
+def patch_trainer_for_per_image_tokenization(trainer) -> None:
+    """Works around a confirmed bug: when a GRPOTrainer's _tokenize_prompts
+    batches multiple different conversations (each with its own image) into
+    a single apply_chat_template(..., tokenize=True) call, only the FIRST
+    image in the batch gets expanded into real vision tokens — every other
+    prompt collapses to a single unexpanded <|image_pad|> placeholder
+    (confirmed directly: a 2-image batch test returned [795, 239] tokens
+    instead of two properly-expanded lengths, and the real training run's
+    logged prompts showed exactly one image_pad token for every sample).
+
+    Subclassing GRPOTrainer to override _tokenize_prompts does NOT work here:
+    Unsloth's dynamically-rewritten trainer class assigns _tokenize_prompts
+    as a per-INSTANCE attribute inside __init__ (confirmed via MRO
+    introspection — hasattr() finds it, but no class in the MRO defines it,
+    and trl.GRPOTrainer isn't even in the MRO; Unsloth's rewritten class
+    inherits directly from transformers.trainer.Trainer). Since Python's
+    normal attribute lookup checks instance __dict__ before class methods
+    for plain functions, a subclass override is silently shadowed and never
+    actually called. The fix instead monkeypatches the instance's own
+    attribute after construction, capturing the original bound method first
+    and calling it once per conversation (a batch of exactly 1, which we've
+    repeatedly confirmed produces correctly expanded image tokens).
+    """
+    import torch as _torch
+
+    original = trainer._tokenize_prompts
+
+    def _per_image_tokenize_prompts(prompts):
+        all_prompt_ids = []
+        all_images = []
+        merged_fields = {}
+        for prompt in prompts:
+            ids_list, imgs_list, fields = original([prompt])
+            all_prompt_ids.append(ids_list[0])
+            all_images.append(imgs_list[0] if imgs_list else None)
+            for k, v in fields.items():
+                merged_fields.setdefault(k, []).append(v)
+
+        merged_fields = {
+            k: _torch.cat(v) if isinstance(v[0], _torch.Tensor)
+            else [row for item in v for row in (item if isinstance(item, list) else [item])]
+            for k, v in merged_fields.items()
+        }
+        images = all_images if any(img is not None for img in all_images) else None
+        return all_prompt_ids, images, merged_fields
+
+    trainer._tokenize_prompts = _per_image_tokenize_prompts
+
+
 def _check_trl_supports_reward_weights() -> bool:
     """Check if installed TRL version supports reward_weights in GRPOConfig."""
     try:
@@ -90,49 +139,6 @@ def run_grpo(
     from unsloth import FastVisionModel, PatchFastRL
     PatchFastRL("GRPO", FastVisionModel)
     from trl import GRPOTrainer, GRPOConfig
-
-    class _PerImageGRPOTrainer(GRPOTrainer):
-        """Works around a confirmed TRL bug: when _tokenize_prompts batches
-        multiple different conversations (each with its own image) into a
-        single apply_chat_template(..., tokenize=True) call, only the FIRST
-        image in the batch gets expanded into real vision tokens — every
-        other prompt collapses to a single unexpanded <|image_pad|>
-        placeholder (confirmed directly: a 2-image batch test returned
-        [795, 239] tokens instead of two properly-expanded lengths, and the
-        real training run's logged prompts showed exactly one image_pad
-        token for every sample). This override tokenizes each conversation
-        one at a time instead, then merges the per-prompt multimodal fields
-        exactly the way TRL's own per-environment branch already does
-        (see the environment_factories branch in vanilla _tokenize_prompts).
-        """
-
-        def _tokenize_prompts(self, prompts: list):
-            # Deliberately does NOT reimplement the original method's
-            # internals (self.tools, self.chat_template, prepare_multimodal_
-            # messages, etc.) — those differ across trl/Unsloth versions and
-            # kept breaking when hand-copied. Instead, call the ORIGINAL,
-            # inherited _tokenize_prompts once per conversation (a batch of
-            # exactly 1), which we've repeatedly confirmed produces correctly
-            # expanded image tokens. Only multi-conversation batches collapse.
-            import torch as _torch
-
-            all_prompt_ids = []
-            all_images = []
-            merged_fields = {}
-            for prompt in prompts:
-                ids_list, imgs_list, fields = super(_PerImageGRPOTrainer, self)._tokenize_prompts([prompt])
-                all_prompt_ids.append(ids_list[0])
-                all_images.append(imgs_list[0] if imgs_list else None)
-                for k, v in fields.items():
-                    merged_fields.setdefault(k, []).append(v)
-
-            merged_fields = {
-                k: _torch.cat(v) if isinstance(v[0], _torch.Tensor)
-                else [row for item in v for row in (item if isinstance(item, list) else [item])]
-                for k, v in merged_fields.items()
-            }
-            images = all_images if any(img is not None for img in all_images) else None
-            return all_prompt_ids, images, merged_fields
 
     logger.info(f"Loading model for GRPO: base={hf_path}, adapter={lora_path}")
     
@@ -300,7 +306,7 @@ def run_grpo(
 
         grpo_config = GRPOConfig(**grpo_config_kwargs)
 
-        trainer = _PerImageGRPOTrainer(
+        trainer = GRPOTrainer(
             model=model,
             args=grpo_config,
             train_dataset=train_data,
@@ -312,6 +318,7 @@ def run_grpo(
                 ConsoleLogCallback()
             ],
         )
+        patch_trainer_for_per_image_tokenization(trainer)
         logger.info(
             f"Using TRL native multi-reward mode: "
             f"{len(reward_funcs)} functions, weights={reward_weights}"
@@ -324,7 +331,7 @@ def run_grpo(
 
         grpo_config = GRPOConfig(**grpo_config_kwargs)
 
-        trainer = _PerImageGRPOTrainer(
+        trainer = GRPOTrainer(
             model=model,
             args=grpo_config,
             train_dataset=train_data,
@@ -336,6 +343,7 @@ def run_grpo(
                 ConsoleLogCallback()
             ],
         )
+        patch_trainer_for_per_image_tokenization(trainer)
         logger.info(
             "Using single composite reward mode (TRL reward_weights not available)"
         )
