@@ -365,6 +365,42 @@ def run_grpo(
         f"num_generations={cfg['num_generations']}, beta={cfg['beta']}"
     )
 
+    # ------------------------------------------------------------------
+    # TEMPORARY DEBUG PROBE — remove once the images-reaching-model question
+    # is settled. Patches the processor CLASS's __call__ (instance-level
+    # patching doesn't work for `obj(...)` syntax, which always dispatches
+    # through the type) so we see EXACTLY what the real trainer/Unsloth code
+    # passes to the processor on the very first real call during training —
+    # ground truth, not a hand-built reconstruction of the code path.
+    # ------------------------------------------------------------------
+    _debug_state = {"logged": False}
+    _orig_processor_call = type(tokenizer).__call__
+
+    def _debug_processor_call(self, *args, **kwargs):
+        result = _orig_processor_call(self, *args, **kwargs)
+        if not _debug_state["logged"]:
+            _debug_state["logged"] = True
+            type(tokenizer).__call__ = _orig_processor_call
+            text_arg = kwargs.get("text", args[0] if args else None)
+            images_arg = kwargs.get("images")
+            logger.info(
+                f"[DEBUG first processor call] num text items="
+                f"{len(text_arg) if text_arg is not None else 'N/A'}, "
+                f"images arg len={len(images_arg) if images_arg is not None else 'N/A'}"
+            )
+            if isinstance(result, dict) or hasattr(result, "keys"):
+                logger.info(f"[DEBUG first processor call] output keys: {list(result.keys())}")
+                if "input_ids" in result:
+                    logger.info(f"[DEBUG] input_ids.shape={result['input_ids'].shape}")
+                if "pixel_values" in result:
+                    logger.info(f"[DEBUG] pixel_values.shape={result['pixel_values'].shape}")
+                if "image_grid_thw" in result:
+                    logger.info(f"[DEBUG] image_grid_thw={result['image_grid_thw']}")
+        return result
+
+    type(tokenizer).__call__ = _debug_processor_call
+    # ------------------------------------------------------------------
+
     try:
         trainer.train(resume_from_checkpoint=resume_from_checkpoint)
         
