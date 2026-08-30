@@ -110,9 +110,9 @@ def run_grpo(
             import torch as _torch
             from trl.data_utils import prepare_multimodal_messages
 
-            if not self._is_vlm:
-                return super()._tokenize_prompts(prompts)
-
+            # This pipeline's prompts are always conversational and always
+            # contain an image, so no need to branch on self._is_vlm (which
+            # Unsloth's rewritten trainer doesn't reliably expose here).
             prompts = [prepare_multimodal_messages(prompt) for prompt in prompts]
 
             images = []
