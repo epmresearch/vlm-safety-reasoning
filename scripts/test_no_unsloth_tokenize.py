@@ -12,6 +12,7 @@ Usage:
         --raw_hf_path unsloth/Qwen3-VL-2B-Instruct
 """
 import argparse
+import importlib.machinery
 import sys
 import types
 from PIL import Image
@@ -26,20 +27,31 @@ from peft import LoraConfig, get_peft_model
 # even though we never set use_vllm=True. vllm isn't installed in this env
 # (only pulled in indirectly when Unsloth is imported first), so stub just
 # enough of it to satisfy the import chain — never actually exercised below.
+# Every stub module needs a real __spec__, or importlib.util.find_spec()
+# raises ValueError when it finds the module already cached in sys.modules
+# with no spec attached.
 if "vllm" not in sys.modules:
-    for name in [
-        "vllm",
-        "vllm.distributed",
-        "vllm.distributed.device_communicators",
-        "vllm.distributed.device_communicators.pynccl",
-    ]:
-        sys.modules[name] = types.ModuleType(name)
-    sys.modules["vllm.distributed.device_communicators.pynccl"].PyNcclCommunicator = object
-    sys.modules["vllm"].distributed = sys.modules["vllm.distributed"]
-    sys.modules["vllm.distributed"].device_communicators = sys.modules["vllm.distributed.device_communicators"]
-    sys.modules["vllm.distributed.device_communicators"].pynccl = sys.modules[
-        "vllm.distributed.device_communicators.pynccl"
-    ]
+    def _make_stub(name):
+        mod = types.ModuleType(name)
+        mod.__spec__ = importlib.machinery.ModuleSpec(name, loader=None)
+        sys.modules[name] = mod
+        return mod
+
+    _vllm = _make_stub("vllm")
+    _dist = _make_stub("vllm.distributed")
+    _dc = _make_stub("vllm.distributed.device_communicators")
+    _pynccl = _make_stub("vllm.distributed.device_communicators.pynccl")
+    _pynccl.PyNcclCommunicator = object
+    _vllm.distributed = _dist
+    _dist.device_communicators = _dc
+    _dc.pynccl = _pynccl
+
+# Some trl versions gate their vllm import behind is_vllm_available(), which
+# tries to parse our stub's (nonexistent) package version and crashes with
+# "Invalid version: 'N/A'". Neutralize the check itself so it never tries.
+import trl.import_utils as _trl_import_utils
+_trl_import_utils._vllm_available = False
+_trl_import_utils.is_vllm_available = lambda: False
 
 from trl import GRPOTrainer, GRPOConfig
 
