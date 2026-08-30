@@ -44,7 +44,6 @@ def run_preflight(task="violations_only", model_id="2b", base_model_override=Non
     
     print(">>> 4. Initializing GRPOTrainer (No training will happen)...")
     from trl import GRPOTrainer, GRPOConfig
-    from models.grpo_trainer import patch_trainer_for_per_image_tokenization
 
     # Mock reward function just to satisfy the trainer
     def mock_reward(prompts, completions, **kwargs):
@@ -65,50 +64,6 @@ def run_preflight(task="violations_only", model_id="2b", base_model_override=Non
         processing_class=tokenizer,
     )
 
-    print("\n>>> 4a. Broad introspection of the REAL trainer instance (pure diagnostics, cannot crash)...")
-    keywords = ("tokenize", "prompt", "generat", "multimodal", "chat_template", "_is_vlm", "tools")
-    candidates = sorted(name for name in dir(trainer) if any(kw in name.lower() for kw in keywords))
-    print(f"Candidate attributes/methods ({len(candidates)}):")
-    for name in candidates:
-        try:
-            val = getattr(trainer, name)
-            kind = "method" if callable(val) else "attribute"
-            print(f"  [{kind}] {name} = {val!r:.120}")
-        except Exception as e:
-            print(f"  [ERROR reading] {name}: {e}")
-    print(f"type(trainer) = {type(trainer)}")
-    print(f"type(trainer).__mro__ = {[f'{c.__module__}.{c.__name__}' for c in type(trainer).__mro__]}")
-
-    print("\n>>> 4b. Attempting the per-image tokenization patch (non-fatal if it fails)...")
-    try:
-        patch_trainer_for_per_image_tokenization(trainer)
-        print("✅ Patch applied without error. trainer._tokenize_prompts is now:", trainer._tokenize_prompts)
-        patch_ok = True
-    except Exception as e:
-        print(f"❌ Patch failed: {type(e).__name__}: {e}")
-        print("(Step 4a's candidate list above is what we actually need now — share it.)")
-        patch_ok = False
-
-    if patch_ok:
-        print("\n>>> 4c. VERIFYING THE FIX: calling _tokenize_prompts on all 4 real, DIFFERENT images at once...")
-        real_prompts = [train_data[i]["prompt"] for i in range(len(train_data))]
-        for i in range(len(real_prompts)):
-            for msg in real_prompts[i]:
-                if isinstance(msg.get("content"), list):
-                    for part in msg["content"]:
-                        if part.get("type") == "image":
-                            part["image"] = train_data[i]["images"][0]
-        try:
-            fixed_prompt_ids, _, _ = trainer._tokenize_prompts(real_prompts)
-            fixed_lens = [len(p) for p in fixed_prompt_ids]
-            print(f"Per-prompt token lengths (fixed): {fixed_lens}")
-            if min(fixed_lens) > 400:
-                print("✅✅ FIX CONFIRMED: every image in the batch is now properly expanded!")
-            else:
-                print("❌❌ Still collapsing — at least one prompt in the batch is still short.")
-        except Exception as e:
-            print(f"❌❌ Step 4c raised: {type(e).__name__}: {e}")
-    
     print(">>> 5. Fetching the first PyTorch batch from the dataloader...")
     dl = trainer.get_train_dataloader()
     batch = next(iter(dl))
@@ -148,12 +103,12 @@ def run_preflight(task="violations_only", model_id="2b", base_model_override=Non
         
         # Check if images survived into the batch
         print("\n--- SANITY CHECK 1: Data structure ---")
-        has_images = "images" in first and first["images"] is not None and len(first["images"]) > 0
-        if has_images:
-            img = first["images"][0]
-            print(f"✅ Images present in batch! Type: {type(img)}, Size: {getattr(img, 'size', 'N/A')}")
+        has_image = "image" in first and first["image"] is not None
+        if has_image:
+            img = first["image"]
+            print(f"✅ Image present in batch! Type: {type(img)}, Size: {getattr(img, 'size', 'N/A')}")
         else:
-            print("❌ FAIL: 'images' key missing or empty in batch samples!")
+            print("❌ FAIL: 'image' key missing or empty in batch samples!")
             
         # Check prompt content for image placeholder
         prompt = first.get("prompt", [])
@@ -182,26 +137,26 @@ def run_preflight(task="violations_only", model_id="2b", base_model_override=Non
         # Grab the first raw sample from the dataset
         first_sample = train_data[0]
         prompt_messages = first_sample["prompt"]
-        pil_images = first_sample["images"]  # list of PIL images from the "images" column
-        
+        pil_image = first_sample["image"]  # single PIL image from the "image" column
+
         # Step A: Apply chat template — produces text with <|image_pad|> placeholders
         # Note: process_vision_info is NOT used here because our prompt uses
-        # {"type": "image"} placeholders. The images come from the separate "images" column.
+        # {"type": "image"} placeholders. The image comes from the separate "image" column.
         # This is EXACTLY how TRL handles it internally.
         text = tokenizer.apply_chat_template(
             prompt_messages,
             tokenize=False,
             add_generation_prompt=True
         )
-        
+
         print(f"Chat template text length: {len(text)} chars")
         print(f"Contains image placeholder in text: {'<|image_pad|>' in text or 'image' in text.lower()}")
-        
-        # Step B: Run the full processor passing PIL images directly
+
+        # Step B: Run the full processor passing the PIL image directly
         # This is the same call TRL makes internally during rollout generation
         inputs = tokenizer(
             text=[text],
-            images=pil_images,  # pass PIL images directly — same as TRL's internal path
+            images=[[pil_image]],  # matches TRL's kwargs = {"images": [[img] for img in images]}
             return_tensors="pt",
             padding=True
         )

@@ -17,7 +17,7 @@ Bounding boxes are scaled from dataset [0,1] to Qwen3-VL [0,1000].
 """
 import json
 from typing import Any, Dict, List, Optional
-from datasets import Dataset, Image as HFImage, Sequence
+from datasets import Dataset, Image as HFImage
 
 from data.prompt_templates import SYSTEM_PROMPT, UNIFIED_INSPECTION_PROMPT
 from data.box_utils import normalize_boxes, clean_boxes, scale_01_to_1000
@@ -202,7 +202,7 @@ def to_grpo_prompt(raw: Dict[str, Any], pil_image) -> Dict[str, Any]:
         "prompt": prompt_messages,
         "ground_truth": json.dumps(ground_truth),
         "image_id": raw.get("image_id", ""),
-        "images": [pil_image],
+        "image": pil_image,
     }
 
 
@@ -244,7 +244,7 @@ def build_grpo_dataset(
         f"({skipped} skipped)"
     )
     ds = Dataset.from_list(prompts)
-    ds = ds.cast_column("images", Sequence(HFImage()))
+    ds = ds.cast_column("image", HFImage())
     return ds
 
 
@@ -391,7 +391,7 @@ def to_grpo_prompt_for_task(raw: Dict[str, Any], pil_image, task: str = 'unified
         "prompt": prompt_messages,
         "ground_truth": json.dumps(ground_truth),
         "image_id": raw.get("image_id", ""),
-        "images": [pil_image],
+        "image": pil_image,
     }
 
 
@@ -427,5 +427,5 @@ def build_grpo_dataset_for_task(
         f"({skipped} skipped)"
     )
     ds = Dataset.from_list(prompts)
-    ds = ds.cast_column("images", Sequence(HFImage()))
+    ds = ds.cast_column("image", HFImage())
     return ds

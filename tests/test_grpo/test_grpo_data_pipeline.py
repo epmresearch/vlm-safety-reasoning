@@ -132,8 +132,8 @@ class TestToGrpoPrompt:
         image_parts = [c for c in user_content if c.get("type") == "image"]
         assert len(image_parts) == 1
         assert "image" not in image_parts[0]
-        assert "images" in result
-        assert isinstance(result["images"][0], PILImage.Image)
+        assert "image" in result
+        assert isinstance(result["image"], PILImage.Image)
 
     def test_ground_truth_is_dict(self):
         raw = _make_raw_sample()

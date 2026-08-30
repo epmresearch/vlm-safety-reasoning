@@ -37,55 +37,6 @@ from rewards.unified_reward import (
 logger = get_logger(__name__)
 
 
-def patch_trainer_for_per_image_tokenization(trainer) -> None:
-    """Works around a confirmed bug: when a GRPOTrainer's _tokenize_prompts
-    batches multiple different conversations (each with its own image) into
-    a single apply_chat_template(..., tokenize=True) call, only the FIRST
-    image in the batch gets expanded into real vision tokens — every other
-    prompt collapses to a single unexpanded <|image_pad|> placeholder
-    (confirmed directly: a 2-image batch test returned [795, 239] tokens
-    instead of two properly-expanded lengths, and the real training run's
-    logged prompts showed exactly one image_pad token for every sample).
-
-    Subclassing GRPOTrainer to override _tokenize_prompts does NOT work here:
-    Unsloth's dynamically-rewritten trainer class assigns _tokenize_prompts
-    as a per-INSTANCE attribute inside __init__ (confirmed via MRO
-    introspection — hasattr() finds it, but no class in the MRO defines it,
-    and trl.GRPOTrainer isn't even in the MRO; Unsloth's rewritten class
-    inherits directly from transformers.trainer.Trainer). Since Python's
-    normal attribute lookup checks instance __dict__ before class methods
-    for plain functions, a subclass override is silently shadowed and never
-    actually called. The fix instead monkeypatches the instance's own
-    attribute after construction, capturing the original bound method first
-    and calling it once per conversation (a batch of exactly 1, which we've
-    repeatedly confirmed produces correctly expanded image tokens).
-    """
-    import torch as _torch
-
-    original = trainer._tokenize_prompts
-
-    def _per_image_tokenize_prompts(prompts):
-        all_prompt_ids = []
-        all_images = []
-        merged_fields = {}
-        for prompt in prompts:
-            ids_list, imgs_list, fields = original([prompt])
-            all_prompt_ids.append(ids_list[0])
-            all_images.append(imgs_list[0] if imgs_list else None)
-            for k, v in fields.items():
-                merged_fields.setdefault(k, []).append(v)
-
-        merged_fields = {
-            k: _torch.cat(v) if isinstance(v[0], _torch.Tensor)
-            else [row for item in v for row in (item if isinstance(item, list) else [item])]
-            for k, v in merged_fields.items()
-        }
-        images = all_images if any(img is not None for img in all_images) else None
-        return all_prompt_ids, images, merged_fields
-
-    trainer._tokenize_prompts = _per_image_tokenize_prompts
-
-
 def _check_trl_supports_reward_weights() -> bool:
     """Check if installed TRL version supports reward_weights in GRPOConfig."""
     try:
@@ -276,10 +227,6 @@ def run_grpo(
         learning_rate=cfg["learning_rate"],
         per_device_train_batch_size=cfg["per_device_train_batch_size"],
         gradient_accumulation_steps=cfg["gradient_accumulation_steps"],
-        # Keeps generation_batch_size == per_device_train_batch_size (no multiplication by
-        # gradient_accumulation_steps), so a generation call only ever spans one unique
-        # prompt when per_device_train_batch_size == num_generations. See configs/grpo.yaml.
-        steps_per_generation=cfg.get("steps_per_generation", 1),
         num_train_epochs=cfg["num_train_epochs"],
         logging_steps=cfg["logging_steps"],
         save_steps=cfg["save_steps"],
@@ -322,10 +269,6 @@ def run_grpo(
                 ConsoleLogCallback()
             ],
         )
-        # patch_trainer_for_per_image_tokenization(trainer) — not needed: configs/grpo.yaml
-        # now sets per_device_train_batch_size == num_generations with steps_per_generation=1,
-        # so no generation call ever batches more than one unique image. See that function's
-        # docstring if this config approach ever needs to be revisited.
         logger.info(
             f"Using TRL native multi-reward mode: "
             f"{len(reward_funcs)} functions, weights={reward_weights}"
@@ -350,8 +293,6 @@ def run_grpo(
                 ConsoleLogCallback()
             ],
         )
-        # patch_trainer_for_per_image_tokenization(trainer) — not needed, see the other
-        # branch above for why.
         logger.info(
             "Using single composite reward mode (TRL reward_weights not available)"
         )
@@ -364,42 +305,6 @@ def run_grpo(
         f"variant={variant_name}, dataset_size={len(train_data)}, "
         f"num_generations={cfg['num_generations']}, beta={cfg['beta']}"
     )
-
-    # ------------------------------------------------------------------
-    # TEMPORARY DEBUG PROBE — remove once the images-reaching-model question
-    # is settled. Patches the processor CLASS's __call__ (instance-level
-    # patching doesn't work for `obj(...)` syntax, which always dispatches
-    # through the type) so we see EXACTLY what the real trainer/Unsloth code
-    # passes to the processor on the very first real call during training —
-    # ground truth, not a hand-built reconstruction of the code path.
-    # ------------------------------------------------------------------
-    _debug_state = {"logged": False}
-    _orig_processor_call = type(tokenizer).__call__
-
-    def _debug_processor_call(self, *args, **kwargs):
-        result = _orig_processor_call(self, *args, **kwargs)
-        if not _debug_state["logged"]:
-            _debug_state["logged"] = True
-            type(tokenizer).__call__ = _orig_processor_call
-            text_arg = kwargs.get("text", args[0] if args else None)
-            images_arg = kwargs.get("images")
-            logger.info(
-                f"[DEBUG first processor call] num text items="
-                f"{len(text_arg) if text_arg is not None else 'N/A'}, "
-                f"images arg len={len(images_arg) if images_arg is not None else 'N/A'}"
-            )
-            if isinstance(result, dict) or hasattr(result, "keys"):
-                logger.info(f"[DEBUG first processor call] output keys: {list(result.keys())}")
-                if "input_ids" in result:
-                    logger.info(f"[DEBUG] input_ids.shape={result['input_ids'].shape}")
-                if "pixel_values" in result:
-                    logger.info(f"[DEBUG] pixel_values.shape={result['pixel_values'].shape}")
-                if "image_grid_thw" in result:
-                    logger.info(f"[DEBUG] image_grid_thw={result['image_grid_thw']}")
-        return result
-
-    type(tokenizer).__call__ = _debug_processor_call
-    # ------------------------------------------------------------------
 
     try:
         trainer.train(resume_from_checkpoint=resume_from_checkpoint)

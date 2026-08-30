@@ -51,7 +51,7 @@ def main():
         raw_dataset = load_processed_dataset()
         train_split = raw_dataset["train"].select(range(1))
         train_data = build_grpo_dataset_for_task(train_split, task=args.task)
-        img = train_data[0]["images"][0]
+        img = train_data[0]["image"]
         print(f"  Loaded image: type={type(img)}, size={getattr(img, 'size', 'N/A')}")
 
     text = (

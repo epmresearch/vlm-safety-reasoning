@@ -147,7 +147,7 @@ def _embed_images_inline(prompts, train_data):
             if isinstance(msg.get("content"), list):
                 for part in msg["content"]:
                     if part.get("type") == "image":
-                        part["image"] = train_data[i]["images"][0]
+                        part["image"] = train_data[i]["image"]
     return prompts
 
 
