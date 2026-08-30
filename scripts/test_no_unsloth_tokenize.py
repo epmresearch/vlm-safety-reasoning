@@ -83,6 +83,34 @@ if "mergekit" not in sys.modules:
     _mk_merge.run_merge = lambda *a, **kw: None
     _mk.merge = _mk_merge
 
+# Comprehensive fix, read directly from trl v0.23.0's import_utils.py source
+# (not guessed): EVERY is_X_available() function in that file just returns a
+# module-level boolean flag computed once at import time. On this HPC
+# environment, at least _vllm_available and _llm_blender_available are
+# incorrectly True (real packages aren't installed, but something makes
+# find_spec/detection succeed anyway) — this fired trl.trainer.judges.py's
+# `if is_llm_blender_available(): import llm_blender` even though we never
+# asked for it. Force every one of these flags False in one pass instead of
+# discovering each broken one via a separate crash.
+for _flag in [
+    "_vllm_available", "_mergekit_available", "_llm_blender_available",
+    "_deepspeed_available", "_diffusers_available", "_fastapi_available",
+    "_is_liger_kernel_available", "_pydantic_available", "_requests_available",
+    "_unsloth_available", "_uvicorn_available", "_vllm_ascend_available",
+    "_joblib_available",
+]:
+    if hasattr(_trl_import_utils, _flag):
+        setattr(_trl_import_utils, _flag, False)
+for _fn_name in [
+    "is_vllm_available", "is_mergekit_available", "is_llm_blender_available",
+    "is_deepspeed_available", "is_diffusers_available", "is_fastapi_available",
+    "is_liger_kernel_available", "is_pydantic_available", "is_requests_available",
+    "is_unsloth_available", "is_uvicorn_available", "is_vllm_ascend_available",
+    "is_joblib_available",
+]:
+    if hasattr(_trl_import_utils, _fn_name):
+        setattr(_trl_import_utils, _fn_name, lambda *a, **kw: False)
+
 from trl import GRPOTrainer, GRPOConfig
 
 
