@@ -64,33 +64,50 @@ def run_preflight(task="violations_only", model_id="2b", base_model_override=Non
         reward_funcs=[mock_reward],
         processing_class=tokenizer,
     )
-    patch_trainer_for_per_image_tokenization(trainer)
 
-    print("\n>>> 4a. Confirming the monkeypatch actually took effect on this instance...")
-    print("trainer._tokenize_prompts is now:", trainer._tokenize_prompts)
-    print("(should say '_per_image_tokenize_prompts', not an Unsloth/trl bound method)")
+    print("\n>>> 4a. Broad introspection of the REAL trainer instance (pure diagnostics, cannot crash)...")
+    keywords = ("tokenize", "prompt", "generat", "multimodal", "chat_template", "_is_vlm", "tools")
+    candidates = sorted(name for name in dir(trainer) if any(kw in name.lower() for kw in keywords))
+    print(f"Candidate attributes/methods ({len(candidates)}):")
+    for name in candidates:
+        try:
+            val = getattr(trainer, name)
+            kind = "method" if callable(val) else "attribute"
+            print(f"  [{kind}] {name} = {val!r:.120}")
+        except Exception as e:
+            print(f"  [ERROR reading] {name}: {e}")
+    print(f"type(trainer) = {type(trainer)}")
+    print(f"type(trainer).__mro__ = {[f'{c.__module__}.{c.__name__}' for c in type(trainer).__mro__]}")
 
-    print("\n>>> 4b. VERIFYING THE FIX: calling _tokenize_prompts on all 4 real, DIFFERENT images at once...")
-    real_prompts = [train_data[i]["prompt"] for i in range(len(train_data))]
-    for i in range(len(real_prompts)):
-        for msg in real_prompts[i]:
-            if isinstance(msg.get("content"), list):
-                for part in msg["content"]:
-                    if part.get("type") == "image":
-                        part["image"] = train_data[i]["images"][0]
+    print("\n>>> 4b. Attempting the per-image tokenization patch (non-fatal if it fails)...")
     try:
-        fixed_prompt_ids, _, _ = trainer._tokenize_prompts(real_prompts)
+        patch_trainer_for_per_image_tokenization(trainer)
+        print("✅ Patch applied without error. trainer._tokenize_prompts is now:", trainer._tokenize_prompts)
+        patch_ok = True
     except Exception as e:
-        print(f"\n❌❌ Step 4b raised: {type(e).__name__}: {e}")
-        print("(Step 4a's introspection above is the useful output from this run — share it.)")
-        fixed_prompt_ids = None
-    if fixed_prompt_ids is not None:
-        fixed_lens = [len(p) for p in fixed_prompt_ids]
-        print(f"Per-prompt token lengths (fixed): {fixed_lens}")
-        if min(fixed_lens) > 400:
-            print("✅✅ FIX CONFIRMED: every image in the batch is now properly expanded!")
-        else:
-            print("❌❌ Still collapsing — at least one prompt in the batch is still short.")
+        print(f"❌ Patch failed: {type(e).__name__}: {e}")
+        print("(Step 4a's candidate list above is what we actually need now — share it.)")
+        patch_ok = False
+
+    if patch_ok:
+        print("\n>>> 4c. VERIFYING THE FIX: calling _tokenize_prompts on all 4 real, DIFFERENT images at once...")
+        real_prompts = [train_data[i]["prompt"] for i in range(len(train_data))]
+        for i in range(len(real_prompts)):
+            for msg in real_prompts[i]:
+                if isinstance(msg.get("content"), list):
+                    for part in msg["content"]:
+                        if part.get("type") == "image":
+                            part["image"] = train_data[i]["images"][0]
+        try:
+            fixed_prompt_ids, _, _ = trainer._tokenize_prompts(real_prompts)
+            fixed_lens = [len(p) for p in fixed_prompt_ids]
+            print(f"Per-prompt token lengths (fixed): {fixed_lens}")
+            if min(fixed_lens) > 400:
+                print("✅✅ FIX CONFIRMED: every image in the batch is now properly expanded!")
+            else:
+                print("❌❌ Still collapsing — at least one prompt in the batch is still short.")
+        except Exception as e:
+            print(f"❌❌ Step 4c raised: {type(e).__name__}: {e}")
     
     print(">>> 5. Fetching the first PyTorch batch from the dataloader...")
     dl = trainer.get_train_dataloader()
