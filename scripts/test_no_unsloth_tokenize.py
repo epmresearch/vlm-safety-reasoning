@@ -12,12 +12,35 @@ Usage:
         --raw_hf_path unsloth/Qwen3-VL-2B-Instruct
 """
 import argparse
+import sys
+import types
 from PIL import Image
 
 # Deliberately no `import unsloth` anywhere in this file or its imports.
 import torch
 from transformers import AutoModelForImageTextToText, AutoProcessor
 from peft import LoraConfig, get_peft_model
+
+# trl.trainer.grpo_trainer does an unconditional top-level
+# `from vllm.distributed.device_communicators.pynccl import PyNcclCommunicator`,
+# even though we never set use_vllm=True. vllm isn't installed in this env
+# (only pulled in indirectly when Unsloth is imported first), so stub just
+# enough of it to satisfy the import chain — never actually exercised below.
+if "vllm" not in sys.modules:
+    for name in [
+        "vllm",
+        "vllm.distributed",
+        "vllm.distributed.device_communicators",
+        "vllm.distributed.device_communicators.pynccl",
+    ]:
+        sys.modules[name] = types.ModuleType(name)
+    sys.modules["vllm.distributed.device_communicators.pynccl"].PyNcclCommunicator = object
+    sys.modules["vllm"].distributed = sys.modules["vllm.distributed"]
+    sys.modules["vllm.distributed"].device_communicators = sys.modules["vllm.distributed.device_communicators"]
+    sys.modules["vllm.distributed.device_communicators"].pynccl = sys.modules[
+        "vllm.distributed.device_communicators.pynccl"
+    ]
+
 from trl import GRPOTrainer, GRPOConfig
 
 
