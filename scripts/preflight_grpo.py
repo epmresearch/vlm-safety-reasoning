@@ -52,47 +52,32 @@ def run_preflight(task="violations_only", model_id="2b", base_model_override=Non
         tokenizes each conversation individually instead."""
 
         def _tokenize_prompts(self, prompts: list):
+            # Deliberately does NOT reimplement the original method's
+            # internals (self.tools, self.chat_template, prepare_multimodal_
+            # messages, etc.) — those differ across trl/Unsloth versions and
+            # kept breaking when hand-copied. Instead, call the ORIGINAL,
+            # inherited _tokenize_prompts once per conversation (a batch of
+            # exactly 1), which we've repeatedly confirmed produces correctly
+            # expanded image tokens. Only multi-conversation batches collapse.
             import torch as _torch
 
-            # See models/grpo_trainer.py's identical override for why the
-            # vanilla prepare_multimodal_messages(prompt) call is skipped
-            # here (unstable signature across trl versions, and redundant
-            # for already-inlined, already-list-formatted prompt content).
-            images = []
-            has_images = False
+            all_prompt_ids = []
+            all_images = []
+            merged_fields = {}
             for prompt in prompts:
-                prompt_images = []
-                for message in prompt:
-                    if isinstance(message["content"], list):
-                        for part in message["content"]:
-                            if part["type"] == "image":
-                                prompt_images.append(part["image"])
-                                has_images = True
-                images.append(prompt_images if prompt_images else None)
-            images = images if has_images else None
+                ids_list, imgs_list, fields = super(_PerImageGRPOTrainer, self)._tokenize_prompts([prompt])
+                all_prompt_ids.append(ids_list[0])
+                all_images.append(imgs_list[0] if imgs_list else None)
+                for k, v in fields.items():
+                    merged_fields.setdefault(k, []).append(v)
 
-            prompt_ids = []
-            multimodal_fields = {}
-            for prompt in prompts:
-                tokenized = self.processing_class.apply_chat_template(
-                    conversation=[prompt],
-                    tools=self.tools or None,
-                    chat_template=self.chat_template,
-                    add_generation_prompt=True,
-                    tokenize=True,
-                    return_dict=True,
-                    **self.chat_template_kwargs,
-                )
-                prompt_ids.append(tokenized["input_ids"][0])
-                for k, v in tokenized.items():
-                    if k not in ("input_ids", "attention_mask"):
-                        multimodal_fields.setdefault(k, []).append(v)
-
-            multimodal_fields = {
-                k: _torch.cat(v) if isinstance(v[0], _torch.Tensor) else [row for prompt_v in v for row in prompt_v]
-                for k, v in multimodal_fields.items()
+            merged_fields = {
+                k: _torch.cat(v) if isinstance(v[0], _torch.Tensor)
+                else [row for item in v for row in (item if isinstance(item, list) else [item])]
+                for k, v in merged_fields.items()
             }
-            return prompt_ids, images, multimodal_fields
+            images = all_images if any(img is not None for img in all_images) else None
+            return all_prompt_ids, images, merged_fields
 
     # Mock reward function just to satisfy the trainer
     def mock_reward(prompts, completions, **kwargs):
