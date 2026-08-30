@@ -53,13 +53,11 @@ def run_preflight(task="violations_only", model_id="2b", base_model_override=Non
 
         def _tokenize_prompts(self, prompts: list):
             import torch as _torch
-            from trl.data_utils import prepare_multimodal_messages
 
-            # This pipeline's prompts are always conversational and always
-            # contain an image, so no need to branch on self._is_vlm (which
-            # Unsloth's rewritten trainer doesn't reliably expose here).
-            prompts = [prepare_multimodal_messages(prompt) for prompt in prompts]
-
+            # See models/grpo_trainer.py's identical override for why the
+            # vanilla prepare_multimodal_messages(prompt) call is skipped
+            # here (unstable signature across trl versions, and redundant
+            # for already-inlined, already-list-formatted prompt content).
             images = []
             has_images = False
             for prompt in prompts:

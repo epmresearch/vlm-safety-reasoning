@@ -108,13 +108,22 @@ def run_grpo(
 
         def _tokenize_prompts(self, prompts: list):
             import torch as _torch
-            from trl.data_utils import prepare_multimodal_messages
 
             # This pipeline's prompts are always conversational and always
             # contain an image, so no need to branch on self._is_vlm (which
             # Unsloth's rewritten trainer doesn't reliably expose here).
-            prompts = [prepare_multimodal_messages(prompt) for prompt in prompts]
-
+            #
+            # NOTE: vanilla TRL calls prepare_multimodal_messages(prompt) here,
+            # but its signature isn't stable across trl versions (this
+            # environment's trl requires a num_images argument vanilla TRL
+            # doesn't have). We skip it deliberately: by the time
+            # _tokenize_prompts runs, the caller (_generate_and_score_completions)
+            # has already merged the dataset's separate "images" column into
+            # each prompt's content via its own prepare_multimodal_messages(
+            # prompt, images=...) call, and our own data pipeline
+            # (data/preprocessor.py) already produces content as a list of
+            # typed blocks, never a plain string — so there is nothing left
+            # for this call to normalize.
             images = []
             has_images = False
             for prompt in prompts:
