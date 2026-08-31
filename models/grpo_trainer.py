@@ -220,6 +220,13 @@ def run_grpo(
         learning_rate=cfg["learning_rate"],
         per_device_train_batch_size=cfg["per_device_train_batch_size"],
         gradient_accumulation_steps=cfg["gradient_accumulation_steps"],
+        # MUST be passed explicitly. If omitted, TRL defaults it to
+        # gradient_accumulation_steps (grpo_config.py: "if generation_batch_size is None
+        # and steps_per_generation is None"), which silently makes
+        # generation_batch_size = per_device_bs * steps_per_generation = 256 and thus
+        # 256/num_generations = 32 unique images per generate() call — a value never
+        # verified against the processor vision-token-collapse bug. See CLAUDE.md invariant #5.
+        steps_per_generation=cfg.get("steps_per_generation", 1),
         num_train_epochs=cfg["num_train_epochs"],
         logging_steps=cfg["logging_steps"],
         save_steps=cfg["save_steps"],
@@ -301,14 +308,25 @@ def run_grpo(
 
     try:
         trainer.train(resume_from_checkpoint=resume_from_checkpoint)
-        
+    except Exception as e:
+        logger.error(f"Training failed: {e}", exc_info=True)
+        # Crash snapshot. On the ~108-step pool run, save_steps=20 leaves few checkpoints,
+        # so a late failure would otherwise lose the entire run. Deliberately NOT written to
+        # "final/": downstream stages treat final/ as "training completed successfully", and
+        # silently feeding them a partial model is worse than failing loudly.
+        try:
+            crash_dir = os.path.join(output_dir, "crash-snapshot")
+            ensure_dir(crash_dir)
+            trainer.save_model(crash_dir)
+            logger.error(f"Saved crash snapshot to {crash_dir}")
+        except Exception as save_err:
+            logger.error(f"Could not save crash snapshot: {save_err}")
+        raise
+    else:
         final_dir = os.path.join(output_dir, "final")
         ensure_dir(final_dir)
         logger.info(f"Saving final adapter to {final_dir}")
         trainer.save_model(final_dir)
-    except Exception as e:
-        logger.error(f"Training failed: {e}", exc_info=True)
-        raise
     finally:
         finish_run(run)
 

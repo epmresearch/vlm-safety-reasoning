@@ -81,11 +81,11 @@ On Windows these submitters degrade gracefully — `sbatch` is missing, so they 
 ```bash
 python -m experiments.run_sft --tier 8b --variant vo-sft-8b-v5 --task violations_only
 python scripts/merge_sft_adapter.py --tier 8b --task violations_only \
-  --adapter_path "$VLM_DATA_ROOT/checkpoints/qwen3vl-8b/vo-sft-8b-v5/final" \
+  --adapter_path "$VLM_DATA_ROOT/checkpoints/qwen3vl-8b/vo-sft-8b-v5/best" \
   --output_path  "$VLM_DATA_ROOT/checkpoints/qwen3vl-8b/merged-vo-sft-8b-v5"
 python -m experiments.run_grpo --tier 8b --variant vo-grpo-8b-v5 --task violations_only \
   --base_model_override "$VLM_DATA_ROOT/checkpoints/qwen3vl-8b/merged-vo-sft-8b-v5"
-python -m experiments.run_inference --tier 8b --variant vo-sft-8b-v5 --checkpoint final --task violations_only
+python -m experiments.run_inference --tier 8b --variant vo-sft-8b-v5 --checkpoint best --task violations_only
 python preprocessing/structural_repair.py --input "$PREDS/predictions.jsonl" \
   --output "$PREDS/repair_applied/predictions_repaired.jsonl" --task violations_only
 python -m experiments.run_evaluation --predictions_path "$PREDS/repair_applied/predictions_repaired.jsonl" \
@@ -109,10 +109,15 @@ python data/build_grpo_pool.py          # → datasets/grpo_pool   (GRPO input; 
 ### Local analysis (run from repo root — these use relative `Path("evaluation_results")`)
 
 ```powershell
-python -m experiments.generate_comparison_csv --version v4   # current, working comparison tool
+python -m experiments.generate_comparison_csv --version v4   # VO-only, per-tier CSVs
+python -m experiments.compare_results --tier 8b --task unified --version v5   # any task, 3-row table
 python -m experiments.plot_metrics_vo --version v4
+python -m experiments.extract_qualitative                    # triumph/failure examples -> markdown
 python analyze_metrics.py
 ```
+
+These read SFT results from `<variant>_best` and GRPO from `<variant>_final`, matching what the pipeline
+now writes.
 
 ## Architecture
 
@@ -128,9 +133,18 @@ base.yaml → model_registry.yaml → {sft,grpo}.yaml → tasks/<task>.yaml
 `violations_only.yaml`'s `max_completion_length: 1024` beats `grpo.yaml`'s `1000`). `grpo.yaml`'s top-level
 `per_device_train_batch_size` beats `model_registry.yaml`'s per-tier nested one.
 
+Both `run_sft` and `run_grpo` now go through `load_config()`, so this precedence is real for both. (`run_sft`
+previously called `load_training_config("sft")`, reading `configs/sft.yaml` alone — a task YAML could never
+override an SFT hyperparameter, silently.)
+
 `run_grpo` additionally mutates `sft_cfg` in place (`max_seq_length`, `load_in_4bit`, gradient checkpointing,
 pixel bounds) — **reading `configs/sft.yaml` will not tell you what GRPO actually loaded.** Read the
 `run_manifest.json` written into the checkpoint dir.
+
+**Current training shape.** SFT: 2 epochs over 8198 augmented rows at effective batch 32 = **512 steps**, eval
+every 25 steps, early stopping at patience 4. GRPO: 2 epochs over the 1732-row pool at 32 unique images per
+update = **108 steps**, `save_steps: 20`. If the first SLURM log line does not say `Total steps = 512` /
+`Total steps = 108`, the config did not merge as expected.
 
 ### Tasks — what `--task` actually controls
 
@@ -191,16 +205,22 @@ Everything the pipelines *share* — `datasets/{processed,augmented,grpo_pool}`,
 during training, so concurrent readers are safe. (The submitters pre-download models on the login node
 specifically to avoid concurrent SLURM jobs racing on HF cache locks.)
 
-**Two places that do not yet follow the rule.** Neither collides today, but both will if copy-pasted for a new task:
+**One place that still does not follow the rule.** It does not collide today, but it will if copy-pasted:
 
-1. `hpc_baseline_unified.sh:59` emits `--run_name baseline_${TIER}_${VERSION}` — underscored, **no task prefix**.
-   Every other pipeline uses `<prefix>-baseline-<tier>-<version>`. This legacy form is why `compare_results.py`
-   and `plot_metrics.py` branch on `task == "unified"` instead of calling `task_prefix()` uniformly. A new task
-   must **not** copy this; use the prefixed form.
-2. `hpc_merge_sft_vo.sh` uses job name `vlm-merge-sft` and logs `merge_sft_%j` (unprefixed), and it **omits
-   `--task`**, silently relying on `merge_sft_adapter.py`'s default of `violations_only`. A new task's merge
-   script copy-pasted from this one would merge with the wrong task while looking correct. Always pass `--task`
-   explicitly, as `hpc_merge_sft_unified.sh` does.
+- `hpc_baseline_unified.sh:59` emits `--run_name baseline_${TIER}_${VERSION}` — underscored, **no task prefix**.
+  Every other pipeline uses `<prefix>-baseline-<tier>-<version>`. This legacy form is why `compare_results.py`
+  and `plot_metrics.py` branch on `task == "unified"` instead of calling `task_prefix()` uniformly. A new task
+  must **not** copy this; use the prefixed form.
+
+(`hpc_merge_sft_vo.sh`'s unprefixed job name/logs and missing `--task` were fixed — it now passes
+`--task violations_only` explicitly and logs to `merge_sft_vo_%j`. Always pass `--task` in a new merge script;
+`merge_sft_adapter.py` still defaults to `violations_only`, so an omission looks correct while merging the
+wrong task.)
+
+All 8 `hpc_*.sh` now start with `set -eo pipefail` and a guarded `cd`. Without that, a failed training step
+still ran inference/repair/eval and the job could exit 0, so the `afterok` dependency would launch the next
+stage against a missing adapter. Deliberately not `set -u` — several lines legitimately expand possibly-unset
+vars (`PYTHONPATH`, `SLURM_JOB_ID`).
 
 ### Adding a new task pipeline
 
@@ -283,15 +303,62 @@ Prompts are defined **only** in `data/prompt_templates.py` — never hardcode on
    `FileNotFoundError`.
 4. **Merged checkpoints need `tokenizer_name`** pointing at the original HF repo. Unsloth's processor
    auto-detection silently degrades to text-only (no `image_processor`) when loading a local `qwen3_vl` directory.
-5. **Before raising `per_device_train_batch_size` or `steps_per_generation`,** run
-   `scripts/test_processor_batch_collapse.py --num_unique_images K` for the resulting
-   `unique_images_per_call = (per_device_bs × steps_per_generation) / num_generations`. The processor can collapse
-   vision tokens for rows after the first when different images share one batched tokenize call. K=2 and K=4
-   currently pass on real images. Current: `16 × 1 / 8 = 2` per call, `16 × 16 / 8 = 32` unique images per update.
+5. **`steps_per_generation` must be passed explicitly to `GRPOConfig`.** If omitted, TRL defaults it to
+   `gradient_accumulation_steps`, silently overriding whatever the config says. Every GRPO run before this fix
+   ran at `steps_per_generation=16` regardless of the `1` in the YAML.
+
+   Two different quantities, easy to confuse:
+   - `K = unique_images_per_call = (per_device_bs × steps_per_generation) / num_generations` — how many
+     *genuinely different* images share one batched tokenize call. **This is the collapse-risk number**, and
+     the `--num_unique_images` argument of `scripts/test_processor_batch_collapse.py`.
+   - `unique_images_per_update = (per_device_bs × gradient_accumulation_steps) / num_generations` — the
+     effective RL batch. `steps_per_generation` does **not** affect it (the factors cancel).
+
+   Current: `16 × 4 / 8 = 8` (K, in `256/64 = 4` calls per step) and `16 × 16 / 8 = 32` unique images per
+   update. **K = 2, 4, 8, 16, 32 have all been verified NO COLLAPSE on real dataset images** (2026-08-31), so
+   the processor no longer constrains this — generation-time KV cache does. Re-run the script for any new K,
+   and raise `steps_per_generation` only with headroom evidence from `GPUMemoryLoggingCallback`: spg=16 means
+   256 live sequences each carrying ~4256 vision patches, a memory profile never actually exercised (the old
+   accidental spg=16 runs were prompt-only, so they are not evidence it fits).
 6. **The `0.15` true-negative constant** appears in four reward files (`reward_violation_id.py:30`,
-   `reward_grounding.py:26`, `reward_violation_grounding.py:35`, `reward_reasoning.py:47`), calibrated against the
-   dataset's ~91% safe rate to defeat the "always predict safe" local minimum. Changing one without the others
-   silently re-biases the objective.
+   `reward_grounding.py:26`, `reward_violation_grounding.py:35`, `reward_reasoning.py:47`). Note its stated
+   rationale ("balance the EV against the 91% imbalance") is arithmetically void — the constant cancels out of
+   the always-safe-vs-honest expected-value comparison at every class balance. More importantly, TRL's
+   `scale_rewards` defaults to `'group'`, so advantages are z-scored within each rollout group: for a safe image
+   whose 8 rollouts take only two values, the constant is **affine-invariant and changing it does nothing**.
+   Retuning safe-vs-violation balance belongs in the pool composition (currently 50/50), not here. If you do
+   change it, all four sites must move together — but `reward_grounding.py:26` is per-*class*, not per-image,
+   and is inactive under `violations_only`.
+7. **`best/` and `final/` are now different checkpoints.** `configs/sft.yaml` sets
+   `load_best_model_at_end: false`, so `final/` is the literal end-of-training state (debugging) and `best/` is
+   the lowest-`eval_loss` state, written eagerly by `SaveBestModelCallback`. **The merge → GRPO handoff consumes
+   `best/`**, and the post-SFT eval runs `--checkpoint best` so the reported SFT numbers describe the checkpoint
+   GRPO actually trains from. GRPO itself has no `best/` (no eval dataset), so `hpc_grpo_*.sh` stays on
+   `--checkpoint final`. Keep `best_model_threshold: 0.0` — it is an *absolute* delta, and the old `0.005`
+   froze `best/` hundreds of steps early on a ~0.055 loss.
+
+**Violation semantics — one predicate, everywhere.** `rewards/reward_utils.py::_is_violation_present` is the
+single source of truth for "is this rule violated?", used by the GRPO rewards *and* by
+`evaluation/metrics_{violations,reasoning}.py`, so training and evaluation can never disagree.
+
+**`null` is the only safe signal.** The prompt says *"If NOT violated, output null"*, so emitting a violation
+object at all is an assertion of violation — even `{"reason": "", "bounding_box": []}`. A contentless
+assertion still earns nothing downstream (empty boxes → IoU 0.0; empty reason → ~0), so the model gets
+identification credit only. The one exception is a bare `{}`, which carries no keys and no assertion;
+`structural_repair.py:1007` normalizes it to `null` first.
+
+This matters because `preprocessing/structural_repair.py` manufactures these shapes: `:959` rewrites a bare
+`true` into `{"reason":"","bounding_box":[]}`, and `:975` turns a bare reason string into a box-less
+violation. Reading the first as *Safe* would invert the model's own answer — crediting an unsubstantiated
+alarm as "correctly identified a safe site" — and left a reward-hacking surface where empty violation objects
+collected the true-negative reward on safe images.
+
+`rule_0` is a pseudo-rule for the safe class: **rule_0 TP = correctly said safe** (the true negative of
+violation detection), **FN = false alarm on a safe image**, **FP = missed a real violation**. So
+`violation_identification_recall_rule_0` = 1 − false-alarm rate, and is the over-flagging guardrail.
+Parse/schema failures reach the metrics as `None`, are **never** credited rule_0 TP (they used to be, via
+`{}`, silently inflating that guardrail on an ~88%-safe test set), and surface as
+`violation_prediction_failure_{count,rate}`.
 
 **Debugging notes:**
 
@@ -315,11 +382,14 @@ Prompts are defined **only** in `data/prompt_templates.py` — never hardcode on
   *weight keys* fail **silently** — those five values are ignored entirely.
 - `rewards/{json_validity,caption_quality,rule_violation_accuracy,grounding_iou}.py` are legacy and unwired;
   `rule_violation_accuracy` still returns 1.0 for both-empty, the exact hack the 0.15 constant replaced.
-- `experiments/compare_results.py` reads a nested `metrics.json` shape that `run_evaluation.py` no longer writes;
-  it produces a table of `None`s. Use `generate_comparison_csv.py`.
-- `tests/test_grpo/test_grpo_config.py::test_grpo_overrides_model_registry_batch_size` asserts batch size 8; HEAD
-  is 16. This test fails today.
 - `preprocessing/structural_repair.py` re-declares `RuleViolation`/`UnifiedOutput` locally — keep in sync with
   `data/schemas.py` by hand.
-- `evaluation_results/` and `evaluation_results_v2/` are different 8B runs with materially different numbers
-  (VO SFT f1_micro 0.4883 vs 0.3537), both copied back from HPC. Nothing documents which is authoritative.
+- `docs/Metrics.md` documents a metric namespace that no longer exists (`grounding_iou_all_macro_*`,
+  `_excl`, `grounding_iou_total_macro`). Grepping `evaluation/` for those returns nothing — the live families
+  are `grounding_{mask,greedy}_iou_{all,exist}_*`. Its analysis of `rule_0` semantics is still sound, and its
+  tn0/tn1 rationale still applies to **object** grounding — but the **violation**-grounding `_tn1` keys have
+  been removed (see below); only `_tn0` remains there.
+- **All pre-existing GRPO metrics are void.** Those runs trained prompt-only — images never reached the model
+  (fixed in `b8f2470`). `evaluation_results/` and `evaluation_results_v2/` also disagree on the same-named 8B
+  run (VO SFT f1_micro 0.4883 vs 0.3537) with nothing documenting which is authoritative. Baseline and SFT
+  numbers there are usable; do not draw any GRPO conclusion from them.

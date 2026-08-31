@@ -7,6 +7,10 @@ import pandas as pd
 from core.constants import RULES
 from data.box_utils import compute_mask_union_iou, greedy_multibox_iou, scale_1000_to_01, clean_boxes, normalize_boxes
 from core.logging import get_logger
+# Single source of truth for "is this payload a violation?", shared with the GRPO rewards.
+# Metrics previously used plain truthiness here, which disagreed with the reward on
+# {"bounding_box": [], "reason": ""} — a violation to the metric, safe to the reward.
+from rewards.reward_utils import _is_violation_present
 
 logger = get_logger(__name__)
 
@@ -40,13 +44,11 @@ def compute_violation_metrics(predictions: List[Dict[str, Any]], references: Lis
     
     # Mask Trackers
     rule_iou_tn0_mask = {r: [] for r in RULES}
-    rule_iou_tn1_mask = {r: [] for r in RULES}
     rule_inter_total_mask = {r: 0.0 for r in RULES}
     rule_union_total_mask = {r: 0.0 for r in RULES}
 
     # Greedy Trackers
     rule_iou_tn0_greedy = {r: [] for r in RULES}
-    rule_iou_tn1_greedy = {r: [] for r in RULES}
     rule_inter_total_greedy = {r: 0.0 for r in RULES}
     rule_union_total_greedy = {r: 0.0 for r in RULES}
 
@@ -57,10 +59,18 @@ def compute_violation_metrics(predictions: List[Dict[str, Any]], references: Lis
     iou_cond_global_tp, iou_cond_global_fp, iou_cond_global_fn = 0, 0, 0
     iou_cond_rule_counts = {r: {"tp": 0, "fp": 0, "fn": 0} for r in RULES}
     
+    # Predictions that failed JSON parse / schema validation arrive as None.
+    # They are NOT "the model said safe" — scoring them as such inflated rule_0 TP
+    # (the true-negative / no-violation class) with what are really output failures.
+    prediction_failures = 0
+
     for pred_dict, gt_dict in zip(predictions, references):
+        prediction_failed = pred_dict is None
+        if prediction_failed:
+            prediction_failures += 1
         pred_dict = pred_dict or {}
         gt_dict = gt_dict or {}
-        
+
         pred_rules = set()
         pred_by_rule = {}
         gt_rules = set()
@@ -68,17 +78,26 @@ def compute_violation_metrics(predictions: List[Dict[str, Any]], references: Lis
         
         for r in RULES:
             p_v = pred_dict.get(f"{r}_violation")
-            if p_v:
+            if _is_violation_present(p_v):
                 pred_rules.add(r)
-                pred_by_rule[r] = p_v
-                
+                pred_by_rule[r] = p_v if isinstance(p_v, dict) else {}
+
             g_v = gt_dict.get(f"{r}_violation")
-            if g_v:
+            if _is_violation_present(g_v):
                 gt_rules.add(r)
-                gt_by_rule[r] = g_v
+                gt_by_rule[r] = g_v if isinstance(g_v, dict) else {}
         
-        # Rule 0 tracking
-        if not gt_rules and not pred_rules:
+        # Rule 0 tracking ("correctly reported no violation").
+        # A failed prediction never earns rule_0 TP: emitting unparseable output is not
+        # the same as correctly identifying a safe site. When GT is safe it is charged as
+        # a rule_0 FN (the model failed to produce the correct safe answer), which keeps
+        # violation_identification_recall_rule_0 honest as the over-flagging guardrail.
+        if prediction_failed:
+            if not gt_rules:
+                rule_counts["rule_0"]["fn"] += 1
+            # GT-has-violation + failure: the missed rules are already charged as FN
+            # below. No rule_0 FP, because the model never asserted "safe".
+        elif not gt_rules and not pred_rules:
             rule_counts["rule_0"]["tp"] += 1
         elif not gt_rules and pred_rules:
             rule_counts["rule_0"]["fn"] += 1
@@ -161,17 +180,24 @@ def compute_violation_metrics(predictions: List[Dict[str, Any]], references: Lis
             greedy_iou_val, greedy_inter, greedy_union = greedy_multibox_iou(pred_boxes_01, gt_boxes_01)
 
             if not pred_boxes_01 and not gt_boxes_01:
-                # True Negative
+                # Both sides flagged this rule but neither localized it — reachable via a
+                # reason-only violation on both sides, which structural_repair.py actively
+                # produces (a bare `true` becomes {"reason": "", "bounding_box": []}, a bare
+                # reason string becomes {"reason": s, "bounding_box": []}).
+                #
+                # Scored 0.0: for a safety-grounding task, "we both agree something is wrong
+                # but neither of us says where" deserves no grounding credit. The old `tn1`
+                # convention scored this 1.0 — full credit for not localizing — and was
+                # emitted as a parallel set of keys. Those keys were bit-identical to tn0 in
+                # all 27 historical metrics.json (the branch never fired on real data), so
+                # they carried no information while doubling every grounding row in the
+                # comparison CSV. Removed.
                 rule_iou_tn0_mask[r].append(0.0)
                 rule_iou_tn0_greedy[r].append(0.0)
-                rule_iou_tn1_mask[r].append(1.0)
-                rule_iou_tn1_greedy[r].append(1.0)
                 rule_tn_count[r] += 1
             else:
                 rule_iou_tn0_mask[r].append(mask_iou)
                 rule_iou_tn0_greedy[r].append(greedy_iou_val)
-                rule_iou_tn1_mask[r].append(mask_iou)
-                rule_iou_tn1_greedy[r].append(greedy_iou_val)
 
             rule_inter_total_mask[r] += mask_result["intersection"]
             rule_union_total_mask[r] += mask_result["union"]
@@ -180,7 +206,13 @@ def compute_violation_metrics(predictions: List[Dict[str, Any]], references: Lis
             rule_union_total_greedy[r] += greedy_union
 
     metrics = {}
-    
+
+    # Unparseable / schema-invalid predictions, excluded from rule_0 true positives.
+    metrics["violation_prediction_failure_count"] = prediction_failures
+    metrics["violation_prediction_failure_rate"] = (
+        prediction_failures / len(predictions) if predictions else 0.0
+    )
+
     # Global (pooled) precision/recall/F1 — this is MICRO-averaging
     precision = global_tp / (global_tp + global_fp) if (global_tp + global_fp) > 0 else 0.0
     recall = global_tp / (global_tp + global_fn) if (global_tp + global_fn) > 0 else 0.0
@@ -217,51 +249,44 @@ def compute_violation_metrics(predictions: List[Dict[str, Any]], references: Lis
     )
         
     # Grounding IoU per rule and global macro/micro
+    # The `_tn1` counterparts of every key below were removed: they scored an
+    # un-localized-on-both-sides rule as IoU 1.0, which is the wrong incentive for a
+    # grounding task, and they were bit-identical to `_tn0` in all historical results.
+    # The `_tn0` suffix is kept on the key names so existing dashboards/CSVs keep working.
     tn0_macros_mask, tn0_macros_greedy = [], []
-    tn1_macros_mask, tn1_macros_greedy = [], []
     total_inter_mask, total_union_mask = 0.0, 0.0
     total_inter_greedy, total_union_greedy = 0.0, 0.0
-    
+
     for r in RULES:
         metrics[f"violation_grounding_tn_count_{r}"] = rule_tn_count[r]
-        
-        # Mask (tn0 + tn1)
+
+        # Mask-union IoU
         tn0_val_mask = sum(rule_iou_tn0_mask[r]) / len(rule_iou_tn0_mask[r]) if rule_iou_tn0_mask[r] else 0.0
-        tn1_val_mask = sum(rule_iou_tn1_mask[r]) / len(rule_iou_tn1_mask[r]) if rule_iou_tn1_mask[r] else 0.0
         metrics[f"violation_grounding_mask_iou_{r}_tn0"] = tn0_val_mask
-        metrics[f"violation_grounding_mask_iou_{r}_tn1"] = tn1_val_mask
         tn0_macros_mask.append(tn0_val_mask)
-        tn1_macros_mask.append(tn1_val_mask)
-        
+
         inter_r_mask = rule_inter_total_mask[r]
         union_r_mask = rule_union_total_mask[r]
         metrics[f"violation_grounding_mask_iou_{r}_micro"] = inter_r_mask / union_r_mask if union_r_mask > 0 else 0.0
         total_inter_mask += inter_r_mask
         total_union_mask += union_r_mask
 
-        # Greedy (tn0 + tn1)
+        # Greedy multi-box IoU
         tn0_val_greedy = sum(rule_iou_tn0_greedy[r]) / len(rule_iou_tn0_greedy[r]) if rule_iou_tn0_greedy[r] else 0.0
-        tn1_val_greedy = sum(rule_iou_tn1_greedy[r]) / len(rule_iou_tn1_greedy[r]) if rule_iou_tn1_greedy[r] else 0.0
         metrics[f"violation_grounding_greedy_iou_{r}_tn0"] = tn0_val_greedy
-        metrics[f"violation_grounding_greedy_iou_{r}_tn1"] = tn1_val_greedy
         tn0_macros_greedy.append(tn0_val_greedy)
-        tn1_macros_greedy.append(tn1_val_greedy)
-        
+
         inter_r_greedy = rule_inter_total_greedy[r]
         union_r_greedy = rule_union_total_greedy[r]
         metrics[f"violation_grounding_greedy_iou_{r}_micro"] = inter_r_greedy / union_r_greedy if union_r_greedy > 0 else 0.0
         total_inter_greedy += inter_r_greedy
         total_union_greedy += union_r_greedy
 
-    # Global grounding IoU aggregates (tn0)
+    # Global grounding IoU aggregates
     metrics["violation_grounding_mask_iou_macro_tn0"] = sum(tn0_macros_mask) / len(tn0_macros_mask) if tn0_macros_mask else 0.0
     metrics["violation_grounding_mask_iou_micro_mean"] = total_inter_mask / total_union_mask if total_union_mask > 0 else 0.0
     metrics["violation_grounding_greedy_iou_macro_tn0"] = sum(tn0_macros_greedy) / len(tn0_macros_greedy) if tn0_macros_greedy else 0.0
     metrics["violation_grounding_greedy_iou_micro_mean"] = total_inter_greedy / total_union_greedy if total_union_greedy > 0 else 0.0
-
-    # Global grounding IoU aggregates (tn1)
-    metrics["violation_grounding_mask_iou_macro_tn1"] = sum(tn1_macros_mask) / len(tn1_macros_mask) if tn1_macros_mask else 0.0
-    metrics["violation_grounding_greedy_iou_macro_tn1"] = sum(tn1_macros_greedy) / len(tn1_macros_greedy) if tn1_macros_greedy else 0.0
 
     # -----------------------------------------------------------------------
     # IoU-Conditioned Rule Identification (Metric 3)

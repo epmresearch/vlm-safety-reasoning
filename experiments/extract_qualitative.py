@@ -28,35 +28,62 @@ def build_image_map(predictions_data):
             image_map[img_id][model] = item
     return image_map
 
+def _rule_set(violation_dict):
+    """Set of rules flagged in a flat output dict, using the shared reward predicate."""
+    from core.constants import RULES
+    from rewards.reward_utils import _is_violation_present
+
+    d = violation_dict or {}
+    return {r for r in RULES if _is_violation_present(d.get(f"{r}_violation"))}
+
+
+def _sample_f1(pred, gt):
+    """Per-sample F1 over the flagged-rule set. 1.0 when both agree the site is safe."""
+    p, g = _rule_set(pred), _rule_set(gt)
+    if not p and not g:
+        return 1.0
+    tp = len(p & g)
+    if tp == 0:
+        return 0.0
+    precision = tp / len(p)
+    recall = tp / len(g)
+    return 2 * precision * recall / (precision + recall)
+
+
 def extract_examples(image_map):
+    """Rank images by per-sample violation-identification F1.
+
+    The previous heuristic read 'reasoning_text_similarity_bertscore_f1' off each
+    prediction record, but that key only ever exists AGGREGATED in metrics.json — never
+    per sample. Every lookup returned the 0 default, so no triumph or failure could ever
+    be selected. This scores each sample from data the file actually carries
+    (parsed_output vs ground_truth).
+    """
     triumphs = []
     failures = []
-    
-    # We define a triumph as an image where GRPO scored high, but Baseline scored low.
-    # We define a failure as an image where GRPO scored extremely low.
-    
+
     for img_id, models_data in image_map.items():
         grpo_data = models_data.get("grpo")
         baseline_data = models_data.get("baseline")
-        sft_data = models_data.get("sft")
-        
-        if grpo_data and baseline_data:
-            grpo_score = grpo_data.get("reasoning_text_similarity_bertscore_f1", 0)
-            base_score = baseline_data.get("reasoning_text_similarity_bertscore_f1", 0)
-            
-            # Simple heuristic for Triumphs
-            if grpo_score > 0.6 and base_score < 0.3:
-                triumphs.append((img_id, base_score, grpo_score, models_data))
-                
-            # Simple heuristic for failures
-            if grpo_score < 0.1:
-                failures.append((img_id, grpo_score, models_data))
-                
-    # Sort
-    triumphs.sort(key=lambda x: x[2] - x[1], reverse=True) # Sort by delta
-    failures.sort(key=lambda x: x[1]) # Sort by lowest score
-    
-    return triumphs[:5], failures[:5] # Top 5 of each
+        if not (grpo_data and baseline_data):
+            continue
+
+        gt = grpo_data.get("ground_truth") or baseline_data.get("ground_truth")
+        grpo_score = _sample_f1(grpo_data.get("parsed_output"), gt)
+        base_score = _sample_f1(baseline_data.get("parsed_output"), gt)
+
+        # Triumph: GRPO got the rule set right where the baseline did not.
+        if grpo_score > 0.6 and base_score < 0.3:
+            triumphs.append((img_id, base_score, grpo_score, models_data))
+
+        # Failure: GRPO got the rule set wrong.
+        if grpo_score < 0.1:
+            failures.append((img_id, grpo_score, models_data))
+
+    triumphs.sort(key=lambda x: x[2] - x[1], reverse=True)  # by largest gain
+    failures.sort(key=lambda x: x[1])                       # by lowest score
+
+    return triumphs[:5], failures[:5]
 
 def generate_markdown(triumphs, failures, image_map):
     md = ["# Qualitative Examples\n"]
@@ -69,9 +96,9 @@ def generate_markdown(triumphs, failures, image_map):
             md.append(f"### Image ID: `{img_id}`")
             md.append(f"**Baseline Score:** {b_score:.3f} | **GRPO Score:** {g_score:.3f}\n")
             md.append("#### Baseline Prediction:")
-            md.append(f"```json\n{json.dumps(data['baseline'].get('predicted_json', {}), indent=2)}\n```\n")
+            md.append(f"```json\n{json.dumps(data['baseline'].get('parsed_output', {}), indent=2)}\n```\n")
             md.append("#### GRPO Prediction:")
-            md.append(f"```json\n{json.dumps(data['grpo'].get('predicted_json', {}), indent=2)}\n```\n")
+            md.append(f"```json\n{json.dumps(data['grpo'].get('parsed_output', {}), indent=2)}\n```\n")
             md.append("---\n")
             
     md.append("## Catastrophic Failures (GRPO Failed)\n")
@@ -82,7 +109,7 @@ def generate_markdown(triumphs, failures, image_map):
             md.append(f"### Image ID: `{img_id}`")
             md.append(f"**GRPO Score:** {g_score:.3f}\n")
             md.append("#### GRPO Prediction:")
-            md.append(f"```json\n{json.dumps(data['grpo'].get('predicted_json', {}), indent=2)}\n```\n")
+            md.append(f"```json\n{json.dumps(data['grpo'].get('parsed_output', {}), indent=2)}\n```\n")
             md.append("---\n")
             
     # Also just list the top 3 overall random examples to compare SFT vs Baseline if GRPO is missing
@@ -94,7 +121,7 @@ def generate_markdown(triumphs, failures, image_map):
         for model in MODELS:
             if model in data:
                 md.append(f"#### {model.upper()} Prediction:")
-                md.append(f"```json\n{json.dumps(data[model].get('predicted_json', {}), indent=2)}\n```\n")
+                md.append(f"```json\n{json.dumps(data[model].get('parsed_output', {}), indent=2)}\n```\n")
         md.append("---\n")
         count += 1
             

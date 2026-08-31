@@ -1,5 +1,5 @@
 # SFT training hyperparameters.
-num_train_epochs: 1
+num_train_epochs: 2    # 8198 augmented rows / bs 32 = 256 steps/epoch -> 512 total
 learning_rate: 1.0e-4
 warmup_ratio: 0.10
 weight_decay: 0.01
@@ -13,13 +13,34 @@ max_grad_norm: 1.0
 # Logging & checkpointing
 logging_steps: 1
 save_steps: 50
-eval_steps: 50
+eval_steps: 25          # 20 eval points across 512 steps (~53s each on 8B)
 eval_strategy: "steps"
 save_total_limit: 3
-load_best_model_at_end: true
-metric_for_best_model: "eval_loss"
+
+# Checkpoint separation: final/ = literal end-of-training weights (debugging),
+# best/ = lowest-eval_loss weights (what the merge -> GRPO handoff consumes).
+# With load_best_model_at_end: true these were identical on any clean run, because
+# the Trainer reloaded best weights before sft_trainer.py wrote final/.
+load_best_model_at_end: false
+metric_for_best_model: "eval_loss"   # still required: EarlyStoppingCallback and
+                                     # Trainer._determine_best_metric both key off this,
+                                     # and neither depends on load_best_model_at_end.
 greater_is_better: false
-best_model_threshold: 0.005
+best_model_threshold: 0.0   # was 0.005 — an ABSOLUTE delta on a ~0.055 loss, i.e. a ~9%
+                            # relative bar. It froze best/ at step 100 while the model kept
+                            # improving to step 250. 0.0 tracks every real improvement.
+
+# Early stopping. Wiring already exists in sft_trainer.py; these keys activate it.
+# patience 4 x eval_steps 25 = tolerate a ~100-step plateau before stopping.
+early_stopping_patience: 4
+early_stopping_threshold: 0.0   # Any improvement, however small, counts as progress:
+                                # it saves best/ AND resets the patience counter.
+                                # Deliberately matched to best_model_threshold: 0.0 above so a
+                                # single rule governs both — "strictly better than the best so
+                                # far" — rather than best/ updating while patience still ticks.
+                                # Consequence: training stops only after 4 consecutive evals with
+                                # NO improvement at all, so expect most runs to go the full 512
+                                # steps. best/ still captures the true minimum either way.
 
 # LoRA configuration
 lora:

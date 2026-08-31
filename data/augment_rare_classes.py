@@ -72,11 +72,13 @@ def augment_sample(sample: dict, transform: A.Compose, aug_index: int) -> dict:
     return new_sample
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--num_augmentations", type=int, default=5,
-                        help="Number of augmented variations to generate per rare image.")
-    args = parser.parse_args()
-    
+    # No CLI arguments: per-rule augmentation multiplicity is deliberately hardcoded below
+    # (rule_4 x16, rule_2 x12, rule_3 x6) and derived from each rule's scarcity in the
+    # train split. A --num_augmentations flag used to exist but was never read.
+    argparse.ArgumentParser(
+        description="Pixel-only augmentation of rare-rule images. Takes no arguments."
+    ).parse_args()
+
     base_cfg = load_base_config()
     
     # Load the original processed dataset
@@ -162,7 +164,11 @@ def main():
     logger.info(f"New combined train split size: {len(combined_train)}")
     
     # 4. Save the new augmented dataset
-    augmented_subdir = base_cfg["dataset"].get("augmented_subdir", "datasets/augmented")
+    # processed_subdir is the augmented set — see the naming trap in CLAUDE.md
+    # (base.yaml: processed_subdir -> datasets/augmented, raw_processed_subdir ->
+    # datasets/processed). This previously read a nonexistent "augmented_subdir" key and
+    # only worked because its hardcoded default happened to match.
+    augmented_subdir = base_cfg["dataset"]["processed_subdir"]
     output_dir = get_drive_path(augmented_subdir)
     ensure_dir(output_dir)
     

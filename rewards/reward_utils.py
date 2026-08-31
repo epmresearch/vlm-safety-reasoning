@@ -61,21 +61,36 @@ def _strict_parse(text: Union[str, List[Dict]]) -> Optional[dict]:
 def _is_violation_present(v: Any) -> bool:
     """
     Determine if a violation value represents an actual violation.
-    Handles various formats: None, empty dict, falsey dicts, bool, string, etc.
+
+    SINGLE SOURCE OF TRUTH — used by every GRPO reward and by
+    evaluation/metrics_{violations,reasoning}.py, so training and evaluation can
+    never disagree about what counts as a violation.
+
+    The rule follows the prompt contract literally: the prompt says "If NOT violated,
+    output null", so **only null (or an absent key) means safe**. Emitting a violation
+    object at all is the model asserting a violation, even if it then fails to say
+    where or why.
+
+    That matters because a bare `true` is rewritten by structural_repair.py:959 into
+    {"reason": "", "bounding_box": []}. Treating that shape as safe would invert the
+    model's own answer — crediting an unsubstantiated alarm as "correctly identified a
+    safe site". It also left a small reward-hacking surface: an empty violation object
+    scored as safe collected the true-negative reward on safe images.
+
+    A contentless assertion still earns nothing downstream — grounding IoU against an
+    empty box list is 0.0, and an empty reason scores ~0 — so the model gets credit for
+    exactly what it asserted and nothing for what it withheld.
+
+    A fully empty dict {} is the one exception: it carries no keys and therefore no
+    assertion. structural_repair.py:1007 already normalizes it to null.
     """
     if v is None:
         return False
     if isinstance(v, bool):
         return v
     if isinstance(v, dict):
-        if not v:
-            return False
-        # Check if violation dict has meaningful content
-        boxes = v.get("bounding_box")
-        has_boxes = isinstance(boxes, list) and len(boxes) > 0
-        reason = v.get("reason")
-        has_reason = isinstance(reason, str) and bool(reason.strip())
-        return has_boxes or has_reason
+        # {} carries no assertion; any keyed violation object does.
+        return bool(v)
     if isinstance(v, str):
         stripped = v.strip().lower()
         if stripped in ("false", "none", "null", "n/a", ""):

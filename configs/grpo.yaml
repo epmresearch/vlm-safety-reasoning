@@ -1,6 +1,7 @@
-# GRPO/GSPO training hyperparameters
-oversample_rule24_multiplier: 1
-oversample_rule3_multiplier: 1
+# GRPO training hyperparameters
+# NOTE: oversample_rule24_multiplier / oversample_rule3_multiplier were removed — GRPO
+# reads the pre-built pool (datasets/grpo_pool) unconditionally and never calls
+# data/oversampling.py. Those keys are SFT-only and live in configs/sft.yaml.
 num_generations: 8
 max_prompt_length: 2048        # was 1024 — verified max is 1519 tokens (see unified.yaml comment)
 max_completion_length: 1000
@@ -12,17 +13,26 @@ per_device_train_batch_size: 16 # 2x num_generations, so every generation call h
                                  # Was halved to 8 for H100's 93GB limit (16 OOM'd at 92.97/93.12 GiB once
                                  # real images started reaching the model) — restored now that training
                                  # runs on H200 (141GB).
-steps_per_generation: 1         # generation_batch_size = 16 (2 unique images x 8 generations each)
+steps_per_generation: 4         # generation_batch_size = 16x4 = 64 => K = 64/8 = 8 unique images
+                                 # per generate() call, in 256/64 = 4 calls per optimizer step.
+                                 # K=8/16/32 all verified NO COLLAPSE on real images
+                                 # (scripts/test_processor_batch_collapse.py, 2026-08-31), so the
+                                 # processor is not the constraint here — generation-time KV cache is.
+                                 # 4 removes ~75% of the per-call weight-streaming overhead vs 1,
+                                 # at 1/4 the generation memory of spg=16. Raise only with headroom
+                                 # evidence from GPUMemoryLoggingCallback: spg=16 means 256 live
+                                 # sequences each carrying ~4256 vision patches, a profile never
+                                 # exercised (the old accidental spg=16 runs were prompt-only).
 gradient_accumulation_steps: 16 # 16x16=256 completions/update, 256/8=32 unique images/update —
                                  # unchanged from the H100 config, just reached via fewer/bigger
                                  # generation calls (16 calls of 16) instead of many small ones
                                  # (32 calls of 8).
-num_train_epochs: 1
+num_train_epochs: 2   # 1732-row pool / 32 unique images per update = 54 steps/epoch -> 108 total
 logging_steps: 5
-save_steps: 50
+save_steps: 20        # was 50: at 54 steps/epoch a 1-epoch run wrote ZERO checkpoints and
+                      # PersistentCheckpointCallback (freq 100) never fired. 20 gives ~5.
 save_total_limit: 3
 beta: 0.04                     # KL penalty coefficient (lowered from 0.10 to allow more exploration)
-use_gspo: false                # not yet implemented; placeholder
 bf16: true
 optim: "adamw_8bit"
 warmup_ratio: 0.05

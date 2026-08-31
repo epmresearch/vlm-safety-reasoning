@@ -21,17 +21,26 @@ def load_metrics(task: str = "unified", tier: str = "", version: str = ""):
 
     suffix = f"_{tier}" if tier and tier != "2b" else ""
 
+    # SFT is evaluated from 'best' (lowest eval_loss) — the checkpoint the merge step
+    # hands to GRPO. GRPO has no best/, so it stays '_final'.
+    models = ["baseline", "sft", "grpo"]
     if task == "unified":
-        models = ["baseline", "sft", "grpo"]
-        if tier == "8b":
-            variants = [f"baseline_8b_{version}", f"unified-sft-8b-{version}_final", f"unified-grpo-8b-{version}_final"]
-        else:
-            variants = [f"baseline_{tier}_{version}", f"unified-sft-{tier}-{version}_final", f"unified-grpo-{tier}-{version}_final"]
+        # Legacy underscored, unprefixed baseline folder — see CLAUDE.md.
+        # (The old `if tier == "8b"` branch built exactly the same strings as the
+        # general one and has been removed.)
+        variants = [
+            f"baseline_{tier}_{version}",
+            f"unified-sft-{tier}-{version}_best",
+            f"unified-grpo-{tier}-{version}_final",
+        ]
     else:
         from core.naming import task_prefix
         prefix = task_prefix(task)
-        models = ["baseline", "sft", "grpo"]
-        variants = [f"{prefix}-baseline-{tier}-{version}", f"{prefix}-sft-{tier}-{version}_final", f"{prefix}-grpo-{tier}-{version}_final"]
+        variants = [
+            f"{prefix}-baseline-{tier}-{version}",
+            f"{prefix}-sft-{tier}-{version}_best",
+            f"{prefix}-grpo-{tier}-{version}_final",
+        ]
         
     for model_key, variant in zip(models, variants):
         metrics_file = RESULTS_DIR / variant / "metrics.json"

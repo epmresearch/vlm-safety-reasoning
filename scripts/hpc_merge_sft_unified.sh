@@ -11,6 +11,12 @@
 #SBATCH --mail-type=BEGIN,END,FAIL
 #SBATCH --mail-user=nabeel.shan@ucalgary.ca
 
+# Fail fast. Without this, a failed training step still ran inference/repair/eval and the
+# job could exit 0 — so the SLURM afterok dependency would start the next stage against a
+# missing or stale adapter. NOTE: deliberately not `set -u`; several lines legitimately
+# expand possibly-unset vars (PYTHONPATH, SLURM_JOB_ID).
+set -eo pipefail
+
 TIER=$1
 SFT_VARIANT=$2
 MERGED_VARIANT_NAME=$3
@@ -29,7 +35,7 @@ module load gcc/13.3.0
 module load python/3.12.5
 
 source "$HOME/envs/vlm_grpo/bin/activate"
-cd "$HOME/vlm-safety-reasoning"
+cd "$HOME/vlm-safety-reasoning" || { echo "FATAL: repo checkout not found at $HOME/vlm-safety-reasoning"; exit 1; }
 
 export PYTHONPATH="$HOME/vlm-safety-reasoning:$PYTHONPATH"
 export HF_HOME="$HOME/scratch/hf_cache"
@@ -43,7 +49,7 @@ fi
 HPC_DRIVE_ROOT="/home/$USER/vlm-finetuning-project1"
 export VLM_DATA_ROOT="$HPC_DRIVE_ROOT"
 
-ADAPTER_PATH="$HPC_DRIVE_ROOT/checkpoints/qwen3vl-${TIER}/${SFT_VARIANT}/final"
+ADAPTER_PATH="$HPC_DRIVE_ROOT/checkpoints/qwen3vl-${TIER}/${SFT_VARIANT}/best"
 MERGED_OUTPUT="$HPC_DRIVE_ROOT/checkpoints/qwen3vl-${TIER}/${MERGED_VARIANT_NAME}"
 
 echo "======================================================================"

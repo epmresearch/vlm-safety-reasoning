@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from pathlib import Path
 import subprocess
 import argparse
 import sys
@@ -68,6 +69,24 @@ def main():
              "to change to start a fresh versioned run."
     )
     args = parser.parse_args()
+
+    # run_inference.py reverse-engineers the merged-SFT base from the variant name using
+    # the regex -(v\d+)(?:_[^-]*)?$. A free-form tag like "v5b" or "2025-08" yields an
+    # empty version, a wrong merged path, and a SystemExit — but only AFTER GRPO training
+    # has already finished. Fail here instead, before anything is submitted.
+    if not re.fullmatch(r"v\d+", args.version):
+        raise SystemExit(
+            f"--version must match 'v<digits>' (e.g. v5, v12); got {args.version!r}. "
+            "Other formats break the merged-checkpoint lookup in run_inference.py."
+        )
+
+    # SLURM cannot create the log directory itself: if it is missing, the job fails at
+    # launch with no output anywhere to explain why.
+    log_dir = Path(f"/home/{os.environ.get('USER', '')}/vlm-finetuning-project1/logs")
+    try:
+        log_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        print(f"Warning: could not create SLURM log dir {log_dir}: {e}")
     
     # Memory configurations (adjust as needed based on HPC constraints)
     # GRPO is memory intensive due to multiple reference models in vram
@@ -80,7 +99,11 @@ def main():
     time_config = {
         "baseline": "12:00:00",
         "sft": "12:00:00",
-        "grpo": "24:00:00"
+        # 48h, not 24h: GRPO is now 2 epochs, and per-step cost rose once images actually
+        # reached the model. The post-training stages (inference on 3004 + repair + eval)
+        # cost ~4-7h on top and cannot be compressed. Over-requesting only costs queue
+        # priority; being killed at 90% costs the entire run.
+        "grpo": "48:00:00"
     }
     
     for tier in args.tiers:

@@ -94,7 +94,10 @@ def run_full_evaluation(
     pred_objects = [p if p else {} for p in parsed_preds]
     gt_objects = references
     
-    pred_violations = [p if p else {} for p in parsed_preds]
+    # Pass parse/schema failures through as None (NOT {}). compute_violation_metrics
+    # distinguishes them from a genuine "no violation" prediction, so an unparseable
+    # output can no longer be credited as a rule_0 true negative.
+    pred_violations = list(parsed_preds)
     gt_violations = references
     
     # 2. Captioning metrics (skip for violations_only)

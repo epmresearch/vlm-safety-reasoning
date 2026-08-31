@@ -93,3 +93,46 @@ class TestRewardViolationGrounding:
     def test_invalid_completion_returns_zero(self):
         gt = _gt_with_violation("rule_1", [[0.1, 0.1, 0.5, 0.5]])
         assert compute_reward("bad json", gt) == pytest.approx(0.0)
+
+class TestTrueNegativeBranch:
+    """Coverage for the both-empty true-negative branch (reward_violation_grounding.py:35).
+
+    This branch had NO test coverage at all before — its constant could have changed
+    silently. The 0.15 value is deliberate: it is the same true-negative constant used by
+    reward_violation_id / reward_reasoning / reward_grounding, and all four must move
+    together or the objective is silently re-biased (see CLAUDE.md invariant #6).
+    """
+
+    def _safe_payload(self):
+        return {
+            "caption": "test",
+            "rule_1_violation": None, "rule_2_violation": None,
+            "rule_3_violation": None, "rule_4_violation": None,
+            "excavator": [], "rebar": [], "worker_with_white_hard_hat": [],
+        }
+
+    def test_correctly_safe_returns_tn_constant(self):
+        completion = "```json\n" + json.dumps(self._safe_payload()) + "\n```"
+        gt = self._safe_payload()
+        assert compute_reward(completion, gt) == pytest.approx(0.15)
+
+    def test_false_alarm_on_safe_image_returns_zero(self):
+        """Predicting a violation where GT is safe is not a true negative."""
+        completion = _completion_with_violation("rule_1", [[100, 100, 500, 500]])
+        gt = self._safe_payload()
+        assert compute_reward(completion, gt) == pytest.approx(0.0)
+
+    def test_missed_violation_returns_zero(self):
+        completion = "```json\n" + json.dumps(self._safe_payload()) + "\n```"
+        gt = _gt_with_violation("rule_1", [[0.1, 0.1, 0.5, 0.5]])
+        assert compute_reward(completion, gt) == pytest.approx(0.0)
+
+    def test_contentless_violation_object_is_not_a_true_negative(self):
+        """A keyed-but-empty violation object asserts a violation, so on a safe image it
+        is a false alarm — it must NOT collect the true-negative reward. This closes the
+        reward-hacking surface where emitting empty violation objects banked TN credit."""
+        payload = self._safe_payload()
+        payload["rule_1_violation"] = {"bounding_box": [], "reason": ""}
+        completion = "```json\n" + json.dumps(payload) + "\n```"
+        gt = self._safe_payload()
+        assert compute_reward(completion, gt) == pytest.approx(0.0)

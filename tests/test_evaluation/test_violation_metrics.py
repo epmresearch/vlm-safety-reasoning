@@ -202,37 +202,76 @@ def test_flat_box_handling():
     assert res["violation_grounding_mask_iou_rule_1_tn0"] == 0.5
 
 def test_violation_tn_three_way_split():
-    """Test that TN cases produce diverging IoU metrics for the 3 conventions."""
-    # We need a mix of cases for Rule 1 (all are True Positives for the *violation* itself):
-    # 1. Normal overlap (IoU = 0.5)
-    # 2. TN box (both empty)
-    # 3. FN box (GT exists, Pred empty -> IoU = 0.0)
-    
+    """A rule flagged on both sides but localized on neither scores 0.0, not 1.0.
+
+    Two semantics to keep in mind:
+
+    1. A rule enters the grounding computation only when _is_violation_present() is True
+       for BOTH pred and GT (i.e. it is in common_rules). Since **null is the only safe
+       signal**, item 3 below uses an explicit null to be a genuine false negative — a
+       keyed-but-empty object like {"bounding_box": []} would count as a detection.
+    2. The old `_tn1` keys scored this case 1.0 (full grounding credit for not
+       localizing) and have been removed; only the `_tn0` convention remains.
+    """
     refs = [
-        {"rule_1_violation": {"bounding_box": [[0, 0, 1, 1]]}},      # Normal
-        {"rule_1_violation": {"bounding_box": []}},                  # TN
-        {"rule_1_violation": {"bounding_box": [[0, 0, 1, 1]]}},      # FN
+        {"rule_1_violation": {"bounding_box": [[0, 0, 1, 1]]}},                 # Normal
+        {"rule_1_violation": {"bounding_box": [], "reason": "unsafe area"}},    # TN (reason-only)
+        {"rule_1_violation": {"bounding_box": [[0, 0, 1, 1]]}},                 # FN
     ]
     preds = [
-        {"rule_1_violation": {"bounding_box": [[0, 0, 1000, 500]]}}, # Normal -> 0.5
-        {"rule_1_violation": {"bounding_box": []}},                  # TN
-        {"rule_1_violation": {"bounding_box": []}},                  # FN -> 0.0
+        {"rule_1_violation": {"bounding_box": [[0, 0, 1000, 500]]}},            # -> IoU 0.5
+        {"rule_1_violation": {"bounding_box": [], "reason": "unsafe area"}},    # TN
+        {"rule_1_violation": None},                                             # Safe -> FN
     ]
-    
+
     res = compute_violation_metrics(preds, refs)
-    
-    # Math for the 3 variants:
-    # We have 3 total items for Rule 1.
-    # Item 1 (Normal): IoU = 0.5 (for all variants)
-    # Item 2 (TN): tn0=0.0, tn1=1.0, excl=skipped
-    # Item 3 (FN): IoU = 0.0 (for all variants)
-    
-    # tn0: (0.5 + 0.0 + 0.0) / 3 = 0.1666...
-    assert abs(res["violation_grounding_mask_iou_rule_1_tn0"] - (0.5 / 3)) < 1e-6
-    
-    # tn1: (0.5 + 1.0 + 0.0) / 3 = 0.5
-    assert abs(res["violation_grounding_mask_iou_rule_1_tn1"] - 0.5) < 1e-6
-    
+
+    # Only items 1 and 2 reach the grounding computation: item 3's prediction is null,
+    # so rule_1 is not in common_rules for it.
+    # Item 1: IoU = 0.5.  Item 2 (flagged by both, localized by neither): 0.0.
+    # -> (0.5 + 0.0) / 2 = 0.25
+    assert abs(res["violation_grounding_mask_iou_rule_1_tn0"] - 0.25) < 1e-6
+
     # TN count should be 1
     assert res["violation_grounding_tn_count_rule_1"] == 1
+
+    # The tn1 convention (which scored item 2 as 1.0) is gone.
+    assert "violation_grounding_mask_iou_rule_1_tn1" not in res
+    assert "violation_grounding_mask_iou_macro_tn1" not in res
+    assert not any(k.endswith("_tn1") for k in res if k.startswith("violation_grounding"))
+
+    # Item 3 remains an identification-level false negative (2 TP, 1 FN -> recall 2/3).
+    assert abs(res["violation_identification_recall_rule_1"] - (2 / 3)) < 1e-6
+
+
+def test_contentless_violation_object_counts_as_a_detection():
+    """A keyed-but-empty violation object is a detection, not a safe call.
+
+    This is the shape structural_repair.py:959 produces from a bare `true`. Scoring it
+    as safe would invert the model's own answer — and on a safe image would credit an
+    unsubstantiated alarm as a rule_0 true positive.
+    """
+    # GT safe, model emits a contentless violation object -> false alarm, not rule_0 TP.
+    res = compute_violation_metrics(
+        [{"rule_1_violation": {"bounding_box": [], "reason": ""}}],
+        [{"rule_1_violation": None}],
+    )
+    assert res["violation_identification_recall_rule_0"] == 0.0   # the false alarm is counted
+    assert res["violation_identification_precision_rule_1"] == 0.0
+
+    # GT has the violation, model asserts it without evidence -> identification TP,
+    # but zero grounding credit because it never said where.
+    res = compute_violation_metrics(
+        [{"rule_1_violation": {"bounding_box": [], "reason": ""}}],
+        [{"rule_1_violation": {"bounding_box": [[0, 0, 1, 1]]}}],
+    )
+    assert res["violation_identification_recall_rule_1"] == 1.0
+    assert res["violation_grounding_mask_iou_rule_1_tn0"] == 0.0
+
+    # An explicit null on a safe image is still the correct safe call.
+    res = compute_violation_metrics(
+        [{"rule_1_violation": None}],
+        [{"rule_1_violation": None}],
+    )
+    assert res["violation_identification_recall_rule_0"] == 1.0
 

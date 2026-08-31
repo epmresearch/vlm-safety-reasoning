@@ -28,6 +28,21 @@ class SaveBestModelCallback(TrainerCallback):
         self.base_model_name = base_model_name
         self.best_value: Optional[float] = None
 
+    def on_train_begin(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs):
+        """Seed best_value from the restored trainer state on resume.
+
+        Without this, self.best_value starts as None on every resume, so the first
+        eval after resuming always counts as "improved" and blindly overwrites best/
+        — even when the resumed run is worse than what best/ already held.
+        state.best_metric is restored from trainer_state.json by the Trainer.
+        """
+        if self.best_value is None and getattr(state, "best_metric", None) is not None:
+            self.best_value = state.best_metric
+            logger.info(
+                f"Resuming: seeded best {self.metric_name}={self.best_value:.4f} "
+                f"from restored trainer state (best/ will only be overwritten on a real improvement)"
+            )
+
     def on_evaluate(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs):
         metrics = kwargs.get("metrics", {})
         current = metrics.get(self.metric_name)

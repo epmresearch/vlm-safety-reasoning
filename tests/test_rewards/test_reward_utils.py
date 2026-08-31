@@ -116,15 +116,31 @@ class TestIsViolationPresent:
         v = {"bounding_box": [], "reason": "Worker not wearing PPE."}
         assert _is_violation_present(v) is True
 
-    def test_dict_empty_boxes_empty_reason_returns_false(self):
+    def test_dict_empty_boxes_empty_reason_returns_true(self):
+        """A keyed-but-contentless violation object is still an assertion of violation.
+
+        The prompt says "If NOT violated, output null", so emitting an object at all
+        means the model claimed a violation. This shape is also exactly what
+        structural_repair.py:959 produces from a bare `true` — scoring it as safe would
+        invert the model's own answer. It earns no grounding or reasoning credit
+        downstream (empty box -> IoU 0.0, empty reason -> ~0), only identification.
+        """
         from rewards.reward_utils import _is_violation_present
         v = {"bounding_box": [], "reason": ""}
-        assert _is_violation_present(v) is False
+        assert _is_violation_present(v) is True
 
-    def test_dict_whitespace_reason_returns_false(self):
+    def test_dict_whitespace_reason_returns_true(self):
         from rewards.reward_utils import _is_violation_present
         v = {"bounding_box": [], "reason": "   "}
-        assert _is_violation_present(v) is False
+        assert _is_violation_present(v) is True
+
+    def test_empty_dict_is_the_one_exception(self):
+        """{} carries no keys and therefore no assertion — the only dict read as safe.
+
+        structural_repair.py:1007 already normalizes it to null before evaluation.
+        """
+        from rewards.reward_utils import _is_violation_present
+        assert _is_violation_present({}) is False
 
     def test_bool_true_returns_true(self):
         from rewards.reward_utils import _is_violation_present

@@ -48,11 +48,15 @@ def main():
     logger.info("Loading fully processed and sorted dataset splits...")
     splits = load_processed_dataset()
     
-    from core.config import load_training_config
+    from core.config import load_config
     from core.io import get_drive_path, ensure_dir
     import json
     from data.oversampling import build_oversampled_indices, build_rare_mask
-    sft_cfg = load_training_config("sft")
+    # Full merge chain (base -> model_registry -> sft -> tasks/<task>), matching GRPO and
+    # the precedence documented in CLAUDE.md. This previously used
+    # load_training_config("sft"), which read configs/sft.yaml alone — so a task YAML
+    # could never override an SFT hyperparameter, silently and without warning.
+    sft_cfg = load_config(task=args.task, training_kind="sft")
 
     # Dynamic tier-based learning rate scaling for SFT
     if args.tier == "4b":

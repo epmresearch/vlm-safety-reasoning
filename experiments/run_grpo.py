@@ -55,7 +55,7 @@ def main():
             adapter_path = args.adapter_path
             logger.warning(f"--allow_unmerged_reference set: using explicit adapter path WITHOUT a merged base: {adapter_path}. KL reference will be the RAW base model, not your SFT policy.")
         else:
-            adapter_path = str(get_drive_path("checkpoints", f"qwen3vl-{args.tier}", args.sft_variant, "final"))
+            adapter_path = str(get_drive_path("checkpoints", f"qwen3vl-{args.tier}", args.sft_variant, "best"))
             logger.warning(f"--allow_unmerged_reference set: using SFT variant adapter path WITHOUT a merged base: {adapter_path}. KL reference will be the RAW base model, not your SFT policy.")
     else:
         raise SystemExit(

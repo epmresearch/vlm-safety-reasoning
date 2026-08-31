@@ -11,6 +11,12 @@
 #SBATCH --mail-type=BEGIN,END,FAIL
 #SBATCH --mail-user=nabeel.shan@ucalgary.ca
 
+# Fail fast. Without this, a failed training step still ran inference/repair/eval and the
+# job could exit 0 — so the SLURM afterok dependency would start the next stage against a
+# missing or stale adapter. NOTE: deliberately not `set -u`; several lines legitimately
+# expand possibly-unset vars (PYTHONPATH, SLURM_JOB_ID).
+set -eo pipefail
+
 TIER=$1
 VARIANT=$2
 if [ -z "$TIER" ] || [ -z "$VARIANT" ]; then
@@ -31,7 +37,7 @@ export PATH="$HOME/scratch/jdk-21.0.2/bin:$PATH"
 export JAVA_HOME="$HOME/scratch/jdk-21.0.2"
 
 source "$HOME/envs/vlm_grpo/bin/activate"
-cd "$HOME/vlm-safety-reasoning"
+cd "$HOME/vlm-safety-reasoning" || { echo "FATAL: repo checkout not found at $HOME/vlm-safety-reasoning"; exit 1; }
 
 export PYTHONPATH="$HOME/vlm-safety-reasoning:$PYTHONPATH"
 export HF_HOME="$HOME/scratch/hf_cache"
@@ -61,16 +67,18 @@ python -m experiments.run_sft \
     --task violations_only
 
 echo "======================================================================"
-echo "[STEP 2/4] Running Inference on Final SFT Checkpoint"
+echo "[STEP 2/4] Running Inference on Best SFT Checkpoint"
 echo "======================================================================"
+# 'best' (lowest eval_loss), not 'final' (last step) — this is the checkpoint the merge
+# step feeds to GRPO, so the reported SFT numbers must describe that same checkpoint.
 python -m experiments.run_inference \
     --tier ${TIER} \
     --variant ${VARIANT} \
-    --checkpoint final \
+    --checkpoint best \
     --batch_size 32 \
     --task violations_only
 
-PREDS_DIR="$HPC_DRIVE_ROOT/results/inference/${VARIANT}_final"
+PREDS_DIR="$HPC_DRIVE_ROOT/results/inference/${VARIANT}_best"
 PREDS_FILE="$PREDS_DIR/predictions.jsonl"
 
 echo "======================================================================"

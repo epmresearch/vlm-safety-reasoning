@@ -34,7 +34,9 @@ def batch_score_reasoning(
         )
 
     from core.constants import RULES
-    
+    # Shared "is this a violation?" predicate — same one the GRPO rewards use.
+    from rewards.reward_utils import _is_violation_present
+
     # Track globally for macro averages
     all_pred_reasons = []
     all_gt_reasons = []
@@ -50,8 +52,21 @@ def batch_score_reasoning(
         gt_dict = gt_dict or {}
         current_image = images[i] 
         
-        pred_by_rule = {r: pred_dict.get(f"{r}_violation", {}).get("reason", "") for r in RULES if pred_dict.get(f"{r}_violation")}
-        gt_by_rule = {r: gt_dict.get(f"{r}_violation", {}).get("reason", "") for r in RULES if gt_dict.get(f"{r}_violation")}
+        # _is_violation_present is the shared predicate (same one the GRPO rewards use),
+        # and it also guards the .get() chain below against a truthy non-dict payload
+        # such as `true` or "yes", which previously raised AttributeError.
+        pred_by_rule = {
+            r: (pred_dict[f"{r}_violation"] or {}).get("reason", "")
+            for r in RULES
+            if _is_violation_present(pred_dict.get(f"{r}_violation"))
+            and isinstance(pred_dict.get(f"{r}_violation"), dict)
+        }
+        gt_by_rule = {
+            r: (gt_dict[f"{r}_violation"] or {}).get("reason", "")
+            for r in RULES
+            if _is_violation_present(gt_dict.get(f"{r}_violation"))
+            and isinstance(gt_dict.get(f"{r}_violation"), dict)
+        }
         
         common_rules = set(pred_by_rule.keys()) & set(gt_by_rule.keys())
         

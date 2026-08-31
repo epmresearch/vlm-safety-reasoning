@@ -69,7 +69,16 @@ def _build_stratified_trainer_class(sampler_batch_size: int, rare_mask: List[boo
                 "sampler": sampler,
                 "drop_last": self.args.dataloader_drop_last,
             }
-            return DataLoader(self.train_dataset, **dataloader_params)
+            dataloader = DataLoader(self.train_dataset, **dataloader_params)
+            # Per-epoch reshuffle. Trainer._inner_training_loop does:
+            #     if hasattr(train_dataloader, "set_epoch"): train_dataloader.set_epoch(epoch)
+            # (transformers/trainer.py:1685). A bare DataLoader has no such method, and
+            # get_train_dataloader() is called only ONCE before the epoch loop — so without
+            # this forward the sampler's epoch stays pinned at its construction value and
+            # every epoch replays byte-identical order. Invisible at 1 epoch; silently
+            # destroys the benefit of multi-epoch training.
+            dataloader.set_epoch = sampler.set_epoch
+            return dataloader
 
     return StratifiedVisionSFTTrainer
 
@@ -98,7 +107,10 @@ def _build_bucketed_trainer_class(sampler_batch_size: int, resolutions: List[flo
                 "sampler": sampler,
                 "drop_last": self.args.dataloader_drop_last,
             }
-            return DataLoader(self.train_dataset, **dataloader_params)
+            dataloader = DataLoader(self.train_dataset, **dataloader_params)
+            # See StratifiedVisionSFTTrainer above — same per-epoch reshuffle forward.
+            dataloader.set_epoch = sampler.set_epoch
+            return dataloader
 
     return BucketedVisionSFTTrainer
 
@@ -357,6 +369,7 @@ def run_sft_unified(
         raise
     finally:
         final_dir = checkpoint_dir / "final"
+        final_save_error = None
         try:
             ensure_dir(final_dir)
             model.save_pretrained(str(final_dir))
@@ -364,7 +377,10 @@ def run_sft_unified(
             _ensure_preprocessor_config(str(final_dir), model_info["hf_path"])
             logger.info(f"Saved final adapter snapshot to {final_dir}")
         except Exception as e:
-            logger.warning(f"Could not save final snapshot: {e}")
+            final_save_error = e
+            logger.error(f"Could not save final snapshot to {final_dir}: {e}", exc_info=True)
+            if final_status == "completed":
+                final_status = f"final_save_failed: {e}"
 
         with open(checkpoint_dir / "training_state.json", "w") as f:
             json.dump({
@@ -376,5 +392,18 @@ def run_sft_unified(
             }, f, indent=2, default=str)
 
         wandb.finish()
+
+        # Fail loudly when training SUCCEEDED but the snapshot could not be written
+        # (disk quota is the realistic case on ARC). Previously this was a warning and the
+        # job still exited 0 with status "completed", so the SLURM afterok dependency fired
+        # the merge job against a missing final/ — surfacing much later as a confusing
+        # FileNotFoundError. Guarded on final_status so a genuine training crash keeps
+        # propagating its own root-cause exception instead of being masked by this one.
+        if final_save_error is not None and str(final_status).startswith("final_save_failed"):
+            raise RuntimeError(
+                f"SFT training completed but the final adapter snapshot could not be written "
+                f"to {final_dir}. Refusing to exit 0 — downstream merge/GRPO stages would "
+                f"start against a missing adapter."
+            ) from final_save_error
 
     return str(best_dir) if best_dir.exists() else str(checkpoint_dir / "final")

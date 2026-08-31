@@ -15,67 +15,82 @@ from models.model_loader import get_model_info
 
 logger = get_logger(__name__)
 
-def load_eval_json(model_short_name: str, variant: str) -> dict:
-    path = get_drive_path("results", model_short_name, variant) / "metrics.json"
-    if not path.exists():
-        logger.warning(f"Missing results file: {path}")
-        return {}
-    with open(path, "r") as f:
-        return json.load(f)
+def load_eval_json(run_name: str) -> dict:
+    """Load metrics.json for one inference run.
+
+    Real on-disk layout, as written by the hpc_*.sh chain
+    (run_inference -> structural_repair -> run_evaluation):
+
+        results/inference/<run_name>/repair_applied/evaluation_results/metrics.json
+
+    This previously looked in results/<short_name>/<variant>/metrics.json, which the
+    pipeline has never written.
+    """
+    base = get_drive_path("results", "inference", run_name)
+    candidates = [
+        base / "repair_applied" / "evaluation_results" / "metrics.json",
+        base / "evaluation_results" / "metrics.json",
+    ]
+    for path in candidates:
+        if path.exists():
+            with open(path, "r") as f:
+                return json.load(f)
+    logger.warning(f"Missing results file for run '{run_name}'; looked in: "
+                   + ", ".join(str(c) for c in candidates))
+    return {}
 
 def flatten_metrics(metrics: dict, label: str) -> dict:
+    """Pick the headline metrics out of a FLAT metrics.json.
+
+    run_evaluation.py writes a flat dict (it dumps eval_results["metrics"] directly).
+    This function used to read metrics["strict_metrics"] / ["valid_metrics"] /
+    ["structural_metrics"], a nested shape that is no longer produced — so every value
+    resolved to None and the whole table came out empty.
+    """
     if not metrics:
         return {"Model": label}
+
+    m = metrics
     flat = {"Model": label}
-    
-    strict = metrics.get("strict_metrics", {})
-    valid = metrics.get("valid_metrics", {})
-    struct = metrics.get("structural_metrics", {})
 
-    # Structural metrics
-    flat["Valid_JSON_%"] = (struct.get("structural_json_validity_rate", 0.0)) * 100
-    flat["Schema_Adherence_%"] = (struct.get("structural_schema_adherence_rate", 0.0)) * 100
+    # Structural
+    flat["Valid_JSON_%"] = m.get("structural_json_validity_rate", 0.0) * 100
+    flat["Schema_Adherence_%"] = m.get("structural_schema_adherence_rate", 0.0) * 100
+    flat["Prediction_Failure_%"] = m.get("violation_prediction_failure_rate", 0.0) * 100
 
-    # Caption metrics
-    flat["Strict_BERTScore_F1"] = strict.get("captioning_bertscore_f1")
-    flat["Valid_BERTScore_F1"] = valid.get("captioning_bertscore_f1")
-    flat["Strict_CLIPScore"] = strict.get("captioning_clipscore")
-    flat["Valid_CLIPScore"] = valid.get("captioning_clipscore")
-    flat["Strict_METEOR"] = strict.get("captioning_meteor")
-    flat["Valid_METEOR"] = valid.get("captioning_meteor")
-    flat["Strict_CIDEr-D"] = strict.get("captioning_ciderd")
-    flat["Valid_CIDEr-D"] = valid.get("captioning_ciderd")
-    
-    # Grounding metrics
-    flat["Strict_Grounding_IoU_Macro_Mask"] = strict.get("grounding_mask_iou_all_macro_mean_tn0")
-    flat["Valid_Grounding_IoU_Macro_Mask"] = valid.get("grounding_mask_iou_all_macro_mean_tn0")
-    flat["Strict_Grounding_IoU_Macro_Greedy"] = strict.get("grounding_greedy_iou_all_macro_mean_tn0")
-    flat["Valid_Grounding_IoU_Macro_Greedy"] = valid.get("grounding_greedy_iou_all_macro_mean_tn0")
-    
-    # Violation metrics
-    flat["Strict_Violation_F1_Micro"] = strict.get("violation_identification_f1_micro")
-    flat["Valid_Violation_F1_Micro"] = valid.get("violation_identification_f1_micro")
-    flat["Strict_Violation_Precision_Micro"] = strict.get("violation_identification_precision_micro")
-    flat["Valid_Violation_Precision_Micro"] = valid.get("violation_identification_precision_micro")
-    flat["Strict_Violation_Recall_Micro"] = strict.get("violation_identification_recall_micro")
-    flat["Valid_Violation_Recall_Micro"] = valid.get("violation_identification_recall_micro")
-    flat["Strict_Violation_F1_Macro"] = strict.get("violation_identification_f1_macro")
-    flat["Valid_Violation_F1_Macro"] = valid.get("violation_identification_f1_macro")
-    flat["Strict_Violation_Precision_Macro"] = strict.get("violation_identification_precision_macro")
-    flat["Valid_Violation_Precision_Macro"] = valid.get("violation_identification_precision_macro")
-    flat["Strict_Violation_Recall_Macro"] = strict.get("violation_identification_recall_macro")
-    flat["Valid_Violation_Recall_Macro"] = valid.get("violation_identification_recall_macro")
-    flat["Strict_Violation_Grounding_IoU_Mask"] = strict.get("violation_grounding_mask_iou_macro_tn0")
-    flat["Valid_Violation_Grounding_IoU_Mask"] = valid.get("violation_grounding_mask_iou_macro_tn0")
-    flat["Strict_Violation_Grounding_IoU_Greedy"] = strict.get("violation_grounding_greedy_iou_macro_tn0")
-    flat["Valid_Violation_Grounding_IoU_Greedy"] = valid.get("violation_grounding_greedy_iou_macro_tn0")
-    
-    # Reasoning metrics
-    flat["Strict_Reasoning_BERTScore_F1_Macro"] = strict.get("reasoning_text_similarity_bertscore_f1_macro")
-    flat["Valid_Reasoning_BERTScore_F1_Macro"] = valid.get("reasoning_text_similarity_bertscore_f1_macro")
-    flat["Strict_Reasoning_BERTScore_F1_Micro"] = strict.get("reasoning_text_similarity_bertscore_f1_micro")
-    flat["Valid_Reasoning_BERTScore_F1_Micro"] = valid.get("reasoning_text_similarity_bertscore_f1_micro")
-    
+    # Captioning (absent for violations_only)
+    flat["BERTScore_F1"] = m.get("captioning_bertscore_f1")
+    flat["CLIPScore"] = m.get("captioning_clipscore")
+    flat["METEOR"] = m.get("captioning_meteor")
+    flat["CIDEr-D"] = m.get("captioning_ciderd")
+
+    # Object grounding (absent for violations_only)
+    flat["Grounding_IoU_Macro_Mask"] = m.get("grounding_mask_iou_all_macro_mean_tn0")
+    flat["Grounding_IoU_Macro_Greedy"] = m.get("grounding_greedy_iou_all_macro_mean_tn0")
+
+    # Violation identification
+    flat["Violation_F1_Micro"] = m.get("violation_identification_f1_micro")
+    flat["Violation_Precision_Micro"] = m.get("violation_identification_precision_micro")
+    flat["Violation_Recall_Micro"] = m.get("violation_identification_recall_micro")
+    flat["Violation_F1_Macro"] = m.get("violation_identification_f1_macro")
+    flat["Violation_Precision_Macro"] = m.get("violation_identification_precision_macro")
+    flat["Violation_Recall_Macro"] = m.get("violation_identification_recall_macro")
+
+    # Safe-image guardrail: recall on rule_0 is 1 - false-alarm-rate on safe images.
+    flat["Rule0_Recall_(1-FalseAlarm)"] = m.get("violation_identification_recall_rule_0")
+    flat["Rule0_Precision"] = m.get("violation_identification_precision_rule_0")
+
+    # IoU-conditioned identification (the strict variant)
+    flat["Violation_F1_Micro_IoUCond"] = m.get("violation_identification_iou_conditioned_f1_micro")
+
+    # Violation grounding
+    flat["Violation_Grounding_IoU_Mask"] = m.get("violation_grounding_mask_iou_macro_tn0")
+    flat["Violation_Grounding_IoU_Greedy"] = m.get("violation_grounding_greedy_iou_macro_tn0")
+
+    # Reasoning
+    flat["Reasoning_BERTScore_F1_Macro"] = m.get("reasoning_text_similarity_bertscore_f1_macro")
+    flat["Reasoning_BERTScore_F1_Micro"] = m.get("reasoning_text_similarity_bertscore_f1_micro")
+
     return flat
 
 def main():
@@ -98,21 +113,23 @@ def main():
     tier = args.tier
     version = args.version
 
+    # SFT is evaluated from the 'best' checkpoint (lowest eval_loss) — that is the
+    # checkpoint the merge step feeds to GRPO. GRPO has no best/, so it stays '_final'.
     if prefix == "unified":
-        baseline_metrics = load_eval_json(short_name, f"baseline_{tier}_{version}")
+        baseline_metrics = load_eval_json(f"baseline_{tier}_{version}")
         if not baseline_metrics:
-            baseline_metrics = load_eval_json(short_name, "baseline")
-        sft_metrics = load_eval_json(short_name, f"unified-sft-{tier}-{version}_final")
-        grpo_metrics = load_eval_json(short_name, f"unified-grpo-{tier}-{version}_final")
+            baseline_metrics = load_eval_json("baseline")
+        sft_metrics = load_eval_json(f"unified-sft-{tier}-{version}_best")
+        grpo_metrics = load_eval_json(f"unified-grpo-{tier}-{version}_final")
     else:
         # e.g. violations_only -> vo-sft-{version}
         short_prefix = task_prefix(prefix)
         # Baseline might be prefixed or not depending on how it was run
-        baseline_metrics = load_eval_json(short_name, f"{short_prefix}-baseline-{tier}-{version}")
+        baseline_metrics = load_eval_json(f"{short_prefix}-baseline-{tier}-{version}")
         if not baseline_metrics:
-            baseline_metrics = load_eval_json(short_name, f"{prefix}-baseline")
-        sft_metrics = load_eval_json(short_name, f"{short_prefix}-sft-{tier}-{version}_final")
-        grpo_metrics = load_eval_json(short_name, f"{short_prefix}-grpo-{tier}-{version}_final")
+            baseline_metrics = load_eval_json(f"{prefix}-baseline")
+        sft_metrics = load_eval_json(f"{short_prefix}-sft-{tier}-{version}_best")
+        grpo_metrics = load_eval_json(f"{short_prefix}-grpo-{tier}-{version}_final")
 
     summary_rows = [
         flatten_metrics(baseline_metrics, "Base"),
