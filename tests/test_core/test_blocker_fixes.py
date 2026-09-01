@@ -10,6 +10,8 @@ import re
 
 import pytest
 
+from core.constants import VALID_TASKS
+
 REPO = pathlib.Path(__file__).resolve().parents[2]
 SCRIPTS = REPO / "scripts"
 PHASE_SCRIPTS = ["hpc_baseline.sh", "hpc_sft.sh", "hpc_merge_sft.sh", "hpc_grpo.sh"]
@@ -21,30 +23,138 @@ EVAL_SCRIPTS = ["hpc_baseline.sh", "hpc_sft.sh", "hpc_grpo.sh"]
 # ---------------------------------------------------------------------------
 
 def test_b1_run_sft_passes_sft_cfg_to_the_trainer():
-    """Without this the trainer falls back to configs/sft.yaml alone, which
-    discards the tier learning-rate clamps AND makes it impossible for a task
-    YAML to override any SFT hyperparameter. Every tier trained at 1.0e-4."""
+    """Without this the trainer falls back to configs/sft.yaml alone, so no task
+    YAML can override any SFT hyperparameter (and the tier LR clamp that used to
+    live in run_sft.py was dead code that still logged a rate it never applied).
+
+    Located via ast rather than str.index: a previous version searched the raw
+    source for "run_sft_unified(" and so could match a COMMENT mentioning the
+    function instead of the call, which is exactly what happened when the clamp
+    removal was documented in a comment.
+    """
+    import ast
+    tree = ast.parse((REPO / "experiments" / "run_sft.py").read_text(encoding="utf-8"))
+    calls = [
+        n for n in ast.walk(tree)
+        if isinstance(n, ast.Call)
+        and getattr(n.func, "id", getattr(n.func, "attr", None)) == "run_sft_unified"
+    ]
+    assert len(calls) == 1, f"expected exactly one run_sft_unified call, found {len(calls)}"
+    kwargs = {k.arg for k in calls[0].keywords}
+    assert "sft_cfg" in kwargs, (
+        "run_sft.py must pass sft_cfg= to run_sft_unified(); without it the merged "
+        "config (base -> registry -> sft -> task) is silently discarded and the "
+        "trainer re-reads configs/sft.yaml alone."
+    )
+    assert "task" in kwargs, "run_sft.py must forward task= as well"
+
+
+def test_b1_sft_learning_rate_is_flat_across_tiers():
+    """The tier LR clamp (4b -> 5e-5, 8b -> 2e-5) must stay removed.
+
+    It was never actually applied -- run_sft.py did not pass sft_cfg through, so
+    every tier trained at configs/sft.yaml's 1.0e-4. Fixing that plumbing would
+    have activated the clamp for the first time, silently changing the 4b/8b runs,
+    so it was deleted instead:
+
+      * it confounds the tier comparison (3 tiers exist to isolate model scale,
+        and a 5x LR difference makes an 8b regression unattributable);
+      * 512 steps cannot absorb it -- at 1e-4 eval loss still improved to ~step
+        250, so a 5x lower LR would be stopped mid-descent;
+      * LoRA is far less LR-sensitive to scale than full fine-tuning, and 1e-4 is
+        already empirically stable at 8b here.
+
+    A per-tier LR is still allowed, but it belongs in model_registry.yaml's tier
+    block as declared configuration, not as a hidden override in run_sft.py.
+    """
     src = (REPO / "experiments" / "run_sft.py").read_text(encoding="utf-8")
-    call = src[src.index("run_sft_unified("):]
-    call = call[:call.index(")\n")]
-    assert "sft_cfg=sft_cfg" in call, (
-        "run_sft.py must pass sft_cfg= to run_sft_unified(); without it the "
-        "tier LR clamps are dead code and the log line reports a rate that was "
-        "never applied."
+    # Strip comments so the rationale above cannot trip this assertion.
+    code = chr(10).join(
+        line.split("#", 1)[0] for line in src.splitlines()
+    )
+    assert "learning_rate" not in code, (
+        "run_sft.py must not override learning_rate; it now comes purely from the "
+        "merged config so that every tier trains at the same rate."
+    )
+
+    from core.config import load_config
+    for task in ("unified", "violations_only", "object_only", "caption_only"):
+        lr = load_config(task=task, training_kind="sft").get("learning_rate")
+        assert lr == 1.0e-4, f"{task}: expected flat 1.0e-4, got {lr}"
+
+
+def test_grpo_learning_rate_can_move_the_policy():
+    """2.0e-7 over 108 steps integrates to ~1.1e-5 of cumulative LR -- 467x less
+    than the 8b SFT run it follows -- so the policy cannot measurably move and
+    GRPO would read as identical to SFT regardless of the reward surface. That is
+    the same "did it train at all?" ambiguity that voided the pre-b8f2470 runs.
+    Guard the floor, not an exact value, so tuning stays free.
+    """
+    import yaml
+    cfg = yaml.safe_load((REPO / "configs" / "grpo.yaml").read_text(encoding="utf-8"))
+    lr = float(cfg["learning_rate"])
+    assert 5.0e-7 <= lr <= 1.0e-5, (
+        f"GRPO learning_rate {lr:g} is outside the usable LoRA-RL band "
+        "(5e-7..1e-5); below it the policy does not move, above it GRPO tends to "
+        "collapse."
     )
 
 
-def test_b1_tier_lr_clamp_actually_reaches_the_config():
-    """The clamp is computed in run_sft.py; prove the value it writes is the
-    value the trainer would read."""
+# ---------------------------------------------------------------------------
+# Ghost variables: keys model_loader.py consumes must come from CONFIG, never
+# from its own module-level literals
+# ---------------------------------------------------------------------------
+
+# Every key models/model_loader.py reads out of the training config. Each has a
+# module-level literal fallback, so an absent key is silently substituted with no
+# log line and no error -- config appears to say one thing, runtime reads another.
+MODEL_LOADER_KEYS = (
+    "load_in_4bit",
+    "max_seq_length",
+    "use_gradient_checkpointing",
+    "finetune_vision_layers",
+    "finetune_language_layers",
+    "finetune_attention_modules",
+    "finetune_mlp_modules",
+    "lora",
+)
+
+
+@pytest.mark.parametrize("training_kind", ["sft", "grpo"])
+@pytest.mark.parametrize("key", MODEL_LOADER_KEYS)
+def test_model_loader_keys_are_declared_in_config(training_kind, key):
+    """GRPO's merge chain is base -> model_registry -> grpo -> tasks/<task>; it does
+    NOT include sft.yaml. Five of these keys (lora + the four finetune_* switches)
+    were absent from GRPO's merged config and were being supplied by
+    model_loader.py's own literals. They matched sft.yaml by coincidence, so
+    editing sft.yaml's lora block would have moved SFT and left GRPO silently on
+    the old values.
+
+    finetune_vision_layers is the one that matters most: freezing the vision tower
+    is a research decision, and it was being made by a Python default.
+    """
     from core.config import load_config
-    for tier, ceiling in (("4b", 5.0e-5), ("8b", 2.0e-5)):
-        cfg = load_config(task="unified", training_kind="sft")
-        base_lr = cfg.get("learning_rate", 1.0e-4)
-        clamped = min(base_lr, ceiling)
-        assert clamped == ceiling, (
-            f"tier {tier}: expected the clamp to bind (base {base_lr} > {ceiling})"
+    for task in VALID_TASKS:
+        cfg = load_config(task=task, training_kind=training_kind)
+        assert key in cfg, (
+            f"{training_kind}/{task}: '{key}' is absent from the merged config, so "
+            f"models/model_loader.py will substitute its own literal. Declare it in "
+            f"configs/{training_kind}.yaml (sft.yaml is not in the GRPO merge chain)."
         )
+
+
+def test_grpo_lora_shape_is_explicit_not_inherited():
+    """configs/grpo.yaml must carry its own lora block, in its own text -- not rely
+    on the merge picking one up from elsewhere."""
+    raw = (REPO / "configs" / "grpo.yaml").read_text(encoding="utf-8")
+    assert "lora:" in raw, (
+        "configs/grpo.yaml must declare its own lora block; without it GRPO's "
+        "adapter rank comes from model_loader.py's literals."
+    )
+    import yaml
+    lora = yaml.safe_load(raw)["lora"]
+    for field in ("r", "alpha", "dropout", "target_modules"):
+        assert field in lora, f"grpo.yaml lora block is missing '{field}'"
 
 
 # ---------------------------------------------------------------------------

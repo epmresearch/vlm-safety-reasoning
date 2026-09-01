@@ -23,6 +23,16 @@ import random
 
 from datasets import load_from_disk, concatenate_datasets
 
+import os
+import sys
+
+# This module is documented as being run as a SCRIPT from the repo root
+# (`python data/build_grpo_pool.py`), which puts data/ on sys.path -- not the repo
+# root -- so first-party imports fail with ModuleNotFoundError: No module named
+# 'core'. It only appeared to work because the SLURM scripts export PYTHONPATH;
+# run by hand on a login node it dies immediately.
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
 from core.config import load_base_config
 from core.io import get_drive_path, ensure_dir
 from core.logging import get_logger

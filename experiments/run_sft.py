@@ -72,13 +72,31 @@ def main():
     logger.info("Loading fully processed and sorted dataset splits...")
     splits = load_processed_dataset(subdir=sft_subdir)
 
-    # Dynamic tier-based learning rate scaling for SFT
-    if args.tier == "4b":
-        sft_cfg["learning_rate"] = min(sft_cfg.get("learning_rate", 1.0e-4), 5.0e-5)
-        logger.info(f"Scaled SFT learning rate to {sft_cfg['learning_rate']} for tier 4b")
-    elif args.tier == "8b":
-        sft_cfg["learning_rate"] = min(sft_cfg.get("learning_rate", 1.0e-4), 2.0e-5)
-        logger.info(f"Scaled SFT learning rate to {sft_cfg['learning_rate']} for tier 8b")
+    # NO tier-based learning-rate scaling. The LR is whatever the merged config says
+    # (configs/sft.yaml: 1.0e-4) at every tier, deliberately.
+    #
+    # There used to be a clamp here (4b -> 5e-5, 8b -> 2e-5). It was dead code for the
+    # whole life of the project, because run_sft.py built sft_cfg and then did not pass
+    # it to run_sft_unified() -- so every tier actually trained at 1.0e-4 while the log
+    # line claimed otherwise. Fixing that plumbing bug would have activated the clamp
+    # for the first time, which is a silent, uncontrolled change to the 4b/8b runs, so
+    # the clamp is removed instead. Three reasons:
+    #
+    #   1. It confounds the tier comparison. This repo runs 3 tiers to say something
+    #      about model scale. If 8b trains at 1/5 the LR of 2b and scores worse, there
+    #      is no way to attribute that to scale rather than to undertraining.
+    #   2. The step budget cannot absorb it. At 1e-4 eval loss was still improving to
+    #      ~step 250 of 512, i.e. convergence used about half the budget. At 2e-5 the
+    #      same descent needs on the order of 5x more steps than exist, so 8b would be
+    #      stopped mid-descent and reported as the model's ceiling.
+    #   3. The instinct is a full-fine-tuning one. LoRA is far less LR-sensitive to
+    #      model scale -- QLoRA tapered only 2x (2e-4 -> 1e-4) across a 9x parameter
+    #      range. A 5x taper across 4x is out of line with that, and 1e-4 is already
+    #      empirically stable at 8b in this exact setup (eval loss ~0.055).
+    #
+    # If a future run needs a per-tier LR, put it in the tier's block in
+    # model_registry.yaml so it is declared configuration rather than a hidden
+    # override, and keep the taper within ~2x.
 
     # Rare-rule oversampling and the rare mask that drives the stratified sampler are
     # both defined purely by which *violation* rules a sample triggers. For a task

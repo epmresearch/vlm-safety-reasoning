@@ -6,7 +6,41 @@ num_generations: 8
 max_prompt_length: 2048        # was 1024 — verified max is 1519 tokens (see unified.yaml comment)
 max_completion_length: 1000
 max_seq_length: 3250           # ADDED — must cover max_prompt + max_completion + margin
-learning_rate: 2.0e-7
+learning_rate: 2.0e-6   # was 2.0e-7, which could not move the policy at all.
+                        #
+                        # Sizing argument, not a guess. Over 108 steps with warmup 0.05 +
+                        # cosine, cumulative LR ("mass") vs the 512-step SFT run at 1e-4
+                        # (mass 2.57e-2) that immediately precedes it:
+                        #     2.0e-7 -> 1.10e-5  = 1/2336 of SFT   (policy cannot move)
+                        #     1.0e-6 -> 5.50e-5  = 1/467  of SFT
+                        #     2.0e-6 -> 1.10e-4  = 1/234  of SFT   <- chosen
+                        #
+                        # Then discount for the gradient that does not exist: a recorded run
+                        # showed frac_reward_zero_std = 0.53, i.e. over half the unique images
+                        # per update produce identical rewards across all 8 rollouts, so their
+                        # group-normalised advantages are exactly 0. reward_format/std is also
+                        # 0.0 post-SFT (saturated). Gradient-weighted, 1e-6 is 1/994 of SFT --
+                        # indistinguishable from noise -- and 2e-6 is 1/497.
+                        #
+                        # 108 steps is the binding constraint: a low LR is only "safe" if there
+                        # is runway for it to accumulate, and there is not.
+                        #
+                        # Safe because three brakes are already tight: max_grad_norm 0.3 caps the
+                        # per-step update regardless of LR, beta 0.04 penalises KL drift from the
+                        # merged SFT reference, and scale_rewards="group" normalises advantages
+                        # so reward magnitude cannot inflate the step. 2e-6 is still the
+                        # conservative half of the usual LoRA-RL band (1e-6..1e-5).
+                        #
+                        # Chosen on failure asymmetry: too high fails LOUDLY (reward collapse,
+                        # KL blowup, degenerate output -- one look at W&B) while too low fails
+                        # SILENTLY, as flat metrics indistinguishable from "GRPO does not help
+                        # this task". The latter is the exact ambiguity that voided the
+                        # pre-b8f2470 runs, and it costs a full 12-job re-run to detect.
+                        #
+                        # VERIFY on the 2b smoke run before the other 11 jobs:
+                        #   reward/mean rising, objective/kl off zero  -> good, proceed
+                        #   both flat across all 108 steps            -> raise to 5e-6
+                        #   reward up but output degenerating / KL     -> drop to 1e-6
 per_device_train_batch_size: 16 # 2x num_generations, so every generation call handles exactly
                                  # 2 unique images (verified safe: scripts/test_processor_batch_collapse.py
                                  # --num_unique_images 2/4 both showed NO COLLAPSE on real dataset images).
@@ -43,3 +77,33 @@ max_grad_norm: 0.3
 # Model loading — will be used via load_model_for_training
 load_in_4bit: true
 use_gradient_checkpointing: "unsloth"
+
+# --- Adapter shape and trainable surface -----------------------------------
+# DUPLICATED FROM configs/sft.yaml ON PURPOSE. These are not inherited: the merge
+# chain for GRPO is base -> model_registry -> grpo -> tasks/<task>, and sft.yaml is
+# NOT in it. Every key below was previously ABSENT from GRPO's merged config, so
+# models/model_loader.py silently supplied its own module-level literals instead
+# (lora_r = 16, lora_alpha = 16, lora_dropout = 0.05, finetune_vision_layers =
+# False, ...). The values happened to match sft.yaml, so nothing was broken -- but
+# that was a coincidence, not a guarantee: editing sft.yaml's lora block would have
+# changed SFT and left GRPO silently on the old numbers, with no log line and no
+# error. That is the same failure mode as the dead tier LR clamp -- config appears
+# to say one thing, runtime reads another.
+#
+# Declared here so GRPO's adapter shape and trainable surface are configuration
+# rather than a Python default. Values are IDENTICAL to sft.yaml, i.e. this is a
+# no-op on current behaviour by construction; change them only deliberately.
+#
+# Note GRPO fits a FRESH adapter on top of the merged SFT model, so its rank need
+# not match the rank SFT used -- but any difference must be an explicit choice,
+# which is exactly what writing it down here forces.
+lora:
+  r: 16
+  alpha: 16
+  dropout: 0.05
+  target_modules: "all-linear"
+
+finetune_vision_layers: false      # vision tower stays frozen in GRPO too
+finetune_language_layers: true
+finetune_attention_modules: true
+finetune_mlp_modules: true

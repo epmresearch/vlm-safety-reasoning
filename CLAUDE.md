@@ -225,6 +225,58 @@ were invisible: the tier learning-rate clamps (`4b → 5e-5`, `8b → 2e-5`) wer
 clamped value, so **every SFT run at every tier actually trained at 1.0e-4**, and no task YAML could override
 an SFT hyperparameter. Pinned by `tests/test_core/test_blocker_fixes.py`.
 
+**Learning rate is now flat across tiers, deliberately.** Fixing that plumbing bug would have activated the
+clamp for the very first time — a silent, uncontrolled change to every 4b/8b run — so **the clamp was removed
+instead**: SFT trains at `configs/sft.yaml`'s `1.0e-4` at every tier. Three reasons, and they are research
+reasons rather than style: a 5× LR difference across tiers *confounds the scale comparison* the three tiers
+exist to make; 512 steps cannot absorb it (at 1e-4 eval loss still improved to ~step 250, so 2e-5 would be
+stopped mid-descent and reported as the model's ceiling); and per-tier LR tapering is a full-fine-tuning
+instinct — LoRA is far less LR-sensitive to scale, QLoRA tapered only 2× across a 9× parameter range, and
+1e-4 is already empirically stable at 8b here (eval loss ~0.055). A per-tier LR is still allowed, but it
+belongs in `model_registry.yaml`'s tier block as declared configuration, never as a hidden override in
+`run_sft.py`. `lora.alpha: 16` at `r: 16` (scaling 1.0, vs the common `alpha = 2r`) is left alone for the
+same comparability reason — it is the validated operating point, and the loss curve shows no underfitting to
+fix. Raise `r` for capacity, as its own ablation; do not reach for `alpha`.
+
+**GRPO's learning rate was raised `2.0e-7 → 2.0e-6`.** Cumulative LR over 108 steps (warmup 0.05 + cosine),
+against the 512-step SFT run at 1e-4 that immediately precedes it (mass 2.57e-2):
+
+| peak LR | mass | vs SFT | gradient-weighted vs SFT |
+|---|---|---|---|
+| `2.0e-7` (old) | 1.10e-5 | 1/2336 | 1/4970 |
+| `1.0e-6` | 5.50e-5 | 1/467 | 1/994 |
+| **`2.0e-6`** | **1.10e-4** | **1/234** | **1/497** |
+
+The gradient-weighted column applies the recorded `frac_reward_zero_std = 0.53`: over half the unique images
+per update produce identical rewards across all 8 rollouts, so their group-normalised advantages are exactly
+0 and they contribute nothing. `reward_format/std` is also 0.0 post-SFT. **108 steps is the binding
+constraint** — a low LR is only conservative if there is runway for it to accumulate, and there is not; at
+1e-6 the gradient-weighted budget is 1/994 of SFT, indistinguishable from noise.
+
+2e-6 is safe because three brakes are already tight: `max_grad_norm: 0.3` caps the per-step update regardless
+of LR, `beta: 0.04` penalises KL drift from the merged SFT reference, and `scale_rewards="group"` normalises
+advantages so reward magnitude cannot inflate step size. It remains in the conservative half of the usual
+LoRA-RL band (1e-6..1e-5) and still applies 234× less cumulative LR than SFT.
+
+Chosen on **failure asymmetry**: too high fails loudly (reward collapse, KL blowup, degenerate output — visible
+at a glance in W&B) while too low fails *silently*, as flat metrics indistinguishable from "GRPO does not help
+this task". That second failure is the exact ambiguity that voided the pre-`b8f2470` runs and costs a full
+12-job re-run to detect.
+
+**Verify on the 2b smoke run before launching the other 11:** `reward/mean` rising and `objective/kl` off zero
+→ proceed; both flat across all 108 steps → raise to 5e-6; reward rising while output degenerates or KL blows
+up → drop to 1e-6.
+
+**`configs/grpo.yaml` now declares its own `lora` block and the four `finetune_*` switches.** GRPO's merge
+chain is `base → model_registry → grpo → tasks/<task>` and **does not include `sft.yaml`**, so those five keys
+were absent from GRPO's merged config and `models/model_loader.py` was silently supplying its own module-level
+literals (`lora_r = 16`, `lora_alpha = 16`, `finetune_vision_layers = False`, …). They matched `sft.yaml` by
+coincidence, so nothing was broken — but editing `sft.yaml`'s `lora` block would have moved SFT and left GRPO
+on the old numbers with no log line and no error, and *freezing the vision tower is a research decision that
+was being made by a Python default*. The values are duplicated verbatim from `sft.yaml`, so this is a no-op on
+behaviour by construction. `tests/test_core/test_blocker_fixes.py` now asserts every key
+`model_loader.py` consumes is present in the merged config for **both** training kinds and all four tasks.
+
 `run_grpo` additionally mutates `sft_cfg` in place (`max_seq_length`, `load_in_4bit`, gradient checkpointing,
 pixel bounds) — **reading `configs/sft.yaml` will not tell you what GRPO actually loaded.** Read the
 `run_manifest.json` written into the checkpoint dir.
