@@ -130,7 +130,15 @@ def main():
     ]
 
     comparison_df = pd.DataFrame(summary_rows)
-    out_path = get_drive_path("results", short_name, "comparison_table.csv")
+    # Namespaced by task prefix AND version. This used to be a bare
+    # results/<short_name>/comparison_table.csv, so running the comparison for
+    # object_only and then caption_only at the same tier silently overwrote the
+    # first one.
+    from core.naming import task_prefix
+    out_path = get_drive_path(
+        "results", short_name,
+        f"comparison_table_{task_prefix(args.task)}_{version}.csv",
+    )
     ensure_dir(out_path.parent)
     comparison_df.to_csv(out_path, index=False)
 

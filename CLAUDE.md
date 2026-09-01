@@ -62,13 +62,14 @@ SLURM CRLF errors — don't defeat it from Windows.
 ### Tests
 
 ```powershell
-python -m pytest tests/ -v                                       # all (~412 tests, no GPU needed)
+python -m pytest tests/ -v                                       # all (~471 tests, no GPU needed)
 python -m pytest tests/test_core -v                               # task registry + name-isolation proof
 python -m pytest tests/test_rewards/test_unified_reward.py -v     # single file
 python -m pytest tests/test_evaluation/test_output_parser.py::test_strip_fences -v   # single test
 python -m pytest tests/ -k "violation and not grounding" -v
 python -m pytest tests/ -k "_oo or _co" -v                        # just the two new pipelines
 python -m pytest tests/test_core/test_blocker_fixes.py -v         # the six pre-flight blockers
+python -m pytest tests/test_core/test_ledger_fixes.py -v          # BUG-08..29
 ```
 
 **Reward-surface validator (no GPU, run before every submit).**
@@ -153,6 +154,15 @@ exactly one caller and silently wrong for every other).
 `reward_components` is caught here rather than mid-training, and it measures the text-only prompt length for
 *that* task instead of the old hardcoded 233-token constant (which was measured for the unified/VO prompt).
 
+**Inference has no auto-resume and no per-batch retry.** `run_inference_batched` runs the split start to
+finish, truncates `predictions.jsonl` on every run (opened once in `"w"` mode), and lets a failing batch crash
+the job. Both features existed for Colab and on SLURM combined into silent metric corruption: a caught batch
+failure was written as `raw_output: ""`, resume re-ran exactly those images because it only counted non-empty
+outputs as complete, and the append-mode write left two records for one `image_id` — inflating every metric's
+denominator with spurious failures. Re-running a stage now re-does the whole split, which is what you want on a
+cluster. `structural_total_samples_count` should always equal the split size (3004 for test); anything else
+means something is wrong. SFT/GRPO checkpoint resume is unaffected and still enabled.
+
 Inference → **structural repair → evaluation** is a fixed chain; never evaluate raw `predictions.jsonl`.
 Evaluation needs a JVM for METEOR/CIDEr-D **only for tasks that score text** (`caption` or `violations`
 capability); `object_only` needs no JRE. Pipelines always pass `--skip_spice`; pass `--skip_java_switch`
@@ -173,8 +183,21 @@ python -m experiments.plot_metrics --tier 8b --task object_only --version v1    
 python -m experiments.generate_comparison_csv --task violations_only --version v1 # per-tier CSVs
 python -m experiments.plot_metrics_vo --task violations_only --version v1         # violation-only 3x3 suite
 python -m experiments.extract_qualitative --task violations_only --tier 8b --version v1
-python analyze_metrics.py
 ```
+
+**First, materialise the local layout.** The pipeline writes
+`results/inference/<run>/evaluation_results/metrics.json` on ARC, but `plot_metrics.py`,
+`plot_metrics_vo.py`, `generate_comparison_csv.py` and `extract_qualitative.py` all read a flat
+`evaluation_results/<run>/metrics.json`. Nothing used to create that, so those four silently found
+nothing. `scripts/fetch_results.py` is the missing step:
+
+```powershell
+python scripts/fetch_results.py --task object_only --version v1 --tiers 2b 4b 8b
+python scripts/fetch_results.py --task object_only --version v1 --source ./arc_results --dry-run
+```
+
+Its docstring carries the `rsync` command for pulling the tree off the cluster. `compare_results.py`
+reads the ARC layout directly and needs no fetch.
 
 All four resolve result folders through `core/naming.py::results_dir_names(task, tier, version)` — one helper,
 so no two of them can disagree about a folder name. SFT results come from `<variant>_best` and GRPO from
@@ -250,7 +273,39 @@ JSON tasks, *clean prose* (no fence, no JSON object, no `"caption":` label, non-
 Without that second meaning the format reward would be free — any non-empty string parses.
 
 Java is required **only** when a task scores text, i.e. has `caption` or `violations`. `object_only` evaluates
-with no JRE and no images.
+with no JRE and no images — and, since BUG-17, does not even build the test-split image map.
+
+**Caption metric semantics.** Blank predictions are **excluded** from the graders and reported as
+`captioning_blank_prediction_rate` / `_count` / `captioning_scored_count`, mirroring how
+`violation_prediction_failure_rate` already works. They used to be rewritten to the literal string
+`"empty"` and scored, so a completely failed generation earned a real nonzero BERTScore and the
+failure was invisible in the caption metrics. Read the pair together: `captioning_bertscore_f1` is
+quality *given a caption was produced*, `captioning_blank_prediction_rate` is how often one wasn't.
+
+**Two CLIPScores.** `captioning_clipscore` is the standard number, kept for historical
+comparability. It silently truncates text at **77 tokens** — roughly 55 words against a 48.5-word
+average reference, which is why it was flat baseline-vs-SFT (0.7781 → 0.7732) while every
+content-overlap metric moved sharply.
+
+`captioning_long_clipscore` reads the **whole** caption by chunking it into ≤75-content-token
+windows, scoring each against the image with the *same* encoder and the *same* `2.5·max(0, cos)`
+formula, and averaging. Because the model and formula are identical, the two numbers sit on one scale
+and the gap between them is precisely the part standard CLIPScore never read — verified: a caption
+that fits scores identically to 1e-4, while a 132-word caption reads 0.3687 standard vs 0.4150
+chunked. Companion keys `long_clipscore_truncated_caption_count` and
+`long_clipscore_avg_chunks_per_caption` tell you how often the 77-token limit was actually binding;
+if avg_chunks ≈ 1.0 the two scores should agree and truncation was never an issue on that data.
+
+Its limitation, stated plainly: chunk-mean cannot see coherence *across* windows. It answers "is
+every part of this caption supported by the image?", not "is this the best whole-caption
+description".
+
+**Why not a long-context CLIP variant.** `jinaai/jina-clip-v1` was tried first and is incompatible
+with `transformers==5.4.0`: its remote `eva_model.py` calls `.item()` on a tensor built under
+transformers' meta-device init, raising `Tensor.item() cannot be called on meta tensors`. No
+`from_pretrained` flag disables that init, and `low_cpu_mem_usage=False` does not help. Chunking needs
+**no new dependency, no extra download, and no third-party remote code**, so it cannot break that way.
+`VLM_DISABLE_LONG_CLIP=1` turns it off; the test suite sets that.
 
 What is deliberately **shared** across tasks: the base model, `datasets/grpo_pool` (GRPO input, for every task),
 and the offline data prep that builds it. `build_grpo_pool.py` is task-blind — one pool build serves every
@@ -385,7 +440,20 @@ images would produce correlated reward groups instead of independent signal.
 ### Rewards and the output contract
 
 `rewards/unified_reward.py::REWARD_COMPONENTS` is the canonical registry;
-`get_reward_funcs_for_task(task)` filters and reweights it from the task YAML.
+`get_reward_funcs_for_task(task)` filters and reweights it from the task YAML. **That is the only
+path.** A second "composite reward" mode used to exist as a fallback for TRL versions without
+`reward_weights` support; it is deleted. It ignored the task's `reward_components` entirely and
+always scored all six components at *unified* weights, so any non-unified task falling into it would
+have trained silently against the wrong objective — and `trl==0.23.0` supports `reward_weights`
+natively, so it was unreachable dead weight wrapped around a live footgun.
+
+**The repetition penalty now actually fires.** `REPETITION_PENALTY_FACTOR` lived only inside that
+deleted composite path, so in production the live reward path had no repetition check at all.
+`_apply_repetition_penalty` applies it per component, which is identical to applying it to the total
+because TRL sums linearly (`Σ wₖ·(f·rₖ) = f·Σ wₖ·rₖ`). Trigger: more than 5 occurrences of one
+identical box tuple, pooled across every box field the task owns. Tunable per task via
+`repetition_penalty_factor` (default `0.5`; `1.0` disables). `caption_only` parses to a caption with
+no boxes, so it can never fire there.
 
 - `unified` — all 6 components at defaults (format .05, caption .15, grounding .25, violation_id .30,
   violation_grounding .15, reasoning .10). Its YAML deliberately declares **no** `reward_components`, which is
@@ -559,6 +627,12 @@ Parse/schema failures reach the metrics as `None`, are **never** credited rule_0
 **Stale things — don't trust them:**
 
 - `setup_project_structure.py` — dead one-time bootstrap describing an older layout. Gitignored yet tracked. Don't run it.
+- **Deleted** in the ledger pass, listed because older notes reference them: `scripts/test_grpo.sh` and
+  `scripts/test_eval_grpo.sh` (task-blind smoke scripts that defaulted every stage to `unified`),
+  `analyze_metrics.py` (hardcoded `vo_{phase}_{tier}` against a layout nothing produces), and
+  `scripts/test_{no_unsloth_tokenize,batch_vs_explicit_template,trl_collator}.py` (spent forensics from
+  the model-is-blind investigation). `scripts/test_processor_batch_collapse.py` survives — it is still
+  the reusable no-GPU collapse check.
 - `rewards/{json_validity,caption_quality,rule_violation_accuracy,grounding_iou}.py` are legacy and unwired;
   `rule_violation_accuracy` still returns 1.0 for both-empty, the exact hack the 0.15 constant replaced.
 - `experiments/run_dual_evaluation.py` returns a **nested** metrics shape

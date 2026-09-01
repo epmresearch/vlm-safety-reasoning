@@ -133,6 +133,11 @@ def build_ground_truth_dict(raw: Dict[str, Any]) -> Dict[str, Any]:
     Boxes remain in dataset [0,1] scale (evaluation handles scale conversion).
     """
     gt = {
+        # image_id is carried so failure reports can name the offending image.
+        # Without it, evaluator.py falls back to "unknown_0", "unknown_1", ... for
+        # every record, making json_parse_failures.json / schema_validation_failures.json
+        # impossible to trace back to a source image.
+        "image_id": raw.get("image_id", ""),
         "caption": raw.get("image_caption", ""),
         "illumination": raw.get("illumination", ""),
         "camera_distance": raw.get("camera_distance", ""),
@@ -272,6 +277,7 @@ def _build_violations_only_target_json(raw: Dict[str, Any]) -> str:
 def build_violations_only_ground_truth(raw: Dict[str, Any]) -> Dict[str, Any]:
     """Builds the ground-truth dict for evaluation comparison for violations_only."""
     gt = {
+        "image_id": raw.get("image_id", ""),
         "illumination": raw.get("illumination", ""),
         "camera_distance": raw.get("camera_distance", ""),
         "view": raw.get("view", ""),
@@ -317,6 +323,7 @@ def build_object_only_ground_truth(raw: Dict[str, Any]) -> Dict[str, Any]:
     the *predictions* from [0,1000] and expects ground truth untouched.
     """
     gt = {
+        "image_id": raw.get("image_id", ""),
         "illumination": raw.get("illumination", ""),
         "camera_distance": raw.get("camera_distance", ""),
         "view": raw.get("view", ""),
@@ -347,6 +354,7 @@ def build_caption_only_ground_truth(raw: Dict[str, Any]) -> Dict[str, Any]:
     metrics compare against this field.
     """
     return {
+        "image_id": raw.get("image_id", ""),
         "caption": raw.get("image_caption", ""),
         "illumination": raw.get("illumination", ""),
         "camera_distance": raw.get("camera_distance", ""),

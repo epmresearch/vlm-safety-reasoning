@@ -143,11 +143,25 @@ def main():
         else task_config.get("repetition_penalty", 1.0)
     )
 
+    # Prompt cap = the loaded context window minus the generation budget. Without an
+    # explicit max_length, the processor's `truncation=True` falls back to
+    # tokenizer.model_max_length, so `inference_max_seq_length` only ever sized the
+    # model load and never constrained the prompt (BUG-12). Capping the prompt here
+    # guarantees the completion always has its full budget available.
+    inference_window = args.max_seq_length or task_config.get("inference_max_seq_length", 2816)
+    max_prompt_length = max(1, inference_window - max_new_tokens)
+    logger.info(
+        f"Token budget: window={inference_window}, max_new_tokens={max_new_tokens}, "
+        f"prompt capped at {max_prompt_length}"
+    )
+
     # --- Manifest for reproducibility ---
     from data.prompt_templates import get_prompt_for_task
     run_config = {
         "experiment": f"inference_{run_name}",
         "task": args.task,
+        "inference_max_seq_length": inference_window,
+        "max_prompt_length": max_prompt_length,
         "model_tier": args.tier,
         "variant": args.variant,
         "checkpoint": args.checkpoint if args.variant else None,
@@ -192,7 +206,11 @@ def main():
 
     # --- Run inference ---
     logger.info(f"Starting batched inference on {len(test_data)} samples (batch_size={args.batch_size})...")
-    logger.info("Output streams incrementally — safe to re-run this command to auto-resume.")
+    logger.info(
+        "Runs start to finish with no auto-resume: predictions.jsonl is TRUNCATED on "
+        "every run, and a failing batch crashes the job instead of writing blank "
+        "records. Re-running this command re-does the whole split."
+    )
     results = run_inference_batched(
         model=model,
         tokenizer=tokenizer,
@@ -203,6 +221,7 @@ def main():
         max_samples=args.max_samples,
         output_path=output_path,
         repetition_penalty=repetition_penalty,
+        max_prompt_length=max_prompt_length,
     )
 
     logger.info(f"Inference complete: {len(results)} total samples processed.")

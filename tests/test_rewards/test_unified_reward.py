@@ -1,19 +1,33 @@
 """
-Tests for rewards/unified_reward.py — the composite reward and batch wrappers.
+Tests for rewards/unified_reward.py — the component registry and the single
+task-aware batch-wrapper path.
+
+The old "Mode 2" composite reward (compute_reward, compute_reward_with_breakdown,
+build_grpo_reward_fn, get_reward_funcs_and_weights, _make_batch_reward) has been
+deleted. It existed as a fallback for TRL versions without reward_weights support,
+but it ignored the task's `reward_components` entirely and always scored all six
+components at *unified* weights — so any non-unified task that fell into it would
+have trained silently against the wrong objective. trl==0.23.0 supports
+reward_weights natively, making the fallback unreachable dead weight with a live
+footgun in it.
+
+What replaced its one genuinely useful behaviour: the repetition-pathology penalty,
+which only ever existed inside Mode 2 and therefore never fired in production, now
+lives in the live path (`_apply_repetition_penalty`).
 """
 import json
+
 import pytest
+
 from rewards.unified_reward import (
-    compute_reward,
-    compute_reward_with_breakdown,
-    get_reward_funcs_and_weights,
-    build_grpo_reward_fn,
     REWARD_COMPONENTS,
-    REPETITION_PENALTY_FACTOR,
+    ALL_REWARD_COMPONENTS,
+    get_reward_funcs_for_task,
+    _apply_repetition_penalty,
 )
 
 
-def _make_valid_completion(caption="A construction site.", violations=None):
+def _make_valid_completion(caption="A construction site.", **overrides):
     payload = {
         "caption": caption,
         "rule_1_violation": None,
@@ -24,8 +38,7 @@ def _make_valid_completion(caption="A construction site.", violations=None):
         "rebar": [],
         "worker_with_white_hard_hat": [],
     }
-    if violations:
-        payload.update(violations)
+    payload.update(overrides)
     return "```json\n" + json.dumps(payload) + "\n```"
 
 
@@ -41,110 +54,71 @@ GT_SAFE = {
 }
 
 
-class TestRewardWeights:
-    def test_weights_sum_to_one(self):
-        total = sum(w for _, _, w in REWARD_COMPONENTS)
-        assert total == pytest.approx(1.0, abs=1e-6)
-
-    def test_six_components(self):
+class TestComponentRegistry:
+    def test_registry_has_six_components(self):
         assert len(REWARD_COMPONENTS) == 6
 
-    def test_component_names(self):
-        names = [name for name, _, _ in REWARD_COMPONENTS]
-        assert "reward_format" in names
-        assert "reward_caption" in names
-        assert "reward_grounding" in names
-        assert "reward_violation_id" in names
-        assert "reward_violation_grounding" in names
-        assert "reward_reasoning" in names
+    def test_registry_names(self):
+        names = [n for n, _, _ in REWARD_COMPONENTS]
+        assert names == [
+            "reward_format",
+            "reward_caption",
+            "reward_grounding",
+            "reward_violation_id",
+            "reward_violation_grounding",
+            "reward_reasoning",
+        ]
 
-    def test_get_reward_funcs_and_weights_returns_matching_lengths(self):
-        funcs, weights = get_reward_funcs_and_weights()
-        assert len(funcs) == len(weights)
-        assert len(funcs) == 6
+    def test_default_weights_sum_to_one(self):
+        assert sum(w for _, _, w in REWARD_COMPONENTS) == pytest.approx(1.0)
 
-    def test_weights_are_positive(self):
-        _, weights = get_reward_funcs_and_weights()
-        assert all(w > 0 for w in weights)
+    def test_all_reward_components_mirrors_the_registry(self):
+        assert set(ALL_REWARD_COMPONENTS) == {n for n, _, _ in REWARD_COMPONENTS}
 
 
-class TestCompositeReward:
-    def test_invalid_json_returns_zero(self):
-        score = compute_reward("bad json", GT_SAFE)
-        assert score == pytest.approx(0.0)
+class TestMode2IsGone:
+    """Static guard: the composite fallback must not come back."""
 
-    def test_score_between_zero_and_one(self):
-        score = compute_reward(_make_valid_completion(), GT_SAFE)
-        assert 0.0 <= score <= 1.0
-
-    def test_perfect_safe_prediction_high_score(self):
-        """Correct safe prediction (no violations, matching GT) should score high."""
-        score = compute_reward(_make_valid_completion("A construction site."), GT_SAFE)
-        # Format=1.0, ViolationID=0.15, Grounding=0.15, Caption≈1.0
-        assert score > 0.20
-
-    def test_breakdown_total_matches_compute_reward(self):
-        completion = _make_valid_completion()
-        score = compute_reward(completion, GT_SAFE)
-        breakdown = compute_reward_with_breakdown(completion, GT_SAFE)
-        assert score == pytest.approx(breakdown["total"], abs=1e-6)
-
-    def test_breakdown_has_all_components(self):
-        breakdown = compute_reward_with_breakdown(_make_valid_completion(), GT_SAFE)
-        assert "reward_format" in breakdown
-        assert "reward_caption" in breakdown
-        assert "reward_grounding" in breakdown
-        assert "reward_violation_id" in breakdown
-        assert "reward_violation_grounding" in breakdown
-        assert "reward_reasoning" in breakdown
-        assert "total" in breakdown
-        assert "repetition_penalty_applied" in breakdown
-
-    def test_repetition_pathology_reduces_score(self):
-        """Repeated boxes trigger penalty."""
-        repeated_boxes = [[100, 100, 500, 500]] * 10
-        payload_rep = {
-            "caption": "test",
-            "rule_1_violation": None, "rule_2_violation": None,
-            "rule_3_violation": None, "rule_4_violation": None,
-            "excavator": repeated_boxes,
-            "rebar": [], "worker_with_white_hard_hat": [],
-        }
-        completion_rep = "```json\n" + json.dumps(payload_rep) + "\n```"
-        completion_normal = _make_valid_completion()
-
-        score_rep = compute_reward(completion_rep, GT_SAFE)
-        score_normal = compute_reward(completion_normal, GT_SAFE)
-        assert score_rep < score_normal
-
-    def test_repetition_penalty_factor_applied(self):
-        """Verify penalty factor is exactly REPETITION_PENALTY_FACTOR."""
-        repeated_boxes = [[100, 100, 500, 500]] * 10
-        payload_rep = {
-            "caption": "test",
-            "rule_1_violation": None, "rule_2_violation": None,
-            "rule_3_violation": None, "rule_4_violation": None,
-            "excavator": repeated_boxes,
-            "rebar": [], "worker_with_white_hard_hat": [],
-        }
-        completion = "```json\n" + json.dumps(payload_rep) + "\n```"
-        breakdown = compute_reward_with_breakdown(completion, GT_SAFE)
-        assert breakdown["repetition_penalty_applied"] == 1.0
-        # total = sum_of_components * REPETITION_PENALTY_FACTOR
-        sum_components = sum(
-            breakdown[name] * weight
-            for name, _, weight in REWARD_COMPONENTS
+    @pytest.mark.parametrize("name", [
+        "compute_reward",
+        "compute_reward_with_breakdown",
+        "build_grpo_reward_fn",
+        "get_reward_funcs_and_weights",
+        "_make_batch_reward",
+    ])
+    def test_symbol_is_deleted(self, name):
+        import rewards.unified_reward as m
+        assert not hasattr(m, name), (
+            f"{name} is back. It ignored the task's reward_components and scored all "
+            "six at unified weights."
         )
-        assert breakdown["total"] == pytest.approx(sum_components * REPETITION_PENALTY_FACTOR, abs=1e-6)
+
+    def test_grpo_trainer_has_no_capability_probe(self):
+        """Read the source as text: importing models.grpo_trainer pulls in wandb,
+        which is an HPC-only dependency."""
+        import pathlib as _p
+        src = (_p.Path(__file__).resolve().parents[2] / "models" / "grpo_trainer.py").read_text(
+            encoding="utf-8")
+        assert "_check_trl_supports_reward_weights" not in src
+        assert "use_native_weights" not in src
+        assert "build_grpo_reward_fn" not in src
 
 
 class TestBatchRewardFunctions:
-    """Tests for the TRL-compatible batch reward functions."""
+    """The wrappers get_reward_funcs_for_task returns must match TRL's contract."""
+
+    def test_returns_matching_lengths(self):
+        funcs, weights = get_reward_funcs_for_task("unified")
+        assert len(funcs) == len(weights) == 6
+
+    def test_weights_are_positive(self):
+        _, weights = get_reward_funcs_for_task("unified")
+        assert all(w > 0 for w in weights)
 
     def test_batch_fn_returns_list_of_floats(self):
-        funcs, _ = get_reward_funcs_and_weights()
+        funcs, _ = get_reward_funcs_for_task("unified")
         completions = [_make_valid_completion(), _make_valid_completion()]
-        gts = [GT_SAFE, GT_SAFE]
+        gts = [json.dumps(GT_SAFE)] * 2
         for fn in funcs:
             result = fn(completions=completions, ground_truth=gts)
             assert isinstance(result, list)
@@ -152,34 +126,70 @@ class TestBatchRewardFunctions:
             assert all(isinstance(s, float) for s in result)
 
     def test_batch_fn_none_ground_truth_returns_zeros(self):
-        funcs, _ = get_reward_funcs_and_weights()
-        completions = [_make_valid_completion()]
+        funcs, _ = get_reward_funcs_for_task("unified")
         for fn in funcs:
-            result = fn(completions=completions, ground_truth=None)
-            assert result == [0.0]
+            assert fn(completions=[_make_valid_completion()], ground_truth=None) == [0.0]
 
     def test_batch_fn_accepts_prompts_positional(self):
-        """Newer TRL passes prompts as first positional arg."""
-        funcs, _ = get_reward_funcs_and_weights()
+        """Newer TRL passes prompts as the first positional arg."""
+        funcs, _ = get_reward_funcs_for_task("unified")
         completions = [_make_valid_completion()]
-        gts = [GT_SAFE]
+        gts = [json.dumps(GT_SAFE)]
         for fn in funcs:
-            # Simulate new TRL signature: fn(prompts, completions, ground_truth=...)
             try:
                 result = fn(["dummy_prompt"], completions, ground_truth=gts)
-                assert isinstance(result, list)
-                assert len(result) == 1
             except TypeError:
-                pytest.fail(
-                    f"Reward function {fn.__name__} failed with new TRL signature "
-                    f"(prompts as positional arg). Fix _make_batch_reward."
-                )
+                pytest.fail(f"{fn.__name__} rejects the prompts-positional TRL signature")
+            assert isinstance(result, list) and len(result) == 1
 
-    def test_grpo_reward_fn_wrapper(self):
-        reward_fn = build_grpo_reward_fn()
-        completions = [_make_valid_completion(), "bad json"]
-        gts = [GT_SAFE, GT_SAFE]
-        result = reward_fn(prompts=None, completions=completions, ground_truth=gts)
-        assert len(result) == 2
-        assert result[0] > 0.0
-        assert result[1] == pytest.approx(0.0)  # bad json → 0
+    def test_malformed_completion_scores_zero_on_every_component(self):
+        funcs, _ = get_reward_funcs_for_task("unified")
+        gts = [json.dumps(GT_SAFE)]
+        for fn in funcs:
+            assert fn(completions=["bad json"], ground_truth=gts) == [0.0]
+
+
+class TestRepetitionPenalty:
+    """Now applied in the LIVE path, per component. Multiplying each component is
+    identical to multiplying the total, because TRL sums linearly:
+        sum_k w_k * (f * r_k) == f * sum_k w_k * r_k
+    """
+
+    @staticmethod
+    def _repeated(n=10):
+        return _make_valid_completion(excavator=[[100, 100, 500, 500]] * n)
+
+    def test_penalty_fires_on_repeated_boxes(self):
+        clean = _make_valid_completion(excavator=[[100, 100, 500, 500]])
+        rep = self._repeated()
+        assert _apply_repetition_penalty([1.0], [rep], "unified") == [pytest.approx(0.5)]
+        assert _apply_repetition_penalty([1.0], [clean], "unified") == [pytest.approx(1.0)]
+
+    def test_threshold_is_more_than_five_identical_boxes(self):
+        five = _make_valid_completion(excavator=[[1, 1, 2, 2]] * 5)
+        six = _make_valid_completion(excavator=[[1, 1, 2, 2]] * 6)
+        assert _apply_repetition_penalty([1.0], [five], "unified") == [pytest.approx(1.0)]
+        assert _apply_repetition_penalty([1.0], [six], "unified") == [pytest.approx(0.5)]
+
+    def test_penalty_reaches_the_live_reward_functions(self):
+        """The regression this fixes: the penalty existed only in Mode 2, so the
+        path GRPO actually uses had no repetition check at all."""
+        funcs, _ = get_reward_funcs_for_task("unified")
+        by_name = {f.__name__: f for f in funcs}
+        gts = [json.dumps(GT_SAFE)]
+        clean = by_name["reward_format"](completions=[_make_valid_completion()], ground_truth=gts)[0]
+        rep = by_name["reward_format"](completions=[self._repeated()], ground_truth=gts)[0]
+        assert clean == pytest.approx(1.0)
+        assert rep == pytest.approx(0.5), "repetition penalty did not reach the live path"
+
+    def test_unparseable_completion_is_not_penalised_twice(self):
+        assert _apply_repetition_penalty([0.0], ["bad json"], "unified") == [0.0]
+
+    def test_caption_only_can_never_trigger_it(self):
+        """caption_only parses to {"caption": ...} with no boxes."""
+        assert _apply_repetition_penalty([1.0], ["a" * 50], "caption_only") == [pytest.approx(1.0)]
+
+    def test_factor_of_one_disables_it(self, monkeypatch):
+        import rewards.unified_reward as m
+        monkeypatch.setattr(m, "reward_constant", lambda task, key, default: 1.0)
+        assert _apply_repetition_penalty([1.0], [self._repeated()], "unified") == [1.0]

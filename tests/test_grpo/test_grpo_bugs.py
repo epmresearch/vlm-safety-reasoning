@@ -153,14 +153,14 @@ class TestBug6LoraMissingInRegistry:
 
 
 class TestBug7BatchFnSignature:
-    """Bug #7: _make_batch_reward produces functions that may not accept 'prompts' positional arg."""
+    """Bug #7: _make_task_aware_batch_reward produces functions that may not accept 'prompts' positional arg."""
 
     def test_batch_fn_handles_prompts_as_first_positional(self):
         """Newer TRL passes (prompts, completions, **kwargs). Validate the wrapper handles this."""
         import json
-        from rewards.unified_reward import get_reward_funcs_and_weights
+        from rewards.unified_reward import get_reward_funcs_for_task
 
-        funcs, _ = get_reward_funcs_and_weights()
+        funcs, _ = get_reward_funcs_for_task("unified")
         valid_payload = {
             "caption": "test",
             "rule_1_violation": None, "rule_2_violation": None,

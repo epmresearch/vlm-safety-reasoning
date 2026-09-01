@@ -212,6 +212,19 @@ def run_sft_unified(
         dataloader_drop_last=sft_cfg.get("dataloader_drop_last", False),
         remove_unused_columns=False,
         dataset_kwargs={"skip_prepare_dataset": True},
+        # The field is `max_length`, NOT `max_seq_length`. Confirmed on ARC against
+        # trl==0.23.0: SFTTrainer.__init__ accepts only
+        #   model, args, data_collator, train_dataset, eval_dataset, processing_class,
+        #   compute_loss_func, compute_metrics, callbacks, optimizers,
+        #   optimizer_cls_and_kwargs, preprocess_logits_for_metrics, peft_config,
+        #   formatting_func
+        # and SFTConfig exposes `max_length` (plus max_steps / max_grad_norm).
+        # `max_seq_length` used to be passed as a TRAINER kwarg, where TRL has no such
+        # parameter and no **kwargs; it survived only via Unsloth's backwards-compat
+        # patch, whose setattr is guarded by `if key in config_fields`, and
+        # `max_seq_length` matches no field — so the configured 2048 was silently
+        # dropped and the enforcing ceiling was SFTConfig.max_length's default of 1024.
+        max_length=sft_cfg.get("max_seq_length", 2048),
     )
 
     # --- Data collator ---
@@ -232,7 +245,16 @@ def run_sft_unified(
     run = init_run(
         study_name=f"sft-{task}",
         run_name=run_name,
-        config={**sft_cfg, **batch_cfg, "model": model_info["hf_path"], "variant": variant},
+        # task_cfg included: SFT's W&B config used to log sft_cfg only, so which task
+        # a run belonged to was recoverable from the group name but its prompt, token
+        # budgets and dataset override were not recorded anywhere in W&B.
+        config={
+            **sft_cfg, **batch_cfg,
+            "model": model_info["hf_path"],
+            "variant": variant,
+            "task": task,
+            "task_cfg": task_cfg,
+        },
         run_id=wandb_run_id,
         resume="must" if wandb_run_id else None,
     )
@@ -317,6 +339,8 @@ def run_sft_unified(
         )
         use_stratified = False
 
+    # max_seq_length is deliberately NOT here — see the max_length note on SFTConfig
+    # above. Passing it to the trainer was a silent no-op.
     trainer_kwargs = {
         "model": model,
         "tokenizer": tokenizer,
@@ -324,10 +348,14 @@ def run_sft_unified(
         "data_collator": data_collator,
         "args": training_args,
         "callbacks": callbacks,
-        "max_seq_length": sft_cfg.get("max_seq_length", 2048),
     }
     if val_dataset:
         trainer_kwargs["eval_dataset"] = val_dataset
+
+    logger.info(
+        f"SFT sequence ceiling: SFTConfig.max_length={training_args.max_length} "
+        f"(from sft_cfg.max_seq_length={sft_cfg.get('max_seq_length')})"
+    )
 
     if use_stratified:
         logger.info("Stratified rare-class sampling ENABLED for train dataloader.")

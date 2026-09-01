@@ -140,41 +140,28 @@ def run_inference(
         disable=not show_progress,
     )
 
+    # No try/except: a generation failure is a real failure and must crash the job
+    # rather than be written out as a blank prediction that scores as a bad model.
+    # Same reasoning as run_inference_batched — see its docstring.
     for sample in iterator:
-        try:
-            start_time = time.time()
-            pil_image = sample["image"]
+        start_time = time.time()
+        pil_image = sample["image"]
 
-            output_text = generate_single(
-                model, tokenizer, pil_image,
-                max_new_tokens=max_new_tokens,
-                repetition_penalty=repetition_penalty,
-                task=task,
-            )
+        output_text = generate_single(
+            model, tokenizer, pil_image,
+            max_new_tokens=max_new_tokens,
+            repetition_penalty=repetition_penalty,
+            task=task,
+        )
 
-            elapsed = time.time() - start_time
-            results.append({
-                "image_id": sample.get("image_id", ""),
-                "raw_output": output_text,
-                "sample": {k: v for k, v in sample.items() if k != "image"},
-                "latency_seconds": elapsed,
-            })
-        except Exception as e:
-            logger.warning(
-                f"Inference failed for {sample.get('image_id', '?')}: {e}"
-            )
-            results.append({
-                "image_id": sample.get("image_id", ""),
-                "raw_output": "",
-                "sample": {k: v for k, v in sample.items() if k != "image"},
-                "latency_seconds": 0.0,
-                "error": str(e),
-            })
+        results.append({
+            "image_id": sample.get("image_id", ""),
+            "raw_output": output_text,
+            "sample": {k: v for k, v in sample.items() if k != "image"},
+            "latency_seconds": time.time() - start_time,
+        })
 
-    logger.info(
-        f"Inference complete: {len(results)} samples processed, "
-        f"{sum(1 for r in results if 'error' in r)} errors"
-    )
+    logger.info(f"Inference complete: {len(results)} samples processed.")
     return results
 
 def generate_batch(
@@ -186,6 +173,7 @@ def generate_batch(
     do_sample: bool = False,
     repetition_penalty: float = 1.0,
     task: str = "unified",
+    max_prompt_length: Optional[int] = None,
 ) -> List[str]:
     """Generates responses for a batch of images using the unified prompt."""
     from qwen_vl_utils import process_vision_info
@@ -226,6 +214,17 @@ def generate_batch(
     image_inputs = all_image_inputs if all_image_inputs else None
     video_inputs = all_video_inputs if all_video_inputs else None
 
+    # `truncation=True` with no `max_length` falls back to
+    # tokenizer.model_max_length, which for Qwen3-VL is far larger than the window
+    # the model was actually loaded with. That made the per-task
+    # `inference_max_seq_length` (2816/3200/2688/2944) purely a model-load setting
+    # that exerted no control over prompt length. Cap the PROMPT explicitly at
+    # (window - generation budget) so a long prompt is truncated rather than
+    # silently eating the space the completion needs.
+    tokenizer_kwargs = {}
+    if max_prompt_length is not None and max_prompt_length > 0:
+        tokenizer_kwargs["max_length"] = max_prompt_length
+
     inputs = tokenizer(
         text=texts,
         images=image_inputs,
@@ -233,6 +232,7 @@ def generate_batch(
         return_tensors="pt",
         padding=True,
         truncation=True,
+        **tokenizer_kwargs,
     ).to(model.device)
 
     with torch.no_grad():
@@ -263,118 +263,114 @@ def run_inference_batched(
     output_path: Optional[str] = None,
     repetition_penalty: float = 1.0,
     task: str = "unified",
+    max_prompt_length: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
-    """Runs batched inference on a dataset split with Auto-Resume support."""
+    """Runs batched inference over a dataset split, start to finish.
+
+    Deliberately has NO auto-resume and NO per-batch retry. Both existed for
+    Google Colab, where the runtime disconnects unpredictably; on a SLURM cluster
+    they are a liability rather than a safety net, because together they produced
+    silently corrupted metrics:
+
+      * a failing batch was caught and written out as `raw_output: ""` for every
+        image in it, so a hard failure looked like a model that emitted nothing;
+      * auto-resume then re-ran exactly those images (it only treated a non-empty
+        output as complete) and APPENDED the retry, because the file was opened in
+        "a" mode;
+      * nothing downstream de-duplicates by image_id, so `predictions.jsonl` ended
+        up with two records for the same image. One image answered perfectly on
+        the retry reported `structural_json_validity_rate = 0.500` over a
+        denominator of 2, and every metric was computed over an inflated
+        denominator padded with spurious failures.
+
+    The output file is opened once in "w" mode and truncated, so a re-run always
+    produces a clean file rather than accumulating onto the last one. A batch
+    failure propagates and kills the job, which is the correct behaviour when the
+    scheduler will surface the traceback in the job log.
+    """
     from tqdm import tqdm
     import time
     import json
-    import os
     import gc
     import torch
 
-    # 1. Auto-Resume logic: Check existing results
-    completed_ids = set()
-    results = []  # Initialize early to hold both previously completed and new records
-    
-    if output_path and os.path.exists(output_path):
-        with open(output_path, "r") as f:
-            for line in f:
-                if line.strip():
-                    try:
-                        record = json.loads(line)
-                        # Only consider an image "completed" if it actually generated a valid text output
-                        if "image_id" in record and record.get("raw_output", "").strip():
-                            completed_ids.add(str(record["image_id"]))
-                            results.append(record)  # <-- FIX: Reload prior predictions into memory
-                    except json.JSONDecodeError:
-                        continue
-        if completed_ids:
-            logger.info(f"Auto-Resume: Loaded {len(completed_ids)} completed images into memory from {output_path}")
-
-    # 2. Filter dataset
     samples_to_process = dataset
-    if completed_ids:
-        # Filter out images that have already been processed
-        samples_to_process = dataset.filter(lambda x: str(x.get("image_id")) not in completed_ids)
-        logger.info(f"Remaining images to process: {len(samples_to_process)}")
-
     if max_samples is not None:
-        # Adjust max_samples to account for images already processed in previous runs
-        remaining_allowed = max(0, max_samples - len(completed_ids))
-        samples_to_process = samples_to_process.select(range(min(remaining_allowed, len(samples_to_process))))
+        samples_to_process = samples_to_process.select(
+            range(min(max_samples, len(samples_to_process)))
+        )
 
     n = len(samples_to_process)
-    
     if n == 0:
-        logger.info("No images left to process! Inference is fully complete.")
-        return results
+        logger.warning("Inference dataset is empty — nothing to do.")
+        return []
 
-    for start in tqdm(range(0, n, batch_size), desc="Batched Inference", disable=not show_progress):
-        batch = samples_to_process.select(range(start, min(start + batch_size, n)))
-        pil_images = batch["image"]
+    results = []
 
-        start_time = time.time()
-        batch_results = []
-        try:
+    # Opened once, in "w" mode: truncates any previous run's file up front so a
+    # re-run can never accumulate onto stale records. Kept open for the whole loop
+    # and flushed per batch, so partial output survives an external kill (walltime,
+    # scancel) for debugging — while still being a single clean write.
+    out_f = open(output_path, "w", encoding="utf-8") if output_path else None
+    try:
+        for start in tqdm(range(0, n, batch_size), desc="Batched Inference", disable=not show_progress):
+            batch = samples_to_process.select(range(start, min(start + batch_size, n)))
+            pil_images = batch["image"]
+
+            start_time = time.time()
+
+            # No try/except: a failure here is a real failure (OOM, a corrupt
+            # image, a broken processor) and must crash the job loudly rather than
+            # be laundered into blank predictions that score as a bad model.
             outputs = generate_batch(
-                model, tokenizer, pil_images, 
+                model, tokenizer, pil_images,
                 max_new_tokens=max_new_tokens,
                 repetition_penalty=repetition_penalty,
-                task=task
+                task=task,
+                max_prompt_length=max_prompt_length,
             )
-            elapsed = time.time() - start_time
-            per_image_latency = elapsed / len(pil_images)
 
-            for i, sample in enumerate(batch):
-                batch_results.append({
+            per_image_latency = (time.time() - start_time) / len(pil_images)
+
+            batch_results = [
+                {
                     "image_id": sample.get("image_id", ""),
                     "raw_output": outputs[i],
                     "sample": {k: v for k, v in sample.items() if k != "image"},
                     "latency_seconds": per_image_latency,
-                })
-        except Exception as e:
-            error_msg = f"Batch inference failed for batch starting at {start}: {e}"
-            logger.info(error_msg)      # downgraded from warning -> info
-            tqdm.write(f"⚠️  {error_msg}") 
+                }
+                for i, sample in enumerate(batch)
+            ]
+            results.extend(batch_results)
 
-            # logger.warning(f"Batch inference failed for batch starting at {start}: {e}")
-            # Fall back to empty output so one bad image doesn't kill the whole dataset
-            for sample in batch:
-                batch_results.append({
-                    "image_id": sample.get("image_id", ""),
-                    "raw_output": "",
-                    "sample": {k: v for k, v in sample.items() if k != "image"},
-                    "latency_seconds": 0.0,
-                    "error": str(e),
-                })
-        
-        results.extend(batch_results)
-        
-        # 3. Incremental Save to JSONL
-        if output_path:
-            with open(output_path, "a", encoding="utf-8") as f:
+            if out_f is not None:
                 for res in batch_results:
-                    f.write(json.dumps(res) + "\n")
-                    
-        # 4. Clear CUDA Cache to prevent memory fragmentation and OOM
-        gc.collect()
-        torch.cuda.empty_cache()
+                    out_f.write(json.dumps(res) + "\n")
+                out_f.flush()
 
-    logger.info(f"Batched inference complete: {len(results)} new samples processed.")
+            # Clear the CUDA cache to prevent memory fragmentation and OOM.
+            gc.collect()
+            torch.cuda.empty_cache()
+    finally:
+        if out_f is not None:
+            out_f.close()
 
-    # Save the standard .json file ONLY if we finish 
-    # the entire loop without a hard crash.
+    logger.info(f"Batched inference complete: {len(results)} samples processed.")
+
+    if len(results) != n:
+        raise RuntimeError(
+            f"Inference produced {len(results)} records for {n} input samples. "
+            "Every downstream metric divides by the record count, so this must "
+            "never happen silently."
+        )
+
+    # Convenience .json twin of the .jsonl. Written only on a clean finish.
     if output_path:
-        # Derive the .json path from the .jsonl path
         json_output_path = output_path.replace(".jsonl", ".json")
         if not json_output_path.endswith(".json"):
-            json_output_path += ".json" # Fallback just in case output_path had no extension
-            
-        try:
-            with open(json_output_path, "w", encoding="utf-8") as f_json:
-                json.dump(results, f_json, indent=2)
-            logger.info(f"Successfully saved complete JSON to {json_output_path}")
-        except Exception as e:
-            logger.error(f"Failed to save final JSON file: {e}")
-            
+            json_output_path += ".json"
+        with open(json_output_path, "w", encoding="utf-8") as f_json:
+            json.dump(results, f_json, indent=2)
+        logger.info(f"Saved complete JSON to {json_output_path}")
+
     return results

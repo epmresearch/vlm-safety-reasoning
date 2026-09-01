@@ -32,7 +32,12 @@ def load_metrics(task: str = "unified", tier: str = "", version: str = ""):
         
     for model_key, variant in zip(models, variants):
         metrics_file = RESULTS_DIR / variant / "metrics.json"
-        repair_file = RESULTS_DIR / variant / "repair_report.json"
+        # structural_repair.py derives its report path from the OUTPUT path, so the
+        # report lands in <run>/repair_applied/, not beside predictions. Looking only
+        # in <run>/ meant the repair-count series was always empty. Probe both.
+        repair_file = RESULTS_DIR / variant / "repair_applied" / "repair_report.json"
+        if not repair_file.exists():
+            repair_file = RESULTS_DIR / variant / "repair_report.json"
         
         if metrics_file.exists():
             with open(metrics_file, "r") as f:
@@ -453,9 +458,13 @@ def main():
     )
     args = parser.parse_args()
 
+    # Namespaced by task prefix, tier AND version, matching plot_metrics_vo.py and
+    # generate_comparison_csv.py. This used to be plots_<tier> only -- so two tasks
+    # (or two versions) at the same tier overwrote each other's figures, and tier
+    # "2b" fell through to a bare evaluation_results/plots.
     global PLOTS_DIR
-    if args.tier and args.tier != "2b":
-        PLOTS_DIR = RESULTS_DIR / f"plots_{args.tier}"
+    from core.naming import task_prefix
+    PLOTS_DIR = RESULTS_DIR / f"plots_{task_prefix(args.task)}_{args.tier or '2b'}_{args.version}"
 
     print(f"Loading metrics for tier: {args.tier or '2b'}...")
     metrics_data, repair_data = load_metrics(args.task, args.tier, args.version)

@@ -5,6 +5,15 @@ Run from project root: pytest tests/ -v
 import json
 import pytest
 
+import os
+
+# The long-context CLIPScore model (jina-clip-v1, ~600 MB) must never be loaded by
+# the unit suite: it would either hit the network or add seconds per test. The
+# metric's own contract is to omit itself when unavailable, which is exactly what
+# this exercises.
+os.environ.setdefault("VLM_DISABLE_LONG_CLIP", "1")
+
+
 
 # ---------------------------------------------------------------------------
 # Valid completion fixtures

@@ -86,6 +86,18 @@ python -c "from transformers import CLIPModel, CLIPProcessor; CLIPModel.from_pre
 echo ">>> Pre-downloading BERTScore model..."
 python -c "from bert_score import score; score(['test'], ['test'], lang='en', verbose=False)"
 
+# long_clipscore reuses these SAME CLIP weights (it chunks the caption rather than
+# swapping in another model), so there is nothing extra to pre-download for it.
+echo ">>> Verifying every eval model resolves from the cache with NO network..."
+HF_HUB_OFFLINE=1 python -c "
+from transformers import CLIPModel
+CLIPModel.from_pretrained('openai/clip-vit-base-patch32', local_files_only=True)
+print('  clip-vit-base-patch32  OK')
+from sentence_transformers import SentenceTransformer
+SentenceTransformer('all-MiniLM-L6-v2')
+print('  all-MiniLM-L6-v2       OK')
+" || echo "WARNING: at least one eval model is NOT resolvable offline. Compute nodes have no internet — fix this on the login node before submitting."
+
 echo ">>> (Qwen3-VL-2B model will be downloaded by the first SLURM job — ensure compute nodes have HF cache access via scratch)"
 
 # ─── 6. Create .env file ──────────────────────────────────────────────────────

@@ -151,7 +151,11 @@ def main():
     logs_dir = ensure_dir(get_drive_path(config.get("paths", {}).get("logs_subdir", "logs")))
     import time
     timestamp = time.strftime("%Y%m%d_%H%M%S")
-    log_file = logs_dir / f"evaluation_{output_dir.name}_{timestamp}.txt"
+    # output_dir.name is the literal "evaluation_results" for every task and every
+    # phase, so this used to collide across all twelve eval steps of a 4-task run.
+    # The run name lives one level up.
+    run_label = output_dir.parent.name if output_dir.name == "evaluation_results" else output_dir.name
+    log_file = logs_dir / f"evaluation_{run_label}_{timestamp}.txt"
     attach_file_logger(str(log_file))
 
     # --- Java / SPICE setup ---
@@ -166,9 +170,18 @@ def main():
             "or run on a node with Java installed."
         )
 
+    # Gated on --skip_spice. restore_spice_cache resolves the SPICE lib dir --
+    # which imports pycocoevalcap.spice.spice -- BEFORE its own "cache already
+    # present" early-return, so calling it unconditionally made every eval, including
+    # object_only (which scores no text at all), hard-depend on that import. Compute
+    # nodes have no internet, so a missing cache is not recoverable in-job either.
     SPICE_CACHE_DIR = str(get_drive_path("tools", "spice_corenlp_cache"))
-    cache_restored = restore_spice_cache(SPICE_CACHE_DIR)
-    logger.info(f"SPICE/CoreNLP cache restored from Drive: {cache_restored}")
+    cache_restored = False
+    if not args.skip_spice:
+        cache_restored = restore_spice_cache(SPICE_CACHE_DIR)
+        logger.info(f"SPICE/CoreNLP cache restored from Drive: {cache_restored}")
+    else:
+        logger.info("--skip_spice set: skipping the SPICE/CoreNLP cache restore entirely.")
     if not cache_restored:
         logger.info(
             "First-ever run: SPICE will download ~2GB of CoreNLP models on its "
@@ -177,7 +190,8 @@ def main():
 
     # --- Manifest ---
     run_config = {
-        "experiment": f"evaluation_{output_dir.name}",
+        "experiment": f"evaluation_{run_label}",
+        "task": args.task,
         "predictions_path": str(predictions_path),
         "output_dir": str(output_dir),
         "max_samples": args.max_samples,
@@ -196,21 +210,38 @@ def main():
     references = [build_gt_dict(r["sample"], task=args.task) for r in records]
 
     # --- Load dataset and build image_id -> PIL image map ---
-    # Predictions were saved without images (see run_inference_batched), so we
-    # re-attach them here by image_id — this also makes the mapping robust to
-    # auto-resume having written records out of original dataset order.
-    logger.info("Loading processed dataset to re-attach images by image_id...")
-    splits = load_processed_dataset()
-    test_data = splits["test"]
-    image_map = {str(sample["image_id"]): sample["image"] for sample in test_data}
-    images = [image_map.get(str(r.get("image_id"))) for r in records]
+    # Predictions are saved without images (see run_inference_batched), so we
+    # re-attach them here by image_id rather than by position. Inference now writes
+    # in dataset order with no resume, so position would work too — but keying on
+    # image_id keeps the join correct regardless, and makes a mismatch detectable
+    # (the missing_images count below) instead of silently pairing the wrong image
+    # with the wrong prediction.
+    # Only the text-scoring metric families use pixels (CLIPScore, and reasoning via
+    # the captioning suite). object_only needs neither, so decoding the whole test
+    # split's images for it was multiple GB of RAM and minutes of wall-clock for
+    # nothing.
+    from core.tasks import CAP_CAPTION, CAP_VIOLATIONS, task_has
+    needs_images = task_has(args.task, CAP_CAPTION) or task_has(args.task, CAP_VIOLATIONS)
 
-    missing_images = sum(1 for img in images if img is None)
-    if missing_images:
-        logger.warning(
-            f"{missing_images} / {len(images)} records had no matching image_id "
-            f"in the test split — CLIPScore/reasoning metrics for those will be affected."
+    if needs_images:
+        logger.info("Loading processed dataset to re-attach images by image_id...")
+        splits = load_processed_dataset()
+        test_data = splits["test"]
+        image_map = {str(sample["image_id"]): sample["image"] for sample in test_data}
+        images = [image_map.get(str(r.get("image_id"))) for r in records]
+
+        missing_images = sum(1 for img in images if img is None)
+        if missing_images:
+            logger.warning(
+                f"{missing_images} / {len(images)} records had no matching image_id "
+                f"in the test split — CLIPScore/reasoning metrics for those will be affected."
+            )
+    else:
+        logger.info(
+            f"Task '{args.task}' scores no text, so no metric needs pixels — "
+            "skipping the image re-attach entirely."
         )
+        images = None
 
     # --- Run evaluation ---
     logger.info("Running full evaluation pipeline...")

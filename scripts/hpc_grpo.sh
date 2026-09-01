@@ -4,6 +4,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
+#SBATCH --mem=250G
 #SBATCH --gres=gpu:h200:1
 # NOTE: partition gpu-h100 contains BOTH H100 (mgh1,mgh3-5) and H200 (egh2) nodes.
 # The GRES type is what actually selects the card. configs/grpo.yaml is tuned for
@@ -49,7 +50,9 @@ echo "Job started: $(date)"
 echo "Node: $SLURMD_NODENAME"
 echo "Job ID: $SLURM_JOB_ID"
 echo "Task: $TASK"
-nvidia-smi
+# `|| true`: informational only. Under `set -e` a transient non-zero exit
+# here would abort the job before a single useful line was logged.
+nvidia-smi || true
 
 module purge
 module load gcc/13.3.0

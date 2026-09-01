@@ -113,8 +113,12 @@ def submit_job(script_path, args, dependencies=None, mem=None, time=None,
             print(f"Successfully submitted job {job_id}")
             return job_id
         else:
-            print(f"Warning: Could not parse job ID from sbatch output: {result.stdout}")
-            return "UNKNOWN"
+            # Hard failure. Returning a sentinel here used to make the caller submit
+            # merge and GRPO with NO afterok dependency, so they started immediately
+            # and failed against a missing adapter -- burning a queue slot and
+            # producing a confusing traceback far from the real cause.
+            print(f"FATAL: could not parse a job ID from sbatch output: {result.stdout!r}")
+            sys.exit(1)
     except FileNotFoundError:
         print("sbatch command not found (are you on a SLURM cluster?). Printing command instead.")
         return "DUMMY_JOB_ID"
@@ -229,7 +233,7 @@ def run(task: str, tiers, version: str, skip_preload: bool = False):
         merge_job = submit_job(
             script_path=PHASE_SCRIPTS["merge"],
             args=[task, tier, sft_variant, merged_variant],
-            dependencies=[sft_job] if sft_job != "UNKNOWN" else None,
+            dependencies=[sft_job],
             mem=MEM_CONFIG["merge"].get(tier, "80G"),
             time=TIME_CONFIG["merge"],
             job_name=slurm_job_name(task, "merge"),
@@ -240,7 +244,7 @@ def run(task: str, tiers, version: str, skip_preload: bool = False):
         grpo_job = submit_job(
             script_path=PHASE_SCRIPTS["grpo"],
             args=[task, tier, grpo_variant, merged_variant],
-            dependencies=[merge_job] if merge_job != "UNKNOWN" else None,
+            dependencies=[merge_job],
             mem=MEM_CONFIG["grpo"].get(tier, "250G"),
             time=TIME_CONFIG["grpo"],
             job_name=slurm_job_name(task, "grpo"),

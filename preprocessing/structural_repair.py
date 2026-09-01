@@ -1545,6 +1545,10 @@ if __name__ == "__main__":
     parser.add_argument("--input", required=True, help="Path to predictions.jsonl")
     parser.add_argument("--output", default=None,
                          help="Path for fixed predictions.jsonl (default: alongside input)")
+    # NOTE: these three default to being written ALONGSIDE --output (i.e. inside
+    # <run>/repair_applied/), not alongside --input. The help text used to say
+    # "alongside input", which sent readers -- and plot_metrics.py -- to the wrong
+    # directory.
     parser.add_argument("--report", default=None,
                          help="Path for repair_report.json (default: alongside input)")
     parser.add_argument("--broken", default=None,

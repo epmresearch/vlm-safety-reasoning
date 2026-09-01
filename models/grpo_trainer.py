@@ -29,23 +29,10 @@ from data.loader import load_processed_dataset
 from data.preprocessor import to_grpo_prompt, build_grpo_dataset
 
 from rewards.unified_reward import (
-    get_reward_funcs_and_weights,
-    build_grpo_reward_fn,
     REWARD_COMPONENTS,
 )
 
 logger = get_logger(__name__)
-
-
-def _check_trl_supports_reward_weights() -> bool:
-    """Check if installed TRL version supports reward_weights in GRPOConfig."""
-    try:
-        from trl import GRPOConfig
-        import inspect
-        sig = inspect.signature(GRPOConfig)
-        return "reward_weights" in sig.parameters
-    except Exception:
-        return False
 
 
 def run_grpo(
@@ -145,9 +132,6 @@ def run_grpo(
     # -----------------------------------------------------------------------
     # Build reward configuration
     # -----------------------------------------------------------------------
-    use_native_weights = _check_trl_supports_reward_weights()
-    logger.info(f"TRL native reward_weights support: {use_native_weights}")
-
     from rewards.unified_reward import get_reward_funcs_for_task
     _funcs, _weights = get_reward_funcs_for_task(task)
     # Log the component registry
@@ -185,7 +169,33 @@ def run_grpo(
 
     # Save a run manifest with all configs
     import json
+    # Provenance. base_model_override is the single most important fact about a GRPO
+    # run -- it is what makes the KL reference the SFT policy rather than the raw
+    # pretrained base (invariant #2) -- and it used to be recorded nowhere. Same for
+    # the git commit, the prompts, and the resolved reward weights, all of which SFT's
+    # run_config.json already captured.
+    try:
+        import subprocess as _sp
+        _git_commit = _sp.check_output(
+            ["git", "rev-parse", "HEAD"], text=True, stderr=_sp.DEVNULL).strip()
+        _git_dirty = bool(_sp.check_output(
+            ["git", "status", "--porcelain"], text=True, stderr=_sp.DEVNULL).strip())
+    except Exception:
+        _git_commit, _git_dirty = "unknown", None
+
+    from data.prompt_templates import SYSTEM_PROMPT as _SYS, get_prompt_for_task as _gp
+
     manifest = {
+        "task": task,
+        "base_model_override": base_model_override,
+        "resolved_base_model": hf_path,
+        "resolved_adapter_path": lora_path,
+        "adapter_path_arg": adapter_path,
+        "git_commit": _git_commit,
+        "git_is_dirty": _git_dirty,
+        "reward_components": [f.__name__ for f in _funcs],
+        "reward_weights": _weights,
+        "prompts": {"SYSTEM_PROMPT": _SYS, "TASK_PROMPT": _gp(task)},
         "grpo_cfg": cfg,
         "sft_cfg": sft_cfg,
         "task_cfg": task_cfg,
@@ -207,7 +217,14 @@ def run_grpo(
     # -----------------------------------------------------------------------
     # WandB tracking
     # -----------------------------------------------------------------------
-    run = init_run(study_name=f"grpo-{task}", run_name=variant_name, config=cfg)
+    # Log sft_cfg too: it carries the LoRA config and the pixel bounds GRPO actually
+    # loaded with, neither of which appears in cfg. Without them the W&B run does not
+    # record what model was trained.
+    run = init_run(
+        study_name=f"grpo-{task}",
+        run_name=variant_name,
+        config={**cfg, "sft_cfg": sft_cfg, "base_model_override": base_model_override},
+    )
 
     # -----------------------------------------------------------------------
     # GRPOConfig + Trainer setup
@@ -247,55 +264,31 @@ def run_grpo(
         num_completions_to_print=4,
     )
 
-    if use_native_weights:
-        # ------------------------------------------------------------------
-        # Mode 1: TRL native multi-reward (preferred — per-component logging)
-        # ------------------------------------------------------------------
-        from rewards.unified_reward import get_reward_funcs_for_task
-        reward_funcs, reward_weights = get_reward_funcs_for_task(task)
-        grpo_config_kwargs["reward_weights"] = reward_weights
+    # TRL forms the weighted sum from per-component functions, which is what gives
+    # per-component reward logging in W&B. There is no fallback path: the old
+    # composite-reward mode ignored the task's reward_components and always scored
+    # all six at unified weights, so a non-unified task falling into it would have
+    # trained silently against the wrong objective.
+    reward_funcs, reward_weights = _funcs, _weights  # assembled once, above
+    grpo_config_kwargs["reward_weights"] = reward_weights
 
-        grpo_config = GRPOConfig(**grpo_config_kwargs)
+    grpo_config = GRPOConfig(**grpo_config_kwargs)
 
-        trainer = GRPOTrainer(
-            model=model,
-            args=grpo_config,
-            train_dataset=train_data,
-            reward_funcs=reward_funcs,
-            processing_class=tokenizer,
-            callbacks=[
-                PersistentCheckpointCallback(persistent_freq=100),
-                GPUMemoryLoggingCallback(every_n_steps=10),
-                ConsoleLogCallback()
-            ],
-        )
-        logger.info(
-            f"Using TRL native multi-reward mode: "
-            f"{len(reward_funcs)} functions, weights={reward_weights}"
-        )
-    else:
-        # ------------------------------------------------------------------
-        # Mode 2: Fallback single composite reward (older TRL versions)
-        # ------------------------------------------------------------------
-        reward_fn = build_grpo_reward_fn(task=task)
-
-        grpo_config = GRPOConfig(**grpo_config_kwargs)
-
-        trainer = GRPOTrainer(
-            model=model,
-            args=grpo_config,
-            train_dataset=train_data,
-            reward_funcs=[reward_fn],
-            processing_class=tokenizer,
-            callbacks=[
-                PersistentCheckpointCallback(persistent_freq=100),
-                GPUMemoryLoggingCallback(every_n_steps=10),
-                ConsoleLogCallback()
-            ],
-        )
-        logger.info(
-            "Using single composite reward mode (TRL reward_weights not available)"
-        )
+    trainer = GRPOTrainer(
+        model=model,
+        args=grpo_config,
+        train_dataset=train_data,
+        reward_funcs=reward_funcs,
+        processing_class=tokenizer,
+        callbacks=[
+            PersistentCheckpointCallback(persistent_freq=100),
+            GPUMemoryLoggingCallback(every_n_steps=10),
+            ConsoleLogCallback()
+        ],
+    )
+    logger.info(
+        f"Reward assembly: {len(reward_funcs)} components, weights={reward_weights}"
+    )
 
     # -----------------------------------------------------------------------
     # Train
