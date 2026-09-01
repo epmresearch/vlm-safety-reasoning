@@ -41,14 +41,14 @@ grounding_tn_constant:
 
 violation_tn_constant: 0.85
 
-max_new_tokens: 1000   # single response covers caption + objects + violations
+max_new_tokens: 1024   # single response covers caption + objects + violations
 
 # Declared explicitly rather than inherited from configs/grpo.yaml. unified was the
 # only task without these pinned, so its GRPO completion budget silently tracked
 # grpo.yaml while the other three pinned theirs — a change to grpo.yaml would have
 # desynchronised unified's GRPO budget from its own max_new_tokens above, and
 # nothing would have flagged it. Keep these two numbers equal.
-max_completion_length: 1000
+max_completion_length: 1024
 max_prompt_length: 2048
 inference_max_seq_length: 2816   # NEW. Verified: full sweep of test(3004) prompt-only, max=1519+1000gen+margin=2770
 repetition_penalty: 1.0   # NEW - locked-in production default per ablation

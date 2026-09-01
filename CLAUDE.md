@@ -62,7 +62,7 @@ SLURM CRLF errors — don't defeat it from Windows.
 ### Tests
 
 ```powershell
-python -m pytest tests/ -v                                       # all (~471 tests, no GPU needed)
+python -m pytest tests/ -v                                       # all (~493 tests, no GPU needed)
 python -m pytest tests/test_core -v                               # task registry + name-isolation proof
 python -m pytest tests/test_rewards/test_unified_reward.py -v     # single file
 python -m pytest tests/test_evaluation/test_output_parser.py::test_strip_fences -v   # single test
@@ -215,67 +215,77 @@ base.yaml → model_registry.yaml → {sft,grpo}.yaml → tasks/<task>.yaml
 ```
 
 `merge_configs` is a shallow merge, nested dicts one level deep. Task YAML is last on purpose (e.g.
-`violations_only.yaml`'s `max_completion_length: 1024` beats `grpo.yaml`'s `1000`). `grpo.yaml`'s top-level
-`per_device_train_batch_size` beats `model_registry.yaml`'s per-tier nested one.
+`object_only.yaml`'s `max_completion_length: 768` beats `grpo.yaml`'s `1000`). `grpo.yaml`'s top-level
+`per_device_train_batch_size` beats `model_registry.yaml`'s per-tier nested one. **`configs/sft.yaml` is not in
+the GRPO chain** — which is what made the third row below a ghost variable.
 
-Both `run_sft` and `run_grpo` go through `load_config()` **and both pass the merged dict to their trainer**,
-so this precedence is real for both. `run_sft.py` used to build the merged `sft_cfg` and then *not pass it* to
-`run_sft_unified()`, which fell back to `load_training_config("sft")` — `configs/sft.yaml` alone. The effects
-were invisible: the tier learning-rate clamps (`4b → 5e-5`, `8b → 2e-5`) were dead code that still logged the
-clamped value, so **every SFT run at every tier actually trained at 1.0e-4**, and no task YAML could override
-an SFT hyperparameter. Pinned by `tests/test_core/test_blocker_fixes.py`.
+Both `run_sft` and `run_grpo` pass the merged dict to their trainer, so this precedence is real for both. It
+was not always. Three keys used to say one thing while the runtime read another, with no log line and no
+error; all three are fixed and pinned by `tests/test_core/test_blocker_fixes.py`.
 
-**Learning rate is now flat across tiers, deliberately.** Fixing that plumbing bug would have activated the
-clamp for the very first time — a silent, uncontrolled change to every 4b/8b run — so **the clamp was removed
-instead**: SFT trains at `configs/sft.yaml`'s `1.0e-4` at every tier. Three reasons, and they are research
-reasons rather than style: a 5× LR difference across tiers *confounds the scale comparison* the three tiers
-exist to make; 512 steps cannot absorb it (at 1e-4 eval loss still improved to ~step 250, so 2e-5 would be
-stopped mid-descent and reported as the model's ceiling); and per-tier LR tapering is a full-fine-tuning
-instinct — LoRA is far less LR-sensitive to scale, QLoRA tapered only 2× across a 9× parameter range, and
-1e-4 is already empirically stable at 8b here (eval loss ~0.055). A per-tier LR is still allowed, but it
-belongs in `model_registry.yaml`'s tier block as declared configuration, never as a hidden override in
-`run_sft.py`. `lora.alpha: 16` at `r: 16` (scaling 1.0, vs the common `alpha = 2r`) is left alone for the
-same comparability reason — it is the validated operating point, and the loss curve shows no underfitting to
-fix. Raise `r` for capacity, as its own ablation; do not reach for `alpha`.
+| Config said | What actually ran | Now |
+|---|---|---|
+| SFT LR clamped `4b → 5e-5`, `8b → 2e-5`, with a log line confirming it | `1.0e-4` at **every** tier — `run_sft.py` built `sft_cfg` and never passed it, so the trainer re-read `sft.yaml` alone | Clamp **deleted**; flat `1.0e-4`. Task YAMLs can now override an SFT key at all |
+| `image_max_pixels: 1204224` (a 1.2 MP cap) | Uncapped, up to 14.6 MP — `apply_pixel_bounds` wrote a key shape transformers rejects | Writes `{"shortest_edge","longest_edge"}`: a **key rename, not a unit conversion** — those keys hold pixel *areas*. A sqrt would cap area at 1097 px² |
+| GRPO adapter shape from `sft.yaml` | From `model_loader.py`'s own literals — `lora` and all four `finetune_*` switches were absent from GRPO's merged config | `grpo.yaml` declares them explicitly. Identical values, so behaviour is unchanged by construction |
 
-**GRPO's learning rate was raised `2.0e-7 → 2.0e-6`.** Cumulative LR over 108 steps (warmup 0.05 + cosine),
-against the 512-step SFT run at 1e-4 that immediately precedes it (mass 2.57e-2):
+The third one broke nothing (the literals matched) but `finetune_vision_layers: false` — freezing the vision
+tower for a vision-grounding RL phase — is a research decision that was being made by a Python default. A
+parametrized test now asserts every key `model_loader.py` consumes is present in the merged config for **both**
+training kinds and all four tasks.
 
-| peak LR | mass | vs SFT | gradient-weighted vs SFT |
+**Why SFT's learning rate is flat across tiers.** A 5× LR spread confounds the scale comparison the three
+tiers exist to make: an 8b regression would be unattributable. 512 steps cannot absorb it either — at 1e-4
+eval loss still improved to ~step 250, so 2e-5 would stop mid-descent and be reported as the model's ceiling.
+And per-tier tapering is a full-fine-tuning instinct; LoRA is far less LR-sensitive to scale (QLoRA tapered 2×
+across a 9× parameter range) and 1e-4 is already stable at 8b here. A per-tier LR is still allowed, but it
+belongs in `model_registry.yaml`'s tier block as declared configuration, never as a hidden override.
+`lora.alpha: 16` at `r: 16` is left alone for the same comparability reason — it is the validated operating
+point and the loss curve shows no underfitting. Raise `r` for capacity, as its own ablation.
+
+**Why GRPO's learning rate is `2.0e-6`.** Cumulative LR ("mass") over 108 steps with warmup 0.05 + cosine,
+against the 512-step SFT run at 1e-4 (mass 2.57e-2). The last column discounts by the recorded
+`frac_reward_zero_std = 0.53` — over half the unique images per update produce identical rewards across all 8
+rollouts, so their group-normalised advantages are exactly 0:
+
+| peak LR | mass | vs SFT | gradient-weighted |
 |---|---|---|---|
 | `2.0e-7` (old) | 1.10e-5 | 1/2336 | 1/4970 |
 | `1.0e-6` | 5.50e-5 | 1/467 | 1/994 |
 | **`2.0e-6`** | **1.10e-4** | **1/234** | **1/497** |
 
-The gradient-weighted column applies the recorded `frac_reward_zero_std = 0.53`: over half the unique images
-per update produce identical rewards across all 8 rollouts, so their group-normalised advantages are exactly
-0 and they contribute nothing. `reward_format/std` is also 0.0 post-SFT. **108 steps is the binding
-constraint** — a low LR is only conservative if there is runway for it to accumulate, and there is not; at
-1e-6 the gradient-weighted budget is 1/994 of SFT, indistinguishable from noise.
+**108 steps is the binding constraint** — a low LR is only conservative if there is runway to accumulate it.
+Safe because three brakes are already tight: `max_grad_norm: 0.3` caps the per-step update regardless of LR,
+`beta: 0.04` penalises KL drift from the merged reference, and `scale_rewards="group"` stops reward magnitude
+inflating step size. Chosen on **failure asymmetry**: too high fails loudly (reward collapse, KL blowup, visibly
+degenerate output); too low fails *silently*, as flat metrics indistinguishable from "GRPO does not help this
+task" — the ambiguity that voided the pre-`b8f2470` runs. **Verify on the 2b smoke run before the other 11:**
+`reward/mean` rising and `objective/kl` off zero → proceed; both flat across all 108 steps → 5e-6; reward
+rising while output degenerates → 1e-6.
 
-2e-6 is safe because three brakes are already tight: `max_grad_norm: 0.3` caps the per-step update regardless
-of LR, `beta: 0.04` penalises KL drift from the merged SFT reference, and `scale_rewards="group"` normalises
-advantages so reward magnitude cannot inflate step size. It remains in the conservative half of the usual
-LoRA-RL band (1e-6..1e-5) and still applies 234× less cumulative LR than SFT.
+**Three length keys, three different jobs.** Easy to conflate, and one of them was a real bug (BUG-13):
 
-Chosen on **failure asymmetry**: too high fails loudly (reward collapse, KL blowup, degenerate output — visible
-at a glance in W&B) while too low fails *silently*, as flat metrics indistinguishable from "GRPO does not help
-this task". That second failure is the exact ambiguity that voided the pre-`b8f2470` runs and costs a full
-12-job re-run to detect.
+| Key | Consumed by | Bounds |
+|---|---|---|
+| `max_seq_length` | `FastVisionModel.from_pretrained` — **both** SFT and GRPO | the model **load** window: a ceiling, not an allocation |
+| `SFTConfig.max_length` | HF Trainer, SFT only | prompt **+** target as one sequence, vision tokens included |
+| `max_prompt_length` / `max_completion_length` | `GRPOConfig`, GRPO only | the prompt (incl. vision tokens), and **one** rollout's output |
 
-**Verify on the 2b smoke run before launching the other 11:** `reward/mean` rising and `objective/kl` off zero
-→ proceed; both flat across all 108 steps → raise to 5e-6; reward rising while output degenerates or KL blows
-up → drop to 1e-6.
+So SFT and GRPO both pass `max_seq_length` to the loader; they differ in what bounds the *training* sequence,
+because SFT trains on one concatenated sequence while GRPO generates prompt and completion in separate phases.
+`max_seq_length` was previously passed to `SFTTrainer` as a kwarg it does not accept, so the configured 2048
+was dropped and the real ceiling was `max_length`'s default of **1024** — below the observed 1865 max.
 
-**`configs/grpo.yaml` now declares its own `lora` block and the four `finetune_*` switches.** GRPO's merge
-chain is `base → model_registry → grpo → tasks/<task>` and **does not include `sft.yaml`**, so those five keys
-were absent from GRPO's merged config and `models/model_loader.py` was silently supplying its own module-level
-literals (`lora_r = 16`, `lora_alpha = 16`, `finetune_vision_layers = False`, …). They matched `sft.yaml` by
-coincidence, so nothing was broken — but editing `sft.yaml`'s `lora` block would have moved SFT and left GRPO
-on the old numbers with no log line and no error, and *freezing the vision tower is a research decision that
-was being made by a Python default*. The values are duplicated verbatim from `sft.yaml`, so this is a no-op on
-behaviour by construction. `tests/test_core/test_blocker_fixes.py` now asserts every key
-`model_loader.py` consumes is present in the merged config for **both** training kinds and all four tasks.
+Two things that regularly trip people up here:
+
+- **`max_completion_length` is per rollout, not per group.** Each of the 8 rollouts gets the full budget; it is
+  not divided among them and it is not a total. It is a ceiling on generation, not a preallocation — HF
+  `generate` grows its KV cache dynamically, so raising it costs nothing until a rollout actually runs that
+  long. Its real job is bounding the damage from a degenerate repeating generation.
+- **Vision tokens count inside `max_prompt_length`.** The `{"type": "image"}` placeholder expands to ~1176–1270
+  real tokens at the 1.2 MP cap, which is why the measured worst-case prompt is **1519** tokens (~233 text +
+  ~1270 vision), not ~233. `scripts/validate_rewards.py --census` measures **text only** and says so — add the
+  vision tokens before comparing any census number to a ceiling.
 
 `run_grpo` additionally mutates `sft_cfg` in place (`max_seq_length`, `load_in_4bit`, gradient checkpointing,
 pixel bounds) — **reading `configs/sft.yaml` will not tell you what GRPO actually loaded.** Read the
@@ -287,6 +297,21 @@ effective batch 32 = **512 steps**, eval every 25 steps, early stopping at patie
 logs the actual train/val sizes at startup. GRPO, all four tasks: 2 epochs over the 1732-row shared pool at 32
 unique images per update = **108 steps**, `save_steps: 20`. If the first SLURM log line disagrees with the
 expected step count, the config did not merge as expected.
+
+**Live token budgets.** All four fit with margin; `max_new_tokens` is kept equal to `max_completion_length` per
+task, so inference can never truncate an output GRPO trained the policy to produce. Worst case is
+`violations_only`/`unified` at 2048 + 1024 = 3072 against `max_seq_length: 3250`.
+
+| Task | `max_new_tokens` = `max_completion_length` | GRPO 2048 + completion | Inference window | real prompt 1519 + gen |
+|---|---|---|---|---|
+| `unified` | 1024 | 3072 | 2816 | 2543 |
+| `violations_only` | 1024 | 3072 | 3200 | 2543 |
+| `object_only` | 768 | 2816 | 2688 | 2287 |
+| `caption_only` | 768 | 2816 | 2944 | 2287 |
+
+A completion that truncates mid-JSON fails the parse, which zeroes **every** reward component — so a
+truncation is indistinguishable from a terrible model. Confirm real target lengths with
+`scripts/validate_rewards.py --census` (remembering it reports text only) before lowering any of these.
 
 ### Tasks — what `--task` actually controls
 
@@ -698,13 +723,6 @@ Parse/schema failures reach the metrics as `None`, are **never** credited rule_0
   `build_unified_sft_dataset`, `to_grpo_prompt` and `build_grpo_dataset` alongside the `_for_task` versions the
   pipeline actually uses.
 
-**Fixed since the last revision of this file** — mentioned because older notes and diagnosis docs still refer to
-them: `configs/tasks/unified.yaml`'s dead `reward_weights` block is gone (and stray weight keys now raise
-instead of being ignored silently); `structural_repair.py` no longer re-declares `RuleViolation`/`UnifiedOutput`
-locally, it imports them from `data/schemas.py`; `merge_sft_adapter.py --task` is required rather than defaulting
-to `violations_only`; `models/inference.py` no longer reads `load_task_config("unified")` at import time; the
-dead `task != 'unified'` special case in `_make_task_aware_batch_reward` is gone; and `preflight_grpo.py` no
-longer hardcodes a 233-token text-only baseline.
 - `docs/Metrics.md` documents a metric namespace that no longer exists (`grounding_iou_all_macro_*`,
   `_excl`, `grounding_iou_total_macro`). Grepping `evaluation/` for those returns nothing — the live families
   are `grounding_{mask,greedy}_iou_{all,exist}_*`. Its analysis of `rule_0` semantics is still sound, and its
