@@ -4,6 +4,7 @@ import sys
 # Ensure imports work when run from project root
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
+from core.constants import VALID_TASKS
 from data.loader import load_processed_dataset
 from data.preprocessor import build_sft_dataset
 from data.dataset_cache import save_preprocessed_cache
@@ -11,8 +12,10 @@ from data.dataset_cache import save_preprocessed_cache
 def main():
     print("Loading raw HF datasets...")
     splits = load_processed_dataset()
-    
-    tasks = ["unified", "violations_only"]
+
+    # Every registered task, from core/tasks.py — this used to be its own hardcoded
+    # two-element list, a second place to forget when adding a pipeline.
+    tasks = list(VALID_TASKS)
     split_names = ["train", "val", "test"]
     
     for task in tasks:

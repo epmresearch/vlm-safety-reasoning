@@ -226,8 +226,11 @@ def run_sft_unified(
     # --- W&B: init BEFORE training, persist run_id IMMEDIATELY ---
     import wandb
     from core.wandb_utils import init_run
+    # Task-namespaced, matching GRPO's f"grpo-{task}". The run *name* was already
+    # variant-namespaced (and therefore unique), but the group was a bare "sft",
+    # so all four pipelines' SFT runs piled into one W&B group.
     run = init_run(
-        study_name="sft",
+        study_name=f"sft-{task}",
         run_name=run_name,
         config={**sft_cfg, **batch_cfg, "model": model_info["hf_path"], "variant": variant},
         run_id=wandb_run_id,

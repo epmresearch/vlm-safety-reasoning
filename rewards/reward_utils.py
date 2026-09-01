@@ -58,6 +58,82 @@ def _strict_parse(text: Union[str, List[Dict]]) -> Optional[dict]:
     res = _strict_parse_cached(text)
     return copy.deepcopy(res) if res is not None else None
 
+# ---------------------------------------------------------------------------
+# Tunable reward constants, read from the task YAML
+# ---------------------------------------------------------------------------
+
+@functools.lru_cache(maxsize=16)
+def reward_constant(task: str, key: str, default: float) -> Any:
+    """Reads a tunable reward constant from configs/tasks/<task>.yaml.
+
+    Cached, because reward functions are called once per completion per step and
+    a YAML read per call would dominate the reward budget.
+
+    Returns ``default`` when the key is absent, so a task YAML that says nothing
+    keeps exactly the behaviour it had before these knobs existed.
+    """
+    from core.config import load_task_config
+    try:
+        cfg = load_task_config(task)
+    except Exception:
+        return default
+    value = cfg.get(key)
+    return default if value is None else value
+
+
+def grounding_tn_constant(task: str, cls: str) -> float:
+    """Per-class true-negative credit for object grounding.
+
+    Accepts either a scalar (applies to every class) or a per-class mapping in the
+    task YAML under ``grounding_tn_constant``. Defaults to 0.15, the historical
+    global value, so `unified` is unchanged unless it opts in.
+
+    WHY THIS IS TUNABLE. The true-negative credit sets the break-even detection
+    quality for a class: emitting boxes for class k is positive-EV only when
+
+        p_k * E[IoU_k]  >  c * (1 - p_k)        i.e.   E[IoU_k] > c * (1 - p_k) / p_k
+
+    where p_k is that class's prevalence in the GRPO pool. At the historical flat
+    c = 0.15 and the measured pool prevalences (excavator 0.361, rebar 0.088,
+    worker_with_white_hard_hat 0.115) the break-even IoUs are 0.27, 1.55 and 1.15.
+    Two of those exceed 1.0, so *never emitting those classes is strictly dominant
+    regardless of how good the detector is* — the reward actively trains the model
+    to stop detecting them. See scripts/validate_rewards.py, which fails the build
+    if any class's break-even exceeds a configured ceiling.
+    """
+    value = reward_constant(task, "grounding_tn_constant", 0.15)
+    if isinstance(value, dict):
+        return float(value.get(cls, value.get("default", 0.15)))
+    return float(value)
+
+
+def _is_substantive_violation(v: Any) -> bool:
+    """True if a PREDICTED violation carries any actual content.
+
+    A violation object is *present* (see _is_violation_present) as soon as it
+    exists at all — that is the prompt contract and it is deliberately generous.
+    But presence alone should not earn full identification credit, because
+    ``{"reason": "", "bounding_box": []}`` is a contentless assertion: it names no
+    location and gives no justification, yet it scored a perfect F-beta = 1.0 on
+    reward_violation_id, the most heavily weighted component of the
+    violations_only task (0.40). Grounding and reasoning are TP-conditioned, so
+    neither of them penalised it either.
+
+    Substance = a non-empty reason OR at least one bounding box. Ground truth is
+    always substantive, so this is only ever applied to predictions.
+    """
+    if not _is_violation_present(v):
+        return False
+    if not isinstance(v, dict):
+        # A bare `true` asserts a violation with no content whatsoever.
+        return False
+    reason = v.get("reason")
+    has_reason = isinstance(reason, str) and bool(reason.strip())
+    boxes = v.get("bounding_box")
+    has_box = bool(boxes) if isinstance(boxes, (list, tuple)) else False
+    return has_reason or has_box
+
+
 def _is_violation_present(v: Any) -> bool:
     """
     Determine if a violation value represents an actual violation.
@@ -245,11 +321,18 @@ def _strict_parse_with_schema_cached(text: str, schema_name: str) -> Optional[di
     
     Unlike _strict_parse_cached (which always validates against UnifiedOutput),
     this function uses the schema registry to validate against the correct
-    schema for the given task.
+    schema for the given task, and parse_output_for_task so that plain-text tasks
+    (caption_only) are parsed with their own contract rather than as JSON.
     """
+    from evaluation.output_parser import parse_output_for_task, validate_output_for_task
+
+    # Resolved outside the try below: an unregistered task must raise, not read as
+    # a schema failure.
+    from core.tasks import get_task_spec
+    get_task_spec(schema_name)
+
     try:
-        from evaluation.output_parser import parse_model_output, validate_output_for_task
-        parsed = parse_model_output(text)
+        parsed = parse_output_for_task(text, task=schema_name)
         if parsed is None or not isinstance(parsed, dict):
             return None
         # Validate against the appropriate schema
@@ -264,8 +347,8 @@ def _strict_parse_for_task(text: Union[str, List[Dict]], task: str = "unified") 
     """Task-aware wrapper around cached parser.
     
     For task='unified', produces identical results to _strict_parse().
-    For task='violations_only', validates against ViolationsOnlyOutput
-    (which does NOT require caption or grounding class fields).
+    For every other task, parses with that task's wire format and validates
+    against that task's schema from data/schemas.py::SCHEMA_REGISTRY.
     """
     if isinstance(text, list):
         text = text[-1].get("content", "") if text else ""

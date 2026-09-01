@@ -10,9 +10,10 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from core.config import load_config
+from core.constants import VALID_TASKS
 from core.logging import get_logger
+from core.tasks import CAP_VIOLATIONS, task_has
 from data.loader import load_processed_dataset
-from data.preprocessor import build_unified_sft_dataset
 from data.samplers import get_resolutions
 from models.sft_trainer import run_sft_unified
 
@@ -22,7 +23,7 @@ logger = get_logger(__name__)
 def main():
     # Parse just the task arg first to load config
     parser_task = argparse.ArgumentParser(add_help=False)
-    parser_task.add_argument("--task", default="unified")
+    parser_task.add_argument("--task", default="unified", choices=VALID_TASKS)
     args_task, _ = parser_task.parse_known_args()
 
     config = load_config(task=args_task.task)
@@ -30,8 +31,14 @@ def main():
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--tier", default=default_tier, help="Model tier (e.g., 2b, 4b, 8b)")
-    parser.add_argument("--variant", default="unified-sft-v4")
-    parser.add_argument("--task", default="unified", help="Task name: 'unified' or 'violations_only'")
+    # Required, not defaulted: the old default ("unified-sft-v4") silently wrote a
+    # stale, unversioned variant if a caller forgot the flag.
+    parser.add_argument("--variant", required=True, help="Variant name, e.g. oo-sft-8b-v1")
+    parser.add_argument(
+        "--task", default="unified", choices=VALID_TASKS,
+        help="Task to train. Selects the prompt, the SFT target format, and the "
+             "input dataset subdir.",
+    )
     parser.add_argument("--no-resume", action="store_true")
     args = parser.parse_args()
 
@@ -45,9 +52,6 @@ def main():
     log_file = logs_dir / f"run_{args.tier}_{args.variant}_{timestamp}.txt"
     attach_file_logger(str(log_file))
 
-    logger.info("Loading fully processed and sorted dataset splits...")
-    splits = load_processed_dataset()
-    
     from core.config import load_config
     from core.io import get_drive_path, ensure_dir
     import json
@@ -58,6 +62,16 @@ def main():
     # could never override an SFT hyperparameter, silently and without warning.
     sft_cfg = load_config(task=args.task, training_kind="sft")
 
+    # Loaded AFTER the config so a task YAML can redirect the SFT input split.
+    sft_subdir = sft_cfg.get("sft_dataset_subdir")
+    if sft_subdir:
+        logger.info(
+            f"Task '{args.task}' overrides the SFT input dataset to {sft_subdir!r} "
+            "(see configs/tasks/%s.yaml)." % args.task
+        )
+    logger.info("Loading fully processed and sorted dataset splits...")
+    splits = load_processed_dataset(subdir=sft_subdir)
+
     # Dynamic tier-based learning rate scaling for SFT
     if args.tier == "4b":
         sft_cfg["learning_rate"] = min(sft_cfg.get("learning_rate", 1.0e-4), 5.0e-5)
@@ -66,24 +80,38 @@ def main():
         sft_cfg["learning_rate"] = min(sft_cfg.get("learning_rate", 1.0e-4), 2.0e-5)
         logger.info(f"Scaled SFT learning rate to {sft_cfg['learning_rate']} for tier 8b")
 
-    logger.info("Building oversampled dataset...")
-    oversample_indices, oversample_manifest = build_oversampled_indices(
-        splits["train"],
-        rule24_multiplier=sft_cfg.get("oversample_rule24_multiplier", 4),
-        rule3_multiplier=sft_cfg.get("oversample_rule3_multiplier", 2),
-    )
-    
-    # Save the manifest for reproducibility
-    manifest_dir = ensure_dir(get_drive_path("datasets", "stats"))
-    manifest_path = manifest_dir / f"oversample_manifest_{args.tier}_{args.variant}.json"
-    with open(manifest_path, "w") as f:
-        json.dump(oversample_manifest, f, indent=2)
-    logger.info(f"Saved oversample manifest to {manifest_path}")
+    # Rare-rule oversampling and the rare mask that drives the stratified sampler are
+    # both defined purely by which *violation* rules a sample triggers. For a task
+    # that never predicts violations they rebalance nothing, so they are gated on the
+    # capability rather than applied blindly.
+    trains_violations = task_has(args.task, CAP_VIOLATIONS)
 
-    train_raw_oversampled = splits["train"].select(oversample_indices)
-    
-    logger.info("Building rare mask for stratified sampling...")
-    rare_mask = build_rare_mask(train_raw_oversampled)
+    if trains_violations:
+        logger.info("Building oversampled dataset...")
+        oversample_indices, oversample_manifest = build_oversampled_indices(
+            splits["train"],
+            rule24_multiplier=sft_cfg.get("oversample_rule24_multiplier", 4),
+            rule3_multiplier=sft_cfg.get("oversample_rule3_multiplier", 2),
+        )
+
+        # Save the manifest for reproducibility
+        manifest_dir = ensure_dir(get_drive_path("datasets", "stats"))
+        manifest_path = manifest_dir / f"oversample_manifest_{args.tier}_{args.variant}.json"
+        with open(manifest_path, "w") as f:
+            json.dump(oversample_manifest, f, indent=2)
+        logger.info(f"Saved oversample manifest to {manifest_path}")
+
+        train_raw_oversampled = splits["train"].select(oversample_indices)
+
+        logger.info("Building rare mask for stratified sampling...")
+        rare_mask = build_rare_mask(train_raw_oversampled)
+    else:
+        logger.info(
+            f"Task '{args.task}' does not predict rule violations — skipping "
+            "rare-rule oversampling and rare-mask stratified sampling."
+        )
+        train_raw_oversampled = splits["train"]
+        rare_mask = None
 
     if "resolution" in train_raw_oversampled.column_names:
         train_resolutions = train_raw_oversampled["resolution"]
@@ -103,6 +131,10 @@ def main():
         )
         train_resolutions = None
 
+    logger.info(
+        f"SFT input: {len(train_ds)} train / {len(val_ds)} val samples "
+        f"(task={args.task}, subdir={sft_subdir or 'default (base.yaml processed_subdir)'})"
+    )
     logger.info(f"Starting SFT for tier: {args.tier}, variant: {args.variant}...")
     checkpoint_dir = run_sft_unified(
         tier=args.tier,
@@ -111,6 +143,13 @@ def main():
         val_dataset=list(val_ds),
         rare_mask=rare_mask,
         train_resolutions=train_resolutions,
+        # REQUIRED. Without this the trainer falls back to
+        # load_training_config("sft") — configs/sft.yaml alone — which silently
+        # discarded (a) the tier learning-rate clamps computed above and (b) any
+        # SFT hyperparameter a task YAML tries to override. Every SFT run before
+        # this fix trained at 1.0e-4 regardless of tier, while the log line above
+        # claimed otherwise.
+        sft_cfg=sft_cfg,
         resume=not args.no_resume,
         task=args.task,
     )

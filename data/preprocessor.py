@@ -19,7 +19,7 @@ import json
 from typing import Any, Dict, List, Optional
 from datasets import Dataset, Image as HFImage
 
-from data.prompt_templates import SYSTEM_PROMPT, UNIFIED_INSPECTION_PROMPT
+from data.prompt_templates import SYSTEM_PROMPT, UNIFIED_INSPECTION_PROMPT  # noqa: F401  (UNIFIED_INSPECTION_PROMPT kept for the legacy task-blind builders below)
 from data.box_utils import normalize_boxes, clean_boxes, scale_01_to_1000
 from core.constants import GROUNDING_CLASSES, RULES
 from core.logging import get_logger
@@ -293,18 +293,120 @@ def build_violations_only_ground_truth(raw: Dict[str, Any]) -> Dict[str, Any]:
     return gt
 
 
+def _build_object_only_target_json(raw: Dict[str, Any]) -> str:
+    """Builds the minimized fenced-JSON SFT target for object_only.
+
+    Only the 3 grounding classes. Boxes are cleaned in dataset [0,1] space (so
+    is_valid_box's [0,1] range check still applies) and only then scaled to the
+    Qwen3-VL [0,1000] space the model is trained to emit.
+    """
+    target_dict = {}
+    for cls in GROUNDING_CLASSES:
+        raw_boxes = raw.get(cls, [])
+        boxes = clean_boxes(normalize_boxes(raw_boxes))
+        target_dict[cls] = [scale_01_to_1000(b) for b in boxes]
+
+    json_str = json.dumps(target_dict, separators=(",", ":"), ensure_ascii=False)
+    return f"```json\n{json_str}\n```"
+
+
+def build_object_only_ground_truth(raw: Dict[str, Any]) -> Dict[str, Any]:
+    """Builds the evaluation ground-truth dict for object_only.
+
+    Boxes remain in dataset [0,1] scale — evaluation/metrics_grounding.py rescales
+    the *predictions* from [0,1000] and expects ground truth untouched.
+    """
+    gt = {
+        "illumination": raw.get("illumination", ""),
+        "camera_distance": raw.get("camera_distance", ""),
+        "view": raw.get("view", ""),
+        "quality_of_info": raw.get("quality_of_info", ""),
+    }
+    for cls in GROUNDING_CLASSES:
+        raw_boxes = raw.get(cls, [])
+        boxes = clean_boxes(normalize_boxes(raw_boxes))
+        gt[cls] = [list(b) for b in boxes]
+    return gt
+
+
+def _build_caption_only_target(raw: Dict[str, Any]) -> str:
+    """Builds the SFT target for caption_only: the bare caption string.
+
+    No JSON, no code fence — caption_only's wire format is plain prose (see
+    core/tasks.py::FORMAT_PLAIN_TEXT). Emitting a fence here would train exactly
+    the behaviour reward_format penalizes.
+    """
+    return str(raw.get("image_caption", "") or "").strip()
+
+
+def build_caption_only_ground_truth(raw: Dict[str, Any]) -> Dict[str, Any]:
+    """Builds the evaluation ground-truth dict for caption_only.
+
+    ``caption`` is mandatory here: reward_caption only scores a sample when both
+    the predicted and the reference caption are non-empty, and the captioning
+    metrics compare against this field.
+    """
+    return {
+        "caption": raw.get("image_caption", ""),
+        "illumination": raw.get("illumination", ""),
+        "camera_distance": raw.get("camera_distance", ""),
+        "view": raw.get("view", ""),
+        "quality_of_info": raw.get("quality_of_info", ""),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Task routers
+#
+# Explicit dispatch tables, not if/else chains ending in a unified fallback. The
+# old form (`if task == 'violations_only': ... ; return <unified>`) silently gave
+# any unregistered task the full unified target — which would have taught an
+# object_only model to emit captions and violations it is never evaluated on.
+# ---------------------------------------------------------------------------
+
+_TARGET_BUILDERS = {
+    "unified": _build_target_json,
+    "violations_only": _build_violations_only_target_json,
+    "object_only": _build_object_only_target_json,
+    "caption_only": _build_caption_only_target,
+}
+
+_GT_BUILDERS = {
+    "unified": build_ground_truth_dict,
+    "violations_only": build_violations_only_ground_truth,
+    "object_only": build_object_only_ground_truth,
+    "caption_only": build_caption_only_ground_truth,
+}
+
+
 def build_target_json(raw: Dict[str, Any], task: str = 'unified') -> str:
-    """Router that calls the appropriate target builder based on task."""
-    if task == 'violations_only':
-        return _build_violations_only_target_json(raw)
-    return _build_target_json(raw)
+    """Returns the SFT assistant-turn target text for ``task``.
+
+    Fenced minimized JSON for every task except caption_only, which returns bare
+    prose. Raises ValueError for an unregistered task.
+    """
+    builder = _TARGET_BUILDERS.get(task)
+    if builder is None:
+        raise ValueError(
+            f"No SFT target builder registered for task {task!r}. "
+            f"Known: {sorted(_TARGET_BUILDERS)}"
+        )
+    return builder(raw)
 
 
 def build_gt_dict(raw: Dict[str, Any], task: str = 'unified') -> Dict[str, Any]:
-    """Router that calls the appropriate ground truth builder based on task."""
-    if task == 'violations_only':
-        return build_violations_only_ground_truth(raw)
-    return build_ground_truth_dict(raw)
+    """Returns the evaluation/reward ground-truth dict for ``task``.
+
+    Boxes stay in dataset [0,1] scale for every task. Raises ValueError for an
+    unregistered task.
+    """
+    builder = _GT_BUILDERS.get(task)
+    if builder is None:
+        raise ValueError(
+            f"No ground-truth builder registered for task {task!r}. "
+            f"Known: {sorted(_GT_BUILDERS)}"
+        )
+    return builder(raw)
 
 
 def raw_sample_to_conversation_for_task(raw: Dict[str, Any], pil_image, task: str = 'unified') -> Dict[str, Any]:

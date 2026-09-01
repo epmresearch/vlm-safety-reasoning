@@ -46,7 +46,8 @@ def main():
                          help="Optional: path to a real image file to use instead of "
                               "pulling one from datasets/processed (only valid with "
                               "--num_unique_images 1)")
-    parser.add_argument("--task", default="violations_only")
+    from core.constants import VALID_TASKS
+    parser.add_argument("--task", default="violations_only", choices=VALID_TASKS)
     parser.add_argument("--batch_size", type=int, default=8,
                          help="Only used when --num_unique_images=1: how many copies "
                               "of the SAME image/prompt to batch (mirrors num_generations)")

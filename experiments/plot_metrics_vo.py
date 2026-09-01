@@ -20,16 +20,20 @@ PHASES = ["baseline", "sft", "grpo"]
 # only take `data`) don't all need a version parameter threaded through them.
 VERSION = None
 PLOTS_DIR = None
+TASK = None
 
 def load_all_metrics():
     """Loads all metrics into a nested dictionary: data[tier][phase]"""
     data = {tier: {} for tier in TIERS}
     missing_files = []
 
+    from core.naming import results_dir_names
     for tier in TIERS:
+        names = results_dir_names(TASK, tier, VERSION)
         for phase in PHASES:
-            # Matches exactly how HPC creates the folders: vo-baseline-2b-{VERSION}
-            folder_name = f"vo-{phase}-{tier}-{VERSION}"
+            # Matches exactly how the pipeline creates the folders, via the shared
+            # name builder rather than a hardcoded 'vo-' prefix.
+            folder_name = names[phase]
             folder = RESULTS_DIR / folder_name
             folder.mkdir(parents=True, exist_ok=True) # Create empty folder if user hasn't yet
             
@@ -288,21 +292,38 @@ def plot_master_heatmap(data):
 
 def main():
     import argparse
+    from core.constants import VALID_TASKS
+    from core.naming import task_prefix
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--version", required=True,
-        help="Run version tag of the VO results to plot (e.g. v5, v6). Determines "
-             "both the result folders read (vo-<phase>-<tier>-<version>) and the "
-             "output directory (plots_vo_<version>)."
+        help="Run version tag of the results to plot (e.g. v1, v2). Determines "
+             "both the result folders read (<prefix>-<phase>-<tier>-<version>) and "
+             "the output directory (plots_<prefix>_<version>)."
+    )
+    parser.add_argument(
+        "--task", default="violations_only", choices=VALID_TASKS,
+        help="Task whose results to plot. Every plot in this suite is "
+             "violation-specific, so only violation-capable tasks are meaningful "
+             "here; use experiments/plot_metrics.py for the capability-gated suite.",
     )
     args = parser.parse_args()
 
-    global VERSION, PLOTS_DIR
+    global VERSION, PLOTS_DIR, TASK
     VERSION = args.version
-    PLOTS_DIR = RESULTS_DIR / f"plots_vo_{VERSION}"
+    TASK = args.task
+    PLOTS_DIR = RESULTS_DIR / f"plots_{task_prefix(TASK)}_{VERSION}"
     PLOTS_DIR.mkdir(parents=True, exist_ok=True)
 
-    print(f"Initializing Violations Only 3x3 Evaluation Suite (version={VERSION})...")
+    from core.tasks import CAP_VIOLATIONS, task_has
+    if not task_has(TASK, CAP_VIOLATIONS):
+        raise SystemExit(
+            f"plot_metrics_vo.py only plots violation metrics, which task {TASK!r} "
+            "does not produce. Use experiments/plot_metrics.py --task "
+            f"{TASK} instead."
+        )
+
+    print(f"Initializing {task_prefix(TASK)} 3x3 Evaluation Suite (version={VERSION})...")
     data = load_all_metrics()
     
     print("\nGenerating comprehensive cross-model and cross-phase plots...")

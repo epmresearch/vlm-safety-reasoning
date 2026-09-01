@@ -98,7 +98,7 @@ class TestTrueNegativeBranch:
     """Coverage for the both-empty true-negative branch (reward_violation_grounding.py:35).
 
     This branch had NO test coverage at all before — its constant could have changed
-    silently. The 0.15 value is deliberate: it is the same true-negative constant used by
+    silently. The true-negative value is deliberate: it is the same constant used by
     reward_violation_id / reward_reasoning / reward_grounding, and all four must move
     together or the objective is silently re-biased (see CLAUDE.md invariant #6).
     """
@@ -114,7 +114,9 @@ class TestTrueNegativeBranch:
     def test_correctly_safe_returns_tn_constant(self):
         completion = "```json\n" + json.dumps(self._safe_payload()) + "\n```"
         gt = self._safe_payload()
-        assert compute_reward(completion, gt) == pytest.approx(0.15)
+        from rewards.reward_utils import reward_constant
+        expected = reward_constant("unified", "violation_tn_constant", 0.15)
+        assert compute_reward(completion, gt) == pytest.approx(expected)
 
     def test_false_alarm_on_safe_image_returns_zero(self):
         """Predicting a violation where GT is safe is not a true negative."""

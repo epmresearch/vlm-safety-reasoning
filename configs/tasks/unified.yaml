@@ -5,12 +5,41 @@ prompt_key: "UNIFIED_INSPECTION_PROMPT"
 # No indentation, no extra whitespace. Single-line JSON body.
 output_format: "fenced_minimized_json"
 
-reward_weights:      # unused until GRPO phase;
-  json_validity: 1.0
-  caption_quality: 1.0
-  rule_violation_accuracy: 2.0
-  rule_grounding_iou: 1.0
-  object_grounding_iou: 1.5
+# NOTE: no reward_components / reward_weights block on purpose. Omitting
+# reward_components makes get_reward_funcs_for_task() fall back to the full
+# 6-component REWARD_COMPONENTS registry at its default weights, which is exactly
+# what the unified task wants. A reward_weights block used to live here using an
+# obsolete key namespace (json_validity, rule_violation_accuracy, ...) that matched
+# no registered component; unknown weight keys are ignored *silently*, so all five
+# values did nothing. Removed so this file is safe to use as a copy template.
+
+# A predicted violation must carry substance (non-empty reason, or at least one
+# bounding box) to earn identification credit. The contentless-assertion exploit
+# applies here too, at 0.30 weight rather than violations_only's 0.40. Stated
+# explicitly rather than relying on the code default, so every task's reward
+# semantics are visible in its config.
+require_violation_substance: true
+
+# unified carries the SAME retuned true-negative constants as violations_only and
+# object_only. Leaving it on the historical flat 0.15 was tempting -- it is the
+# multi-objective control condition -- but a control whose reward is still
+# exploitable is not a control: it would confound "multi-task vs single-task"
+# with "broken reward vs fixed reward", which is exactly the comparison this repo
+# exists to make. scripts/validate_rewards.py fails the build if any task's reward
+# surface still rewards suppression or reflexive over-flagging.
+#
+# Rewards are GRPO-only, and every pre-existing GRPO result is void (those runs
+# trained prompt-only), so there is no continuity being broken here. SFT is
+# unaffected.
+#
+# See configs/tasks/object_only.yaml and violations_only.yaml for the EV math.
+grounding_tn_constant:
+  excavator: 0.283
+  rebar: 0.048
+  worker_with_white_hard_hat: 0.065
+  default: 0.15
+
+violation_tn_constant: 0.85
 
 max_new_tokens: 1000   # single response covers caption + objects + violations
 inference_max_seq_length: 2816   # NEW. Verified: full sweep of test(3004) prompt-only, max=1519+1000gen+margin=2770

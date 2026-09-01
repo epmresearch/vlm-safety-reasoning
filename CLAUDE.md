@@ -5,22 +5,35 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Overview
 
 Research project fine-tuning Qwen3-VL (2B/4B/8B via Unsloth) for construction safety inspection on the
-`LouisChen15/ConstructionSite` dataset (7009 train / 3004 test). The model emits **one flat JSON object** per
-image, and training is two-phase: **LoRA SFT → merge adapter → GRPO** on the merged model.
+`LouisChen15/ConstructionSite` dataset (7009 train / 3004 test). Training is two-phase:
+**LoRA SFT → merge adapter → GRPO** on the merged model.
 
 **This repo runs a family of parallel pipelines, not one pipeline.** Each *task* is a full, independent
 baseline→SFT→merge→GRPO→eval pipeline over the same images and the same base model, differing only in what the
-model is asked to output:
+model is asked to output. All four are live:
 
-| Task | Prefix | Output | Status |
-|---|---|---|---|
-| `unified` | `unified` | caption + 3 object classes + 4 rule violations | live |
-| `violations_only` | `vo` | 4 rule violations only | live |
-| `object_only` | `oo` | object grounding only | planned (commented in `TASK_PREFIXES`) |
-| `caption_only` | `co` | caption only | planned (commented in `TASK_PREFIXES`) |
+| Task | Prefix | Output | Wire format | Capabilities |
+|---|---|---|---|---|
+| `unified` | `unified` | caption + 3 object classes + 4 rule violations | fenced JSON | caption, objects, violations |
+| `violations_only` | `vo` | 4 rule violations only | fenced JSON | violations |
+| `object_only` | `oo` | 3 object classes only, boxes `[0,1000]` | fenced JSON | objects |
+| `caption_only` | `co` | one scene description | **bare prose** (no JSON, no fence) | caption |
+
+Three of the four emit **one flat JSON object** per image. `caption_only` is the exception: the caption *is* the
+entire output, so wrapping it in JSON would add a formatting confound to the exact quantity being measured. Its
+completion is bare prose, parsed by `evaluation/output_parser.py::parse_output_for_task`, which wraps it into
+`{"caption": ...}` so every downstream layer stays dict-shaped.
 
 Any number of these may run **concurrently on ARC** at the same `--version` and the same tier without colliding.
-That isolation is a designed property, not an accident — see [Parallel-safety](#parallel-safety-the-isolation-guarantee).
+That isolation is a designed property, not an accident — see [Parallel-safety](#parallel-safety-the-isolation-guarantee),
+and it is asserted by `tests/test_core/test_name_isolation.py`.
+
+**`core/tasks.py` is the single place a task is registered.** One frozen `TaskSpec` per task carries its name,
+prefix, *capability set* (`caption` / `objects` / `violations`) and wire format; `VALID_TASKS`, `TASK_PREFIXES`
+and every metric/repair gate in the repo derive from it. No conditional anywhere should compare a task name to a
+literal string — ask a capability question (`task_has(task, CAP_OBJECTS)`) instead. The old style was a set of
+binary negations (`if task != "violations_only":`), each of which silently handed a brand-new task the *unified*
+behaviour.
 
 ## Environment
 
@@ -30,12 +43,13 @@ Two very different environments; know which one you're in.
 |---|---|---|
 | Python | 3.10.11, `.\venv\Scripts\Activate.ps1` | `module load gcc/13.3.0 python/3.12.5`, `source $HOME/envs/vlm_grpo/bin/activate` |
 | Data root | `./vlm_data_root` | `VLM_DATA_ROOT=/home/$USER/vlm-finetuning-project1` |
-| GPU / unsloth | none | H100/H200, `--gres=gpu:h100:1` |
+| GPU / unsloth | none | **H200**, `--partition=gpu-h100 --gres=gpu:h200:1` |
 
 **Runs locally:** the test suite, `preprocessing/structural_repair.py`, all plotting/analysis scripts, anything
 importing only `core/`, `data/schemas.py`, `rewards/`. **HPC only:** `experiments/run_{sft,grpo,inference}.py`
 (`run_sft.py` imports `unsloth` at line 5, before transformers — it cannot even be imported on Windows),
-`merge_sft_adapter.py`, `augment_rare_classes.py`, all `scripts/hpc_*.sh`.
+`merge_sft_adapter.py`, `augment_rare_classes.py`, all `scripts/hpc_*.sh`. The four `submit_*_pipeline.py`
+wrappers and `scripts/submit_pipeline.py` run locally as a dry run (no `sbatch` → they print the exact commands).
 
 `requirements.txt` has loose lower bounds and is **not** the authoritative version set — the working pins live in
 `scripts/setup_arc.sh` (`transformers==5.4.0`, `trl==0.23.0`, `datasets==4.3.0`, `unsloth_zoo==2026.8.12`).
@@ -48,11 +62,29 @@ SLURM CRLF errors — don't defeat it from Windows.
 ### Tests
 
 ```powershell
-python -m pytest tests/ -v                                       # all (~207 tests, no GPU needed)
+python -m pytest tests/ -v                                       # all (~412 tests, no GPU needed)
+python -m pytest tests/test_core -v                               # task registry + name-isolation proof
 python -m pytest tests/test_rewards/test_unified_reward.py -v     # single file
 python -m pytest tests/test_evaluation/test_output_parser.py::test_strip_fences -v   # single test
 python -m pytest tests/ -k "violation and not grounding" -v
+python -m pytest tests/ -k "_oo or _co" -v                        # just the two new pipelines
+python -m pytest tests/test_core/test_blocker_fixes.py -v         # the six pre-flight blockers
 ```
+
+**Reward-surface validator (no GPU, run before every submit).**
+
+```powershell
+python scripts/validate_rewards.py                       # all four tasks, probe + census
+python scripts/validate_rewards.py --task object_only --probe
+python scripts/validate_rewards.py --task object_only --probe --pool-stats   # on ARC
+```
+
+`scripts/validate_rewards.py` scores synthetic honest and degenerate policies against real
+ground truth and **fails** if any degenerate policy beats the honest one, if any object class's
+break-even IoU exceeds 0.75, or if unconditional rule_1 assertion beats honest abstention on
+pool expected value. It is the cheapest check in the repo and it is the one that catches
+reward hacking before a GRPO job burns GPU hours. Its `--census` half tokenizes every SFT
+target and fails if any would truncate at `max_seq_length`.
 
 Use `python -m pytest`, not bare `pytest`: `tests/` has no `__init__.py` and `conftest.py` does no `sys.path`
 insertion, so first-party imports (`from rewards...`) only resolve when CWD is on the path. On HPC the SBATCH
@@ -61,43 +93,70 @@ scripts export `PYTHONPATH`, so bare `pytest` works there. No pytest config file
 ### Full pipeline (HPC, from repo root on the login node)
 
 ```bash
-python scripts/submit_unified_pipeline.py --tiers 2b 4b 8b --version v5
-python scripts/submit_vo_pipeline.py      --tiers 8b       --version v5
+python scripts/submit_pipeline.py --task unified         --tiers 2b 4b 8b --version v1
+python scripts/submit_pipeline.py --task violations_only --tiers 2b 4b 8b --version v1
+python scripts/submit_pipeline.py --task object_only     --tiers 2b 4b 8b --version v1
+python scripts/submit_pipeline.py --task caption_only    --tiers 2b 4b 8b --version v1
 ```
 
-One submitter per task; fire as many as you like back to back, same `--version`, same tiers — they are
-namespace-isolated end to end (see [Parallel-safety](#parallel-safety-the-isolation-guarantee)).
+`scripts/submit_pipeline.py` is the one submitter. The four per-task wrappers are equivalent 3-line shims kept
+as stable entry points:
 
-`--version` is **required** and is the single source of truth for every generated name. Each submitter
-pre-downloads the model on the login node, then submits 4 jobs per tier with `afterok` dependencies:
-`baseline` (independent) ‖ `sft → merge → grpo`. It overrides walltime/memory on the `sbatch` command line
-(grpo: `--mem=250G --time=24:00:00`), which **beats** the `--time` written in the `hpc_*.sh` files.
+```bash
+python scripts/submit_unified_pipeline.py --tiers 8b --version v1   # == --task unified
+python scripts/submit_vo_pipeline.py      --tiers 8b --version v1   # == --task violations_only
+python scripts/submit_oo_pipeline.py      --tiers 8b --version v1   # == --task object_only
+python scripts/submit_co_pipeline.py      --tiers 8b --version v1   # == --task caption_only
+```
+
+Fire as many as you like back to back, same `--version`, same tiers — they are namespace-isolated end to end
+(see [Parallel-safety](#parallel-safety-the-isolation-guarantee)).
+
+`--version` is **required**, must match `v<digits>`, and is the single source of truth for every generated name.
+The submitter pre-downloads the model on the login node (`--skip-preload` to opt out when the HF cache is
+already warm), then submits 4 jobs per tier with `afterok` dependencies: `baseline` (independent) ‖
+`sft → merge → grpo`.
+
+There are only **four** phase scripts, all task-parameterized — `scripts/hpc_{baseline,sft,merge_sft,grpo}.sh`,
+taking the task as their first positional argument. They replaced 8 per-task clones. Because `#SBATCH`
+directives cannot read arguments, the submitter passes `--job-name`, `--output`, `--error`, `--mem` and `--time`
+on the `sbatch` command line, all of which **beat** the in-file directives. So each task still gets its own job
+names (`vlm-sft-oo`) and log files (`sft_oo_%j.out`) — the same names as before.
 
 On Windows these submitters degrade gracefully — `sbatch` is missing, so they print the exact commands with
-`DUMMY_JOB_ID`. Useful as a dry run.
+`DUMMY_JOB_ID`. Useful as a dry run, and the fastest way to eyeball that two tasks' paths do not overlap.
 
 ### Individual stages
 
 ```bash
-python -m experiments.run_sft --tier 8b --variant vo-sft-8b-v5 --task violations_only
-python scripts/merge_sft_adapter.py --tier 8b --task violations_only \
-  --adapter_path "$VLM_DATA_ROOT/checkpoints/qwen3vl-8b/vo-sft-8b-v5/best" \
-  --output_path  "$VLM_DATA_ROOT/checkpoints/qwen3vl-8b/merged-vo-sft-8b-v5"
-python -m experiments.run_grpo --tier 8b --variant vo-grpo-8b-v5 --task violations_only \
-  --base_model_override "$VLM_DATA_ROOT/checkpoints/qwen3vl-8b/merged-vo-sft-8b-v5"
-python -m experiments.run_inference --tier 8b --variant vo-sft-8b-v5 --checkpoint best --task violations_only
+python -m experiments.run_sft --tier 8b --variant oo-sft-8b-v1 --task object_only
+python scripts/merge_sft_adapter.py --tier 8b --task object_only \
+  --adapter_path "$VLM_DATA_ROOT/checkpoints/qwen3vl-8b/oo-sft-8b-v1/best" \
+  --output_path  "$VLM_DATA_ROOT/checkpoints/qwen3vl-8b/merged-oo-sft-8b-v1"
+python -m experiments.run_grpo --tier 8b --variant oo-grpo-8b-v1 --task object_only \
+  --base_model_override "$VLM_DATA_ROOT/checkpoints/qwen3vl-8b/merged-oo-sft-8b-v1"
+python -m experiments.run_inference --tier 8b --variant oo-sft-8b-v1 --checkpoint best --task object_only
 python preprocessing/structural_repair.py --input "$PREDS/predictions.jsonl" \
-  --output "$PREDS/repair_applied/predictions_repaired.jsonl" --task violations_only
+  --output "$PREDS/repair_applied/predictions_repaired.jsonl" --task object_only
 python -m experiments.run_evaluation --predictions_path "$PREDS/repair_applied/predictions_repaired.jsonl" \
-  --skip_spice --task violations_only
+  --skip_spice --task object_only
 ```
 
-`python scripts/preflight_grpo.py --tier 2b --task violations_only` runs a 6-step sanity check before burning a
-GRPO job — use it.
+`--task` now carries `choices=VALID_TASKS` at every entry point, so a typo fails immediately instead of
+surfacing later as `FileNotFoundError: configs/tasks/<typo>.yaml`. `--variant` is **required** on
+`run_sft`/`run_grpo` (the old `unified-sft-v4` defaults silently produced stale, unversioned runs), and
+`merge_sft_adapter.py --task` is **required** (it used to default to `violations_only`, which was right for
+exactly one caller and silently wrong for every other).
+
+`python scripts/preflight_grpo.py --tier 2b --task object_only` runs the sanity check before burning a GRPO job
+— use it. It now also assembles the task's real reward functions, so a typo in a task YAML's
+`reward_components` is caught here rather than mid-training, and it measures the text-only prompt length for
+*that* task instead of the old hardcoded 233-token constant (which was measured for the unified/VO prompt).
 
 Inference → **structural repair → evaluation** is a fixed chain; never evaluate raw `predictions.jsonl`.
-Evaluation needs a JVM for METEOR/CIDEr-D (pipelines always pass `--skip_spice`; pass `--skip_java_switch`
-off-Linux).
+Evaluation needs a JVM for METEOR/CIDEr-D **only for tasks that score text** (`caption` or `violations`
+capability); `object_only` needs no JRE. Pipelines always pass `--skip_spice`; pass `--skip_java_switch`
+off-Linux.
 
 ### Data prep
 
@@ -109,15 +168,18 @@ python data/build_grpo_pool.py          # → datasets/grpo_pool   (GRPO input; 
 ### Local analysis (run from repo root — these use relative `Path("evaluation_results")`)
 
 ```powershell
-python -m experiments.generate_comparison_csv --version v4   # VO-only, per-tier CSVs
-python -m experiments.compare_results --tier 8b --task unified --version v5   # any task, 3-row table
-python -m experiments.plot_metrics_vo --version v4
-python -m experiments.extract_qualitative                    # triumph/failure examples -> markdown
+python -m experiments.compare_results --tier 8b --task object_only --version v1   # any task, 3-row table
+python -m experiments.plot_metrics --tier 8b --task object_only --version v1      # capability-gated plots
+python -m experiments.generate_comparison_csv --task violations_only --version v1 # per-tier CSVs
+python -m experiments.plot_metrics_vo --task violations_only --version v1         # violation-only 3x3 suite
+python -m experiments.extract_qualitative --task violations_only --tier 8b --version v1
 python analyze_metrics.py
 ```
 
-These read SFT results from `<variant>_best` and GRPO from `<variant>_final`, matching what the pipeline
-now writes.
+All four resolve result folders through `core/naming.py::results_dir_names(task, tier, version)` — one helper,
+so no two of them can disagree about a folder name. SFT results come from `<variant>_best` and GRPO from
+`<variant>_final`. `plot_metrics.py` draws only the plot families the task's capabilities support;
+`plot_metrics_vo.py` is violation-specific and refuses a task without that capability.
 
 ## Architecture
 
@@ -133,57 +195,102 @@ base.yaml → model_registry.yaml → {sft,grpo}.yaml → tasks/<task>.yaml
 `violations_only.yaml`'s `max_completion_length: 1024` beats `grpo.yaml`'s `1000`). `grpo.yaml`'s top-level
 `per_device_train_batch_size` beats `model_registry.yaml`'s per-tier nested one.
 
-Both `run_sft` and `run_grpo` now go through `load_config()`, so this precedence is real for both. (`run_sft`
-previously called `load_training_config("sft")`, reading `configs/sft.yaml` alone — a task YAML could never
-override an SFT hyperparameter, silently.)
+Both `run_sft` and `run_grpo` go through `load_config()` **and both pass the merged dict to their trainer**,
+so this precedence is real for both. `run_sft.py` used to build the merged `sft_cfg` and then *not pass it* to
+`run_sft_unified()`, which fell back to `load_training_config("sft")` — `configs/sft.yaml` alone. The effects
+were invisible: the tier learning-rate clamps (`4b → 5e-5`, `8b → 2e-5`) were dead code that still logged the
+clamped value, so **every SFT run at every tier actually trained at 1.0e-4**, and no task YAML could override
+an SFT hyperparameter. Pinned by `tests/test_core/test_blocker_fixes.py`.
 
 `run_grpo` additionally mutates `sft_cfg` in place (`max_seq_length`, `load_in_4bit`, gradient checkpointing,
 pixel bounds) — **reading `configs/sft.yaml` will not tell you what GRPO actually loaded.** Read the
 `run_manifest.json` written into the checkpoint dir.
 
-**Current training shape.** SFT: 2 epochs over 8198 augmented rows at effective batch 32 = **512 steps**, eval
-every 25 steps, early stopping at patience 4. GRPO: 2 epochs over the 1732-row pool at 32 unique images per
-update = **108 steps**, `save_steps: 20`. If the first SLURM log line does not say `Total steps = 512` /
-`Total steps = 108`, the config did not merge as expected.
+**Current training shape.** SFT for `unified` / `violations_only`: 2 epochs over 8198 augmented rows at
+effective batch 32 = **512 steps**, eval every 25 steps, early stopping at patience 4. SFT for `object_only` /
+`caption_only`: the same, over the un-augmented split instead (`sft_dataset_subdir`), so ~**394 steps** — the job
+logs the actual train/val sizes at startup. GRPO, all four tasks: 2 epochs over the 1732-row shared pool at 32
+unique images per update = **108 steps**, `save_steps: 20`. If the first SLURM log line disagrees with the
+expected step count, the config did not merge as expected.
 
 ### Tasks — what `--task` actually controls
 
-`--task` is threaded through every stage and is the axis that distinguishes one pipeline from another. It is a
-plain argparse string, **not validated** against `VALID_TASKS` anywhere — a typo surfaces late as
-`FileNotFoundError: configs/tasks/<typo>.yaml`.
+`--task` is threaded through every stage and is the axis that distinguishes one pipeline from another. It is
+**validated** in three places, so a typo fails immediately rather than surfacing hours later: `choices=VALID_TASKS`
+at every entry point, an explicit `validate_task` call inside each generic SLURM script before any work starts,
+and `core/config.py::load_task_config`, which every stage funnels through and which now raises a `ValueError`
+naming the registry instead of a `FileNotFoundError` on `configs/tasks/<typo>.yaml`.
 
 | Dimension | Mechanism |
 |---|---|
+| Registration, prefix, capabilities, wire format | `core/tasks.py::TASK_REGISTRY` |
 | Prompt | `prompt_key` in task YAML → `data/prompt_templates.py::PROMPT_REGISTRY` |
-| SFT target JSON | `data/preprocessor.py::build_target_json(raw, task)` |
-| GRPO/eval ground truth | `data/preprocessor.py::build_gt_dict(raw, task)` |
+| Raw-completion parsing | `evaluation/output_parser.py::parse_output_for_task` (JSON vs bare prose) |
+| SFT target | `data/preprocessor.py::build_target_json(raw, task)` — dispatch table, raises on unknown |
+| GRPO/eval ground truth | `data/preprocessor.py::build_gt_dict(raw, task)` — dispatch table |
 | Output validation schema | `data/schemas.py::SCHEMA_REGISTRY` |
 | Active reward components + weights | `reward_components` / `reward_weights` in task YAML |
 | Token budgets | `max_new_tokens`, `max_completion_length`, `inference_max_seq_length` in task YAML |
-| Every generated name | `core/naming.py::task_prefix()` |
-| Eval components run | `evaluation/evaluator.py` (e.g. `violations_only` skips captioning + grounding) |
+| SFT input dataset | `sft_dataset_subdir` in task YAML (absent ⇒ the shared default) |
+| Every generated name | `core/naming.py` (`variant_name`, `merged_checkpoint_name`, `baseline_run_name`, `results_dir_names`, `slurm_job_name`, `slurm_log_stem`) |
+| Eval metric families | `evaluation/evaluator.py`, gated on **capabilities** |
+| Structural repair transforms | `preprocessing/structural_repair.py`, gated on **capabilities** |
 
-What is deliberately **shared** across tasks: the base model, `datasets/augmented` (SFT input),
-`datasets/grpo_pool` (GRPO input), and the offline data prep that builds them. `build_grpo_pool.py` is
-task-blind — one pool build serves every pipeline. Task-specific formatting is applied lazily at load time by
-`build_sft_dataset(..., task=)` / `build_grpo_dataset_for_task(..., task=)`. **Do not add a per-task pool.**
+**Capability gating.** Three capabilities map onto the output field groups, the reward components and the
+metric families:
+
+| Capability | Fields | Rewards | Eval metrics | Tasks |
+|---|---|---|---|---|
+| `caption` | `caption` | `reward_caption` | captioning (needs a JVM + images) | `unified`, `caption_only` |
+| `objects` | `excavator`, `rebar`, `worker_with_white_hard_hat` | `reward_grounding` | grounding | `unified`, `object_only` |
+| `violations` | `rule_1..4_violation` | `reward_violation_id`, `reward_violation_grounding`, `reward_reasoning` | violations + reasoning (needs a JVM + images) | `unified`, `violations_only` |
+
+`reward_format` is active for every task, but means different things: schema-valid fenced JSON for the three
+JSON tasks, *clean prose* (no fence, no JSON object, no `"caption":` label, non-blank) for `caption_only`.
+Without that second meaning the format reward would be free — any non-empty string parses.
+
+Java is required **only** when a task scores text, i.e. has `caption` or `violations`. `object_only` evaluates
+with no JRE and no images.
+
+What is deliberately **shared** across tasks: the base model, `datasets/grpo_pool` (GRPO input, for every task),
+and the offline data prep that builds it. `build_grpo_pool.py` is task-blind — one pool build serves every
+pipeline. Task-specific formatting is applied lazily at load time by `build_sft_dataset(..., task=)` /
+`build_grpo_dataset_for_task(..., task=)`. **Do not add a per-task pool.**
+
+**SFT input is the one thing that is not fully shared.** `unified` and `violations_only` read the default
+(`base.yaml`'s `processed_subdir` → `datasets/augmented`). `object_only` and `caption_only` set
+`sft_dataset_subdir: datasets/processed` in their task YAML, because the augmentation duplicates images by rare
+*violation* rule (rule_4 ×16, rule_2 ×12, rule_3 ×6) and those duplicates carry identical boxes and identical
+captions — no class rebalancing for those tasks, only overfitting pressure. Augmentation only touches the
+**train** split, so val and test are byte-identical between the two roots and all four tasks are still evaluated
+on exactly the same test images. For the same reason `run_sft.py` skips rare-rule oversampling and the rare-mask
+stratified sampler for tasks without the `violations` capability. Expect ~394 SFT steps for `oo`/`co` versus 512
+for `unified`/`vo`; the first log line reports the actual train/val sizes.
 
 ### Naming and versioning
 
-`core/naming.py` holds `TASK_PREFIXES` (`unified` → `unified`, `violations_only` → `vo`) and the two name
-builders. For `--version v5`, tier `8b`:
+`core/naming.py` builds every name from the prefixes in `core/tasks.py`. `TASK_PREFIXES` is *derived* — do not
+edit it, add a `TaskSpec`. For `--version v1`, tier `8b`:
 
-| Artifact | unified | violations_only | future `object_only` |
-|---|---|---|---|
-| SFT variant | `unified-sft-8b-v5` | `vo-sft-8b-v5` | `oo-sft-8b-v5` |
-| Merged KL base | `merged-unified-sft-8b-v5` | `merged-vo-sft-8b-v5` | `merged-oo-sft-8b-v5` |
-| GRPO variant | `unified-grpo-8b-v5` | `vo-grpo-8b-v5` | `oo-grpo-8b-v5` |
-| Baseline results dir | `baseline_8b_v5` *(legacy, see below)* | `vo-baseline-8b-v5` | `oo-baseline-8b-v5` |
+| Artifact | unified | violations_only | object_only | caption_only |
+|---|---|---|---|---|
+| SFT variant | `unified-sft-8b-v1` | `vo-sft-8b-v1` | `oo-sft-8b-v1` | `co-sft-8b-v1` |
+| Merged KL base | `merged-unified-sft-8b-v1` | `merged-vo-sft-8b-v1` | `merged-oo-sft-8b-v1` | `merged-co-sft-8b-v1` |
+| GRPO variant | `unified-grpo-8b-v1` | `vo-grpo-8b-v1` | `oo-grpo-8b-v1` | `co-grpo-8b-v1` |
+| Baseline results dir | `unified-baseline-8b-v1` | `vo-baseline-8b-v1` | `oo-baseline-8b-v1` | `co-baseline-8b-v1` |
+| SLURM job / log stem | `vlm-sft-unified` / `sft_unified` | `vlm-sft-vo` / `sft_vo` | `vlm-sft-oo` / `sft_oo` | `vlm-sft-co` / `sft_co` |
 
-`merged_checkpoint_name()` must produce byte-identical strings in `submit_unified_pipeline.py`,
-`submit_vo_pipeline.py`, and `run_inference.py` or GRPO silently trains against the wrong KL reference.
+Baseline naming is now **uniform**. `hpc_baseline_unified.sh` used to emit the legacy unprefixed
+`baseline_<tier>_<version>` — the one writable path in the repo not namespaced by task, and the reason
+`compare_results.py` and `plot_metrics.py` each carried an `if task == "unified"` branch. Both branches are
+gone; every lookup goes through `results_dir_names()`. Any pre-existing `results/inference/baseline_<tier>_<v>/`
+folder on ARC will no longer be found — versioning restarted at `v1` for exactly this reason.
+
+`merged_checkpoint_name()` must produce byte-identical strings in `submit_pipeline.py` and `run_inference.py`
+or GRPO silently trains against the wrong KL reference; both now call the same helper.
 **Keep version tags in `v<digits>` form** — `run_inference.py` reverse-engineers the merged base with the regex
-`-(v\d+)(?:_[^-]*)?$`, and a tag like `exp-a` breaks the lookup.
+`-(v\d+)(?:_[^-]*)?$`, and a tag like `exp-a` breaks the lookup. `submit_pipeline.py` refuses any other form
+up front, and `tests/test_core/test_name_isolation.py` asserts the round-trip for every task.
 
 Paths: `$VLM_DATA_ROOT/checkpoints/qwen3vl-<tier>/<variant>/{final,best,checkpoint-N}` and
 `$VLM_DATA_ROOT/results/inference/<run_name>/{predictions.jsonl, repair_applied/, evaluation_results/}`.
@@ -198,60 +305,72 @@ runtime — isolation comes entirely from **every writable path being namespaced
 | Checkpoints, merged models | `<variant>` = `<prefix>-<phase>-<tier>-<version>` |
 | Inference predictions, repairs, metrics | `results/inference/<run_name>/` |
 | Oversample manifests | `oversample_manifest_<tier>_<variant>.json` |
-| SLURM logs, job names | per-script (`sft_vo_%j` vs `sft_unified_%j`) |
-| W&B runs | `qwen3-<tier>-<variant>-repaired` |
+| SLURM logs, job names | `slurm_log_stem()` / `slurm_job_name()` → `sft_oo_%j`, `vlm-sft-oo`, … |
+| W&B eval runs | `qwen3-<tier>-<variant>-repaired` |
+| W&B training groups | `sft-<task>` / `grpo-<task>` |
+| Comparison CSVs / plot dirs | `csv_comparisons_<prefix>_<version>`, `plots_<prefix>_<version>` |
 
 Everything the pipelines *share* — `datasets/{processed,augmented,grpo_pool}`, the HF model cache — is read-only
-during training, so concurrent readers are safe. (The submitters pre-download models on the login node
+during training, so concurrent readers are safe. (The submitter pre-downloads models on the login node
 specifically to avoid concurrent SLURM jobs racing on HF cache locks.)
 
-**One place that still does not follow the rule.** It does not collide today, but it will if copy-pasted:
+**Every exception has been closed.** The legacy unprefixed unified baseline run name is gone (see
+[Naming](#naming-and-versioning)), and `models/sft_trainer.py`'s W&B group is now `sft-<task>` rather than a
+bare `sft`. `tests/test_core/test_name_isolation.py` enumerates every writable name for all four tasks × three
+tiers × three versions and asserts the set has no duplicates — so a future task cannot reintroduce a collision
+without a red test.
 
-- `hpc_baseline_unified.sh:59` emits `--run_name baseline_${TIER}_${VERSION}` — underscored, **no task prefix**.
-  Every other pipeline uses `<prefix>-baseline-<tier>-<version>`. This legacy form is why `compare_results.py`
-  and `plot_metrics.py` branch on `task == "unified"` instead of calling `task_prefix()` uniformly. A new task
-  must **not** copy this; use the prefixed form.
-
-(`hpc_merge_sft_vo.sh`'s unprefixed job name/logs and missing `--task` were fixed — it now passes
-`--task violations_only` explicitly and logs to `merge_sft_vo_%j`. Always pass `--task` in a new merge script;
-`merge_sft_adapter.py` still defaults to `violations_only`, so an omission looks correct while merging the
-wrong task.)
-
-All 8 `hpc_*.sh` now start with `set -eo pipefail` and a guarded `cd`. Without that, a failed training step
+All four `hpc_*.sh` start with `set -eo pipefail` and a guarded `cd`. Without that, a failed training step
 still ran inference/repair/eval and the job could exit 0, so the `afterok` dependency would launch the next
 stage against a missing adapter. Deliberately not `set -u` — several lines legitimately expand possibly-unset
-vars (`PYTHONPATH`, `SLURM_JOB_ID`).
+vars (`PYTHONPATH`, `SLURM_JOB_ID`). `hpc_merge_sft.sh` additionally refuses to run if no adapter exists at
+`<sft_variant>/best`, and `hpc_grpo.sh` refuses if the merged KL base is missing.
 
 ### Adding a new task pipeline
 
-`core/naming.py`'s docstring claims adding a task is "ONE line here." That is true for *naming* only. The full
-checklist:
+Six steps, none of them orchestration:
 
-1. `core/constants.py` — add to `VALID_TASKS`.
-2. `core/naming.py` — uncomment/add the `TASK_PREFIXES` entry (`object_only` → `oo`, `caption_only` → `co`).
-   Without it, `task_prefix()` falls back to the full task name, which still works but yields long folder names.
-3. `configs/tasks/<task>.yaml` — `task_name`, `prompt_key`, `reward_components`, `reward_weights`, token budgets.
-   Copy `violations_only.yaml`, **not** `unified.yaml` (whose `reward_weights` block is dead — see stale list).
-4. `data/prompt_templates.py` — new prompt constant + `PROMPT_REGISTRY` entry.
-5. `data/schemas.py` — new Pydantic output model + `SCHEMA_REGISTRY` entry.
-6. `data/preprocessor.py:296-307` — branches in `build_target_json` and `build_gt_dict`.
-7. `evaluation/evaluator.py` — gate which metric families run for the task.
-8. `scripts/hpc_{baseline,sft,merge_sft,grpo}_<prefix>.sh` + `scripts/submit_<prefix>_pipeline.py` — these are
-   copy-paste clones today, not parameterized. Give each a distinct `--job-name` and log path, and heed the two
-   warnings above.
+1. `core/tasks.py` — one `TaskSpec` in `TASK_REGISTRY`: name, unique prefix, capability set, wire format.
+   `VALID_TASKS` and `TASK_PREFIXES` derive from it; every naming, gating and validation site follows.
+2. `configs/tasks/<task>.yaml` — `task_name`, `prompt_key`, `reward_components`, `reward_weights`, token budgets,
+   and optionally `sft_dataset_subdir`. Copy `violations_only.yaml` or `object_only.yaml`. Every key in
+   `reward_weights` must also appear in `reward_components` (`get_reward_funcs_for_task` now raises otherwise —
+   unknown weight keys used to be ignored silently).
+3. `data/prompt_templates.py` — new prompt constant + `PROMPT_REGISTRY` entry.
+4. `data/schemas.py` — new Pydantic output model + `SCHEMA_REGISTRY` entry. Its fields must match the declared
+   capabilities exactly; `tests/test_core/test_task_registry.py` asserts this, and the repair layer derives its
+   canonical-key allow-set from `model_fields`.
+5. `data/preprocessor.py` — a target builder in `_TARGET_BUILDERS` and a ground-truth builder in `_GT_BUILDERS`.
+   Boxes: targets scale to `[0,1000]`, ground truth stays `[0,1]`.
+6. `tests/` — mirror the `_oo` / `_co` suites (`test_preprocessor_*`, `test_reward_*`, `test_evaluator_*`) plus a
+   fixture factory in `conftest.py`.
 
-No new data prep is needed — the shared pool and augmented set already serve any task.
+**Nothing to add in:** the SLURM scripts, the submitter, the evaluator, structural repair, the reward assembly,
+the comparison tables, or the plots — all of those read the registry. There is no new data prep either: the
+shared GRPO pool serves any task.
+
+If the new task's wire format is not fenced JSON, also give
+`evaluation/output_parser.py::parse_output_for_task` / `serialize_output_for_task` a branch for it, and a
+`reward_format` meaning (see `caption_only` for the worked example).
 
 ### Data flow
 
 ```
-HF hub → datasets/raw → datasets/raw_cleaned → datasets/processed → datasets/augmented → SFT
-                                                        └────────→ datasets/grpo_pool → GRPO
+HF hub → datasets/raw → datasets/raw_cleaned → datasets/processed ──→ datasets/augmented → SFT (unified, vo)
+                                                        │
+                                                        ├──────────────────────────────→ SFT (oo, co)
+                                                        └────────→ datasets/grpo_pool ──→ GRPO (all four)
 ```
 
 **The naming trap:** in `configs/base.yaml`, `processed_subdir` points at `datasets/augmented`, and the
-non-augmented base is `raw_processed_subdir` → `datasets/processed`. So `data.loader.load_processed_dataset()`
-returns the **augmented** set. Only `build_grpo_pool.py` reads the truly-processed one.
+non-augmented base is `raw_processed_subdir` → `datasets/processed`. So a bare
+`data.loader.load_processed_dataset()` returns the **augmented** set.
+`load_processed_dataset(subdir=...)` takes an override, which is how `object_only` and `caption_only` read the
+un-augmented split via their `sft_dataset_subdir` key (see [Tasks](#tasks--what---task-actually-controls));
+`build_grpo_pool.py` reads the truly-processed one directly.
+
+Note that **inference/eval always uses the default root for every task**, so all four pipelines are scored on
+byte-identical test images. That is safe because augmentation only rewrites the `train` split.
 
 Augmentation (`data/augment_rare_classes.py`) is **pixel-only** — brightness/contrast, JPEG compression, gamma;
 deliberately no spatial transforms, so bounding boxes and directional caption phrases stay valid. Per-rule
@@ -269,22 +388,39 @@ images would produce correlated reward groups instead of independent signal.
 `get_reward_funcs_for_task(task)` filters and reweights it from the task YAML.
 
 - `unified` — all 6 components at defaults (format .05, caption .15, grounding .25, violation_id .30,
-  violation_grounding .15, reasoning .10).
+  violation_grounding .15, reasoning .10). Its YAML deliberately declares **no** `reward_components`, which is
+  what selects that full-registry fallback.
 - `violations_only` — 4 components: format .10, violation_id .40, violation_grounding .30, reasoning .20.
+- `object_only` — 2 components: format .10, grounding .90.
+- `caption_only` — 2 components: format .10, caption .90.
 
-Every reward passes through `_strict_parse_for_task()`, which runs `parse_model_output` then Pydantic validation
-and returns `None` on any exception. **`None` → `0.0` for that component.** The expected output is a *flat* JSON
-object inside a ```` ```json ```` fence:
+Every reward passes through `_strict_parse_for_task()`, which runs `parse_output_for_task` (the task's wire
+format) then Pydantic validation, and returns `None` on any exception. **`None` → `0.0` for that component.**
+
+The expected output for the three JSON tasks is a *flat* JSON object inside a ```` ```json ```` fence — the
+unified shape, minus whatever the task does not own:
 
 ```json
 {"caption":"...","rule_1_violation":{"bounding_box":[[x,y,x,y]],"reason":"..."},"rule_2_violation":null,
  "rule_3_violation":null,"rule_4_violation":null,"excavator":[[x,y,x,y]],"rebar":[],"worker_with_white_hard_hat":[]}
 ```
 
-`caption` is required for `UnifiedOutput` (no default) — a missing caption zeroes **all six** rewards, including
-grounding. `bounding_box` is a list *of* 4-float boxes. **Predicted boxes are scaled [0,1000]; ground truth stays
-[0,1]** — rewards call `scale_1000_to_01` on predictions only. Getting this backwards silently zeroes every IoU
-metric.
+`caption_only` instead emits bare prose, with no fence and no keys.
+
+Required-field asymmetries, each deliberate:
+
+- `UnifiedOutput.caption` is required — a missing caption zeroes **all six** rewards, including grounding.
+- `ObjectOnlyOutput`'s three class keys are all **required**, unlike `UnifiedOutput`'s object fields which
+  default to `[]`. Under `unified`, the required `caption` anchors the strict schema gate; `object_only` has no
+  such anchor, so with everything defaulting the schema would accept `{}` and even `{"excavators": [...]}`. That
+  would make schema adherence uninformative, make `reward_format` free, and — worst — let the strict gate accept
+  an aliased key so structural repair never renames it, silently scoring a real detection as "nothing detected".
+- `CaptionOnlyOutput.caption` rejects blank/whitespace, since it is the entire output.
+- `ViolationsOnlyOutput`'s four fields all default to `None`, so `{}` validates. That is pre-existing behaviour,
+  and consistent with `null` meaning "not violated".
+
+`bounding_box` is a list *of* 4-float boxes. **Predicted boxes are scaled [0,1000]; ground truth stays [0,1]** —
+rewards call `scale_1000_to_01` on predictions only. Getting this backwards silently zeroes every IoU metric.
 
 Prompts are defined **only** in `data/prompt_templates.py` — never hardcode one elsewhere.
 
@@ -320,38 +456,84 @@ Prompts are defined **only** in `data/prompt_templates.py` — never hardcode on
    and raise `steps_per_generation` only with headroom evidence from `GPUMemoryLoggingCallback`: spg=16 means
    256 live sequences each carrying ~4256 vision patches, a memory profile never actually exercised (the old
    accidental spg=16 runs were prompt-only, so they are not evidence it fits).
-6. **The `0.15` true-negative constant** appears in four reward files (`reward_violation_id.py:30`,
-   `reward_grounding.py:26`, `reward_violation_grounding.py:35`, `reward_reasoning.py:47`). Note its stated
-   rationale ("balance the EV against the 91% imbalance") is arithmetically void — the constant cancels out of
-   the always-safe-vs-honest expected-value comparison at every class balance. More importantly, TRL's
-   `scale_rewards` defaults to `'group'`, so advantages are z-scored within each rollout group: for a safe image
-   whose 8 rollouts take only two values, the constant is **affine-invariant and changing it does nothing**.
-   Retuning safe-vs-violation balance belongs in the pool composition (currently 50/50), not here. If you do
-   change it, all four sites must move together — but `reward_grounding.py:26` is per-*class*, not per-image,
-   and is inactive under `violations_only`.
+6. **The true-negative constants are now per-task configuration, not literals.** Two knobs, both read from
+   `configs/tasks/<task>.yaml` via `rewards/reward_utils.py::reward_constant` (lru-cached):
+
+   - `grounding_tn_constant` — credit for correctly calling an object class ABSENT. Scalar or per-class
+     mapping. Read by `reward_grounding.py`.
+   - `violation_tn_constant` — credit for correctly calling an image SAFE. Read by `reward_violation_id.py`,
+     `reward_violation_grounding.py` and `reward_reasoning.py`, so all three violation sites move together by
+     construction (the old hand-coordination hazard is gone).
+
+   Both default to the historical `0.15` when a task YAML says nothing.
+
+   **Why they were retuned.** A true-negative constant sets the break-even detection quality for a class:
+   emitting boxes for class *k* is positive-EV only when `E[IoU_k] > c·(1−p_k)/p_k`, where `p_k` is that
+   class's prevalence in the GRPO pool. At a flat `c = 0.15` and the measured prevalences (excavator 0.361,
+   rebar 0.088, worker_with_white_hard_hat 0.115) the break-evens were **0.27 / 1.55 / 1.15** — two of them
+   above 1.0, i.e. *unreachable*. Suppressing those two classes was strictly dominant regardless of how good
+   the detector became. All three JSON tasks now carry frequency-aware values solving for a 0.5 break-even.
+
+   Likewise `violation_tn_constant: 0.15` made always-asserting rule_1 (EV ≈ 0.391, since rule_1 covers 39%
+   of the pool) beat honest abstention (EV 0.075) by 5×, for a policy that never looks at the image. It is
+   now `0.85`, above the ≈0.78 crossover. The old rationale — "balance the EV against the 91% imbalance" —
+   never described what GRPO sees: `build_grpo_pool.py` builds the pool **50/50**.
+
+   **On affine invariance.** CLAUDE.md used to claim the constant was irrelevant under TRL's
+   `scale_rewards='group'`. That holds only for groups taking **two** distinct values. Verified: at 2 values
+   the advantages are invariant (0.15 → `[+0.5764, −1.7291]`, 0.50 → `[+0.5771, −1.7312]`, the delta being
+   the `1e-4` epsilon); at **≥3** values it is not (best-rollout advantage `+1.2407` at 0.15 vs `+1.0863` at
+   0.30). For `object_only`, where grounding is the *only* varying component and spans `{0, c, IoU}³/3`,
+   the constant is the whole objective's shape.
+
+   `scripts/validate_rewards.py` fails the build if any class's break-even exceeds 0.75 or if reflexive
+   flagging beats abstention. Run it after touching either knob.
 7. **`best/` and `final/` are now different checkpoints.** `configs/sft.yaml` sets
    `load_best_model_at_end: false`, so `final/` is the literal end-of-training state (debugging) and `best/` is
    the lowest-`eval_loss` state, written eagerly by `SaveBestModelCallback`. **The merge → GRPO handoff consumes
    `best/`**, and the post-SFT eval runs `--checkpoint best` so the reported SFT numbers describe the checkpoint
-   GRPO actually trains from. GRPO itself has no `best/` (no eval dataset), so `hpc_grpo_*.sh` stays on
+   GRPO actually trains from. GRPO itself has no `best/` (no eval dataset), so `hpc_grpo.sh` stays on
    `--checkpoint final`. Keep `best_model_threshold: 0.0` — it is an *absolute* delta, and the old `0.005`
    froze `best/` hundreds of steps early on a ~0.055 loss.
 
-**Violation semantics — one predicate, everywhere.** `rewards/reward_utils.py::_is_violation_present` is the
-single source of truth for "is this rule violated?", used by the GRPO rewards *and* by
-`evaluation/metrics_{violations,reasoning}.py`, so training and evaluation can never disagree.
+**Violation semantics — two predicates, deliberately different.**
+`rewards/reward_utils.py::_is_violation_present` remains the single source of truth for "is this rule
+violated?", used by the GRPO rewards *and* by `evaluation/metrics_{violations,reasoning}.py`, so training and
+evaluation can never disagree about presence.
+
+`_is_substantive_violation` is the second predicate: present **and** carrying a non-empty `reason` or at least
+one bounding box. `reward_violation_id` uses **both**, because a contentless
+`{"reason":"","bounding_box":[]}` is an assertion with no content and those two facts pull opposite ways:
+
+- as an *assertion* it must still count as a prediction, so flagging a safe image is penalised as a false
+  positive — dropping it would let a false alarm collect true-negative credit;
+- as *contentless* it must not earn true-positive credit, because it names no location and gives no reason.
+
+So presence drives precision (the FP denominator) and substance drives recall (the TP numerator). A
+contentless assertion therefore scores as a **miss** on a real violation and a **false alarm** on a safe
+image — never as a hit. It previously scored a perfect F₂ = 1.0 on the most heavily weighted component of
+`violations_only` (0.40) while contributing nothing to grounding or reasoning, both of which are
+TP-conditioned and so never penalised it. Governed by `require_violation_substance` (default `true`).
 
 **`null` is the only safe signal.** The prompt says *"If NOT violated, output null"*, so emitting a violation
 object at all is an assertion of violation — even `{"reason": "", "bounding_box": []}`. A contentless
-assertion still earns nothing downstream (empty boxes → IoU 0.0; empty reason → ~0), so the model gets
-identification credit only. The one exception is a bare `{}`, which carries no keys and no assertion;
-`structural_repair.py:1007` normalizes it to `null` first.
+assertion earns nothing anywhere: `reward_violation_id` now requires substance for TP credit (see above),
+and grounding/reasoning were always TP-conditioned. It still counts as a *prediction*, so flagging a safe
+image is penalised. The one exception is a bare `{}`, which carries no keys and no assertion;
+`normalize_violation_value` normalizes it to `null` first.
 
-This matters because `preprocessing/structural_repair.py` manufactures these shapes: `:959` rewrites a bare
-`true` into `{"reason":"","bounding_box":[]}`, and `:975` turns a bare reason string into a box-less
+This matters because `preprocessing/structural_repair.py` manufactures these shapes: it rewrites a bare
+`true` into `{"reason":"","bounding_box":[]}`, and turns a bare reason string into a box-less
 violation. Reading the first as *Safe* would invert the model's own answer — crediting an unsubstantiated
 alarm as "correctly identified a safe site" — and left a reward-hacking surface where empty violation objects
 collected the true-negative reward on safe images.
+
+All of that now runs **only for tasks with the `violations` capability**. It used to run unconditionally *and*
+assign rather than test, so every repaired record of every task gained four phantom `rule_N_violation: null`
+keys. Likewise the object-box repairs run only under `objects` (they were previously gated behind
+`task == "unified"`, which is why a recoverable `object_only` box would have landed in `still_broken`), and the
+caption list-join only under `caption`. `caption_only` takes an entirely separate plain-text repair path that
+unwraps a stray fence or `{"caption": ...}` object and writes the repaired `raw_output` back as bare prose.
 
 `rule_0` is a pseudo-rule for the safe class: **rule_0 TP = correctly said safe** (the true negative of
 violation detection), **FN = false alarm on a safe image**, **FP = missed a real violation**. So
@@ -377,13 +559,26 @@ Parse/schema failures reach the metrics as `None`, are **never** credited rule_0
 **Stale things — don't trust them:**
 
 - `setup_project_structure.py` — dead one-time bootstrap describing an older layout. Gitignored yet tracked. Don't run it.
-- `configs/tasks/unified.yaml`'s `reward_weights` uses an obsolete key namespace (`json_validity`,
-  `rule_violation_accuracy`, …) that matches nothing in the registry. Unknown *component names* raise, but unknown
-  *weight keys* fail **silently** — those five values are ignored entirely.
 - `rewards/{json_validity,caption_quality,rule_violation_accuracy,grounding_iou}.py` are legacy and unwired;
   `rule_violation_accuracy` still returns 1.0 for both-empty, the exact hack the 0.15 constant replaced.
-- `preprocessing/structural_repair.py` re-declares `RuleViolation`/`UnifiedOutput` locally — keep in sync with
-  `data/schemas.py` by hand.
+- `experiments/run_dual_evaluation.py` returns a **nested** metrics shape
+  (`{structural_metrics, strict_metrics, valid_metrics}`) that no analysis script reads any more, and no
+  `hpc_*.sh` invokes it. Its capability gating is kept in sync with `evaluation/evaluator.py`, but treat the file
+  as semi-stale.
+- `rewards/reward_utils.py::_strict_parse`/`_strict_parse_cached` and
+  `evaluation/output_parser.py::validate_unified_output` are the pre-task legacy parse path, hardcoded to
+  `UnifiedOutput`. Use `_strict_parse_for_task` / `parse_output_for_task` / `validate_output_for_task`.
+- `data/preprocessor.py` still carries the task-blind `raw_sample_to_conversation`,
+  `build_unified_sft_dataset`, `to_grpo_prompt` and `build_grpo_dataset` alongside the `_for_task` versions the
+  pipeline actually uses.
+
+**Fixed since the last revision of this file** — mentioned because older notes and diagnosis docs still refer to
+them: `configs/tasks/unified.yaml`'s dead `reward_weights` block is gone (and stray weight keys now raise
+instead of being ignored silently); `structural_repair.py` no longer re-declares `RuleViolation`/`UnifiedOutput`
+locally, it imports them from `data/schemas.py`; `merge_sft_adapter.py --task` is required rather than defaulting
+to `violations_only`; `models/inference.py` no longer reads `load_task_config("unified")` at import time; the
+dead `task != 'unified'` special case in `_make_task_aware_batch_reward` is gone; and `preflight_grpo.py` no
+longer hardcodes a 233-token text-only baseline.
 - `docs/Metrics.md` documents a metric namespace that no longer exists (`grounding_iou_all_macro_*`,
   `_excl`, `grounding_iou_total_macro`). Grepping `evaluation/` for those returns nothing — the live families
   are `grounding_{mask,greedy}_iou_{all,exist}_*`. Its analysis of `rule_0` semantics is still sound, and its

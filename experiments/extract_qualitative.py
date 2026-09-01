@@ -1,20 +1,47 @@
 import os
+import sys
 import json
 from pathlib import Path
 
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
 MODELS = ["baseline", "sft", "grpo"]
 RESULTS_DIR = Path("evaluation_results")
-OUTPUT_MD = RESULTS_DIR / "qualitative_examples.md"
 
-def load_predictions():
+# Set by main() from --task/--tier/--version; module-level so the report writers
+# don't all need them threaded through.
+TASK = None
+OUTPUT_MD = None
+
+
+def load_predictions(task, tier, version):
+    """Loads run_evaluation.py's predictions_with_eval.json for the three phases.
+
+    Folder names come from core.naming.results_dir_names, the same helper the
+    comparison table and the plots use. This previously read bare
+    ``evaluation_results/{baseline,sft,grpo}/``, a layout the versioned pipeline
+    never writes, so it silently reported "not found" for every phase.
+    """
+    from core.naming import results_dir_names
+
+    names = results_dir_names(task, tier, version)
     data = {}
     for model in MODELS:
-        pred_file = RESULTS_DIR / model / "predictions_with_eval.json"
-        if pred_file.exists():
-            with open(pred_file, "r") as f:
-                data[model] = json.load(f)
+        base = RESULTS_DIR / names[model]
+        # run_evaluation writes into <preds_dir>/evaluation_results/, and the
+        # pipeline points --output_dir there; accept the flat form too.
+        candidates = [
+            base / "evaluation_results" / "predictions_with_eval.json",
+            base / "predictions_with_eval.json",
+        ]
+        for pred_file in candidates:
+            if pred_file.exists():
+                with open(pred_file, "r", encoding="utf-8") as f:
+                    data[model] = json.load(f)
+                break
         else:
-            print(f"Warning: {pred_file} not found.")
+            print(f"Warning: predictions_with_eval.json not found for '{model}'; "
+                  "looked in: " + ", ".join(str(c) for c in candidates))
     return data
 
 def build_image_map(predictions_data):
@@ -129,19 +156,48 @@ def generate_markdown(triumphs, failures, image_map):
         f.write("\n".join(md))
         
 def main():
-    print("Loading predictions...")
-    data = load_predictions()
+    import argparse
+    from core.constants import VALID_TASKS
+    from core.naming import task_prefix
+    from core.tasks import CAP_VIOLATIONS, task_has
+
+    parser = argparse.ArgumentParser(
+        description="Extract triumph/failure examples across baseline / SFT / GRPO "
+                    "for one task, tier and version."
+    )
+    parser.add_argument("--task", default="violations_only", choices=VALID_TASKS,
+                        help="Task whose runs to compare. Example selection is "
+                             "driven by per-rule violation F1, so only "
+                             "violation-capable tasks are meaningful.")
+    parser.add_argument("--tier", default="8b", help="Model tier (2b, 4b, 8b)")
+    parser.add_argument("--version", required=True, help="Run version tag, e.g. v1")
+    args = parser.parse_args()
+
+    if not task_has(args.task, CAP_VIOLATIONS):
+        raise SystemExit(
+            f"extract_qualitative.py ranks examples by violation F1, which task "
+            f"{args.task!r} does not produce."
+        )
+
+    global TASK, OUTPUT_MD
+    TASK = args.task
+    OUTPUT_MD = RESULTS_DIR / (
+        f"qualitative_examples_{task_prefix(TASK)}_{args.tier}_{args.version}.md"
+    )
+
+    print(f"Loading predictions (task={TASK}, tier={args.tier}, version={args.version})...")
+    data = load_predictions(TASK, args.tier, args.version)
     if not data:
         print("No prediction files found.")
         return
-        
+
     image_map = build_image_map(data)
     triumphs, failures = extract_examples(image_map)
-    
+
     print("Generating qualitative report...")
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     generate_markdown(triumphs, failures, image_map)
-    
+
     print(f"Qualitative report saved to {OUTPUT_MD.absolute()}")
 
 if __name__ == "__main__":

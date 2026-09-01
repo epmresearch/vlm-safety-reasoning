@@ -3,7 +3,7 @@ Computes the object grounding IoU reward for GRPO.
 Calculates IoU for specific classes and correctly handles true negatives.
 """
 
-from rewards.reward_utils import _strict_parse_for_task, _safe_reward
+from rewards.reward_utils import _strict_parse_for_task, _safe_reward, grounding_tn_constant
 from data.box_utils import normalize_boxes, clean_boxes, scale_1000_to_01, compute_mask_union_iou
 from core.constants import GROUNDING_CLASSES
 from core.logging import get_logger
@@ -23,7 +23,12 @@ def compute_reward(completion: str, ground_truth: dict, **kwargs) -> float:
         gt_boxes = clean_boxes(normalize_boxes(ground_truth.get(cls, [])))
 
         if not gt_boxes and not pred_boxes:
-            class_scores.append(0.15)  # Balanced True Negative (prevents empty array hacking)
+            # True negative credit. Per-class and tunable from the task YAML
+            # (grounding_tn_constant); defaults to the historical flat 0.15.
+            # This constant sets the break-even detection quality for the class —
+            # see rewards/reward_utils.py::grounding_tn_constant for the EV math
+            # and why a flat value made two of the three classes un-emittable.
+            class_scores.append(grounding_tn_constant(task, cls))
         elif not gt_boxes and pred_boxes:
             class_scores.append(0.0)  # False Positive: hallucinated
         elif gt_boxes and not pred_boxes:

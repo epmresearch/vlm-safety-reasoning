@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from core.config import load_config
+from core.constants import VALID_TASKS
 from core.logging import get_logger, attach_file_logger
 from core.io import get_drive_path, ensure_dir
 from models.grpo_trainer import run_grpo
@@ -23,13 +24,15 @@ def main():
     
     parser = argparse.ArgumentParser()
     parser.add_argument("--tier", default=default_tier, help="Model tier (e.g., 2b, 4b, 8b)")
-    parser.add_argument("--variant", default="unified-grpo-v4", help="Variant name for GRPO")
+    # Required, not defaulted: the old defaults ("unified-grpo-v4" / "unified-sft-v4")
+    # silently produced a stale, unversioned run if a caller forgot the flag.
+    parser.add_argument("--variant", required=True, help="Variant name for GRPO, e.g. oo-grpo-8b-v1")
     parser.add_argument("--max_samples", type=int, default=None, help="Cap dataset size for debugging")
-    parser.add_argument("--sft_variant", default="unified-sft-v4", help="SFT variant name to load as starting adapter")
+    parser.add_argument("--sft_variant", default=None, help="SFT variant name to load as starting adapter (only used with --allow_unmerged_reference)")
     parser.add_argument("--adapter_path", default=None, help="Explicit full path to adapter. With --base_model_override, this continues that adapter on top of the merged base (epoch chaining); without it, this is a raw-base continuation (see --allow_unmerged_reference).")
     parser.add_argument("--base_model_override", default=None, help="If set, loads THIS path as the base model instead of the HF model (use with merged SFT model for correct KL reference)")
     parser.add_argument("--allow_unmerged_reference", action="store_true", help="Bypass the merged-base-model safety check and proceed without --base_model_override. NOT recommended: TRL's KL reference will be the raw pretrained base, not your SFT policy (the original reference-model bug). Use only for an intentional ablation.")
-    parser.add_argument("--task", default="unified", help="Task name: 'unified' or 'violations_only'")
+    parser.add_argument("--task", default="unified", choices=VALID_TASKS, help="Task to run. Must be registered in core/tasks.py::TASK_REGISTRY.")
     args = parser.parse_args()
 
     # Set up unique txt log file in the logs directory
@@ -55,6 +58,11 @@ def main():
             adapter_path = args.adapter_path
             logger.warning(f"--allow_unmerged_reference set: using explicit adapter path WITHOUT a merged base: {adapter_path}. KL reference will be the RAW base model, not your SFT policy.")
         else:
+            if not args.sft_variant:
+                raise SystemExit(
+                    "--allow_unmerged_reference without --adapter_path needs --sft_variant "
+                    "to locate the SFT adapter to continue from."
+                )
             adapter_path = str(get_drive_path("checkpoints", f"qwen3vl-{args.tier}", args.sft_variant, "best"))
             logger.warning(f"--allow_unmerged_reference set: using SFT variant adapter path WITHOUT a merged base: {adapter_path}. KL reference will be the RAW base model, not your SFT policy.")
     else:

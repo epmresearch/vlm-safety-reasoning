@@ -155,7 +155,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--merged_path", required=True)
     parser.add_argument("--raw_hf_path", default="unsloth/Qwen3-VL-2B-Instruct")
-    parser.add_argument("--task", default="violations_only")
+    from core.constants import VALID_TASKS
+    parser.add_argument("--task", default="violations_only", choices=VALID_TASKS)
     args = parser.parse_args()
 
     print(">>> 1. Loading processor from the RAW HF repo...")

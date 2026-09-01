@@ -93,7 +93,9 @@ class TestTrueNegativeBranch:
     def test_correctly_safe_returns_tn_constant(self):
         completion = "```json\n" + json.dumps(_safe_payload()) + "\n```"
         gt = _safe_payload()
-        assert compute_reward([completion], [gt])[0] == pytest.approx(0.15)
+        from rewards.reward_utils import reward_constant
+        expected = reward_constant("unified", "violation_tn_constant", 0.15)
+        assert compute_reward([completion], [gt])[0] == pytest.approx(expected)
 
     def test_false_alarm_on_safe_image_returns_zero(self):
         completion = _make_completion("Worker without a hard hat.")

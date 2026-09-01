@@ -266,14 +266,49 @@ def apply_pixel_bounds(
         logger.warning("No image_processor on tokenizer — cannot apply pixel bounds.")
         return
 
-    # Fallback to existing values if None are provided
-    current_min = min_pixels if min_pixels is not None else getattr(image_processor, "min_pixels", 200704)
-    current_max = max_pixels if max_pixels is not None else getattr(image_processor, "max_pixels", 1204224)
+    # Fallback to existing values if None are provided. Read the CURRENT bounds out of
+    # the canonical size keys first (that is where the processor actually keeps them),
+    # then the legacy attributes, then the project defaults.
+    existing = getattr(image_processor, "size", None) or {}
+    current_min = min_pixels
+    if current_min is None:
+        current_min = existing.get("shortest_edge") or getattr(image_processor, "min_pixels", None) or 200704
+    current_max = max_pixels
+    if current_max is None:
+        current_max = existing.get("longest_edge") or getattr(image_processor, "max_pixels", None) or 1204224
 
-    # Overwrite the size dictionary directly with the area bounds
-    image_processor.size = {"min_pixels": current_min, "max_pixels": current_max}
+    # The Qwen VL image processor stores its pixel-AREA bounds under the keys
+    # "shortest_edge" and "longest_edge". The names are misleading: they are areas in
+    # pixels, not edge lengths. Proof, from
+    # transformers/models/qwen2_vl/image_processing_qwen2_vl.py:
+    #   * the class default is written as
+    #       size = {"shortest_edge": 56 * 56, "longest_edge": 28 * 28 * 1280}
+    #     which matches the docstring's "min_pixels defaults to 56*56";
+    #   * __init__ assigns size["shortest_edge"] = min_pixels verbatim, no conversion;
+    #   * the read site does
+    #       min_pixels = self.size["shortest_edge"]; max_pixels = self.size["longest_edge"]
+    #     and feeds both straight into smart_resize(), which is pure area math.
+    # So this is a key RENAME, not a sqrt. Converting to edge lengths (e.g. 1204224 ->
+    # 1097) would cap the area at 1097 px^2 and shrink every image to about 33x33.
+    #
+    # This previously wrote {"min_pixels": ..., "max_pixels": ...}. transformers rejects
+    # that key set outright ("size must have one of the following set of keys: ...") and
+    # the processor reads the edge keys regardless, so the cap was never applied — which
+    # is the most likely cause of the recorded 92.97/93.12 GiB OOM once real images
+    # started reaching the model.
+    image_processor.size = {"shortest_edge": current_min, "longest_edge": current_max}
 
-    logger.info(f"Applied image pixel bounds via size dict: min={current_min}, max={current_max}")
+    # Some transformers versions also read these as plain instance attributes (they are
+    # set from `size` in __init__ and not re-derived on assignment). Keep them in sync so
+    # the cap binds on every read path.
+    for attr, value in (("min_pixels", current_min), ("max_pixels", current_max)):
+        if hasattr(image_processor, attr):
+            setattr(image_processor, attr, value)
+
+    logger.info(
+        f"Applied image pixel bounds (area, via size shortest_edge/longest_edge): "
+        f"min={current_min}, max={current_max}"
+    )
 
 
 def log_gpu_memory(tag: str = "") -> None:

@@ -71,34 +71,46 @@ Outputs (next to the input file by default):
 
 import ast
 import json
+import os
 import re
+import sys
 from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field, conlist
+# This module is invoked as a SCRIPT (`python preprocessing/structural_repair.py`),
+# so sys.path[0] is preprocessing/, not the repo root, and first-party imports do
+# not resolve unless PYTHONPATH happens to be set (as the SLURM scripts do). Off
+# HPC that used to fail silently: the schema import lived inside a
+# `try: ... except Exception: pass`, so a ModuleNotFoundError was swallowed and
+# every record was reported as "invalid_schema" with the import error as its
+# message — a 100%-broken report indistinguishable from a terrible model.
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 # =============================================================================
-# SCHEMA (mirrors data/schemas.py::UnifiedOutput — keep in sync if that changes)
+# SCHEMA
+#
+# Imported from data/schemas.py, NOT re-declared. This module used to carry local
+# copies of BBox/RuleViolation/UnifiedOutput with a "keep in sync by hand" comment,
+# but both validation sites below already resolved the schema through
+# data.schemas.get_output_schema() at runtime, so the local copies were dead code
+# and the only thing the duplication could do was drift.
 # =============================================================================
 
-BBox = conlist(float, min_length=4, max_length=4)
-
-
-class RuleViolation(BaseModel):
-    bounding_box: Optional[List[BBox]] = None
-    reason: Optional[str] = None
-
-
-class UnifiedOutput(BaseModel):
-    caption: str
-    rule_1_violation: Optional[RuleViolation] = None
-    rule_2_violation: Optional[RuleViolation] = None
-    rule_3_violation: Optional[RuleViolation] = None
-    rule_4_violation: Optional[RuleViolation] = None
-    excavator: List[BBox] = Field(default_factory=list)
-    rebar: List[BBox] = Field(default_factory=list)
-    worker_with_white_hard_hat: List[BBox] = Field(default_factory=list)
+from data.schemas import BBox, RuleViolation, UnifiedOutput, get_output_schema  # noqa: F401
+from core.constants import GROUNDING_CLASSES, VALID_TASKS
+from core.tasks import (
+    CAP_CAPTION,
+    CAP_OBJECTS,
+    CAP_VIOLATIONS,
+    is_plain_text_task,
+    task_has,
+)
+from evaluation.output_parser import (
+    is_clean_prose,
+    serialize_output_for_task,
+    _parse_plain_caption,
+)
 
 
 # =============================================================================
@@ -535,18 +547,34 @@ def _build_alias_lookup() -> Dict[str, str]:
 _ALIAS_LOOKUP = _build_alias_lookup()
 
 
+def _canonical_keys_for_task(task: str) -> frozenset:
+    """The canonical output keys that ``task``'s schema actually owns.
+
+    Derived from the Pydantic model's fields rather than hardcoded per task. The
+    previous form was an inverted, hand-maintained list of the keys NOT to rename
+    for violations_only, which would have silently renamed e.g. `description` ->
+    `caption` for object_only and injected a field that task never emits.
+    """
+    return frozenset(get_output_schema(task).model_fields.keys())
+
+
 def normalize_top_level_keys(d: dict, tracker: Optional[ChangeTracker] = None, task: str = "unified") -> dict:
     """Renames known key aliases/typos/casing variants to the canonical
     schema key names. Unknown keys are left untouched (pydantic will ignore
-    them as extras — nothing is lost, nothing is invented)."""
+    them as extras — nothing is lost, nothing is invented).
+
+    An alias is only resolved when its canonical target is a field of THIS task's
+    schema; otherwise the original key is kept verbatim as a harmless extra.
+    """
+    owned = _canonical_keys_for_task(task)
     fixed = {}
     for k, v in d.items():
         nk = _normalize_key_str(k)
         canonical = _ALIAS_LOOKUP.get(nk)
-        
-        if canonical and task == "violations_only" and canonical in ("caption", "excavator", "rebar", "worker_with_white_hard_hat"):
+
+        if canonical is not None and canonical not in owned:
             canonical = None
-            
+
         if canonical and canonical != k:
             if tracker:
                 tracker.log("key_renamed", field=canonical, detail=f"'{k}' -> '{canonical}'")
@@ -1043,14 +1071,33 @@ def fix_prediction_structure(
 ) -> Dict[str, Any]:
     """Applies ALL structural/key/type fixes to one parsed prediction dict.
     Never touches numeric values or text content — only reshapes/retypes/
-    renames so the dict can satisfy the UnifiedOutput schema."""
+    renames so the dict can satisfy the task's output schema.
+
+    Each transform group is gated on the capability whose fields it touches, so a
+    task only ever receives the repairs its own schema can use:
+
+      - caption list-join        -> CAP_CAPTION
+      - object box normalization -> CAP_OBJECTS
+      - violation reconstruction
+        and value normalization  -> CAP_VIOLATIONS
+
+    Before this, object box normalization ran only under `task == "unified"`, so a
+    repairable object_only box (flat [x,y,x,y], string coords, corner pairs) was
+    never fixed and a recoverable record landed in `still_broken`. The violation
+    group ran UNCONDITIONALLY and assigned rather than tested, so every repaired
+    record of every task gained four phantom `rule_N_violation: null` keys —
+    harmless to Pydantic (extras are ignored) but written into the repaired
+    raw_output of tasks that have no such fields.
+    """
     fixed = dict(parsed)
 
     fixed = normalize_top_level_keys(fixed, tracker=tracker, task=task)
-    fixed = reconstruct_violations_list(fixed, tracker=tracker)
-    fixed = reconstruct_flattened_violations(fixed, tracker=tracker)
 
-    if task == "unified":
+    if task_has(task, CAP_VIOLATIONS):
+        fixed = reconstruct_violations_list(fixed, tracker=tracker)
+        fixed = reconstruct_flattened_violations(fixed, tracker=tracker)
+
+    if task_has(task, CAP_CAPTION):
         # Caption: only type-coerce (list of sentences -> joined string),
         # never invent missing content.
         if "caption" in fixed and isinstance(fixed["caption"], list):
@@ -1061,18 +1108,20 @@ def fix_prediction_structure(
                 )
             fixed["caption"] = " ".join(str(x) for x in fixed["caption"] if x)
 
-        for cls in ("excavator", "rebar", "worker_with_white_hard_hat"):
+    if task_has(task, CAP_OBJECTS):
+        for cls in GROUNDING_CLASSES:
             fixed[cls] = normalize_boxes(fixed.get(cls, []), field=cls, tracker=tracker)
 
-    for i in range(1, 5):
-        key = f"rule_{i}_violation"
-        fixed[key] = normalize_violation_value(fixed.get(key), rule_key=key, tracker=tracker)
+    if task_has(task, CAP_VIOLATIONS):
+        for i in range(1, 5):
+            key = f"rule_{i}_violation"
+            fixed[key] = normalize_violation_value(fixed.get(key), rule_key=key, tracker=tracker)
 
     return fixed
 
 
 def _check_duplicate_boxes(
-    fixed: dict, tracker: ChangeTracker, threshold: int = 3
+    fixed: dict, tracker: ChangeTracker, threshold: int = 3, task: str = "unified"
 ) -> None:
     """DIAGNOSTIC ONLY — never modifies anything. Flags when the exact same
     box appears more than `threshold` times within one field of one record:
@@ -1091,13 +1140,15 @@ def _check_duplicate_boxes(
                            f"(possible generation loop/truncation artifact).",
                 )
 
-    for cls in ("excavator", "rebar", "worker_with_white_hard_hat"):
-        _scan(fixed.get(cls) or [], cls)
+    if task_has(task, CAP_OBJECTS):
+        for cls in GROUNDING_CLASSES:
+            _scan(fixed.get(cls) or [], cls)
 
-    for i in range(1, 5):
-        v = fixed.get(f"rule_{i}_violation")
-        if isinstance(v, dict):
-            _scan(v.get("bounding_box") or [], f"rule_{i}_violation.bounding_box")
+    if task_has(task, CAP_VIOLATIONS):
+        for i in range(1, 5):
+            v = fixed.get(f"rule_{i}_violation")
+            if isinstance(v, dict):
+                _scan(v.get("bounding_box") or [], f"rule_{i}_violation.bounding_box")
 
 
 # =============================================================================
@@ -1136,6 +1187,111 @@ def _strict_parse_model_output(raw_str: str) -> Optional[Dict[str, Any]]:
         return None
 
 
+def _repair_and_validate_plain_text(raw_str: str, task: str) -> Dict[str, Any]:
+    """Repair pipeline for a PLAIN-TEXT task (caption_only).
+
+    None of the JSON machinery applies: there is no fence to strip on the happy
+    path, no syntax to sanitize, no keys to normalize. What can go wrong is that
+    the model reverted to the JSON habits the other three tasks train, so the
+    recoverable cases are exactly: prose wrapped in a code fence, prose wrapped in
+    a {"caption": ...} object, a caption emitted as a list of sentences, or a bare
+    JSON string literal. _parse_plain_caption handles all four.
+
+    Returns the same four statuses as the JSON path so the batch report,
+    per-record manifest and broken log keep one shape across every task:
+
+      - "valid_raw"      : already clean prose, non-blank, schema-valid.
+      - "fixed_valid"    : recovered by unwrapping a fence / JSON wrapper.
+      - "invalid_json"   : nothing usable at all (empty or whitespace-only).
+      - "invalid_schema" : something was there, but no caption could be recovered
+                           from it (e.g. a JSON object with no caption field).
+    """
+    tracker = ChangeTracker()
+    raw = raw_str if isinstance(raw_str, str) else ("" if raw_str is None else str(raw_str))
+
+    if not raw.strip():
+        return {
+            "status": "invalid_json",
+            "original_parsed": None,
+            "fixed_parsed": None,
+            "validated": None,
+            "error": "Empty or whitespace-only completion; no caption to recover.",
+            "changes": tracker.changes,
+            "warnings": tracker.warnings,
+        }
+
+    already_clean = is_clean_prose(raw)
+    parsed = _parse_plain_caption(raw)
+
+    if parsed is None:
+        return {
+            "status": "invalid_schema",
+            "original_parsed": None,
+            "fixed_parsed": None,
+            "validated": None,
+            "error": "Completion carried no recoverable caption text.",
+            "changes": tracker.changes,
+            "warnings": tracker.warnings,
+        }
+
+    schema_cls = get_output_schema(task)
+    try:
+        validated = schema_cls(**parsed)
+    except Exception as e:
+        return {
+            "status": "invalid_schema",
+            "original_parsed": parsed,
+            "fixed_parsed": parsed,
+            "validated": None,
+            "error": str(e),
+            "changes": tracker.changes,
+            "warnings": tracker.warnings,
+        }
+
+    if already_clean and parsed["caption"] == raw.strip():
+        return {
+            "status": "valid_raw",
+            "original_parsed": parsed,
+            "fixed_parsed": parsed,
+            "validated": validated,
+            "error": None,
+            "changes": tracker.changes,
+            "warnings": tracker.warnings,
+        }
+
+    # Something had to be undone to get here — record exactly what.
+    if "```" in raw:
+        tracker.log(
+            "caption_fence_stripped", field="caption",
+            detail="Prose was wrapped in a code fence; fence removed.",
+        )
+    if not is_clean_prose(raw) and raw.lstrip().startswith(("{", '"')):
+        tracker.log(
+            "caption_json_unwrapped", field="caption",
+            detail="Caption was emitted as JSON; unwrapped to bare prose.",
+        )
+    if not tracker.changes:
+        # Defensive: keeps the per-record manifest honest by never reporting a
+        # "fixed_valid" record with an empty change list. Not reachable through
+        # either known recovery path (fence / JSON wrapper), both logged above —
+        # plain whitespace padding is not a repair and returns valid_raw, matching
+        # how the JSON path treats it.
+        tracker.log(
+            "caption_normalized", field="caption",
+            detail="Caption text normalized to bare prose.",
+        )
+
+    return {
+        "status": "fixed_valid",
+        "original_parsed": parsed,
+        "fixed_parsed": parsed,
+        "validated": validated,
+        "error": None,
+        "changes": tracker.changes,
+        "warnings": tracker.warnings,
+    }
+
+
 def repair_and_validate(raw_str: str, duplicate_box_threshold: int = 3, task: str = "unified") -> Dict[str, Any]:
     """Full pipeline for one record's raw model output.
 
@@ -1144,7 +1300,7 @@ def repair_and_validate(raw_str: str, duplicate_box_threshold: int = 3, task: st
           "status": "valid_raw" | "fixed_valid" | "invalid_json" | "invalid_schema",
           "original_parsed": dict or None,
           "fixed_parsed": dict or None,
-          "validated": UnifiedOutput or None,
+          "validated": <task output schema instance> or None,
           "error": str or None,
           "changes": List[Dict[str, str]],   # every actual fix applied
           "warnings": List[Dict[str, str]],  # diagnostic-only observations
@@ -1162,7 +1318,16 @@ def repair_and_validate(raw_str: str, duplicate_box_threshold: int = 3, task: st
                           schema (genuinely missing/ambiguous content --
                           NOT fabricated).
     """
+    # A plain-text task has a completely different wire format; its repair
+    # pipeline is small and self-contained.
+    if is_plain_text_task(task):
+        return _repair_and_validate_plain_text(raw_str, task)
+
     tracker = ChangeTracker()
+
+    # Resolved before the try below so an unregistered task raises loudly instead
+    # of being reported as invalid_schema on every single record.
+    schema_cls = get_output_schema(task)
 
     # --- STRICT GATE: identical to evaluation/output_parser.py. This
     # decides "needs no repair at all" and keeps this script's counts in
@@ -1170,10 +1335,8 @@ def repair_and_validate(raw_str: str, duplicate_box_threshold: int = 3, task: st
     strict_parsed = _strict_parse_model_output(raw_str)
     if strict_parsed is not None:
         try:
-            from data.schemas import get_output_schema
-            schema_cls = get_output_schema(task)
             validated_raw = schema_cls(**strict_parsed)
-            _check_duplicate_boxes(strict_parsed, tracker, threshold=duplicate_box_threshold)
+            _check_duplicate_boxes(strict_parsed, tracker, threshold=duplicate_box_threshold, task=task)
             return {
                 "status": "valid_raw",
                 "original_parsed": strict_parsed,
@@ -1211,10 +1374,8 @@ def repair_and_validate(raw_str: str, duplicate_box_threshold: int = 3, task: st
         }
 
     fixed = fix_prediction_structure(parsed, tracker=tracker, task=task)
-    _check_duplicate_boxes(fixed, tracker, threshold=duplicate_box_threshold)
+    _check_duplicate_boxes(fixed, tracker, threshold=duplicate_box_threshold, task=task)
     try:
-        from data.schemas import get_output_schema
-        schema_cls = get_output_schema(task)
         validated_fixed = schema_cls(**fixed)
         return {
             "status": "fixed_valid",
@@ -1279,7 +1440,11 @@ def process_jsonl(
         # --- main repaired jsonl: ORIGINAL schema preserved, additive-only ---
         out_record = dict(r)
         if result["status"] == "fixed_valid":
-            out_record["raw_output"] = json.dumps(result["fixed_parsed"], ensure_ascii=False)
+            # Written back in the TASK's wire format, so run_evaluation re-parses
+            # the repaired record with the same contract the model was trained on:
+            # bare minimized JSON for JSON tasks (unchanged), bare prose for
+            # plain-text tasks.
+            out_record["raw_output"] = serialize_output_for_task(result["fixed_parsed"], task)
             out_record["original_raw_output"] = raw
         out_record["repair_status"] = result["status"]
         fixed_records.append(out_record)
@@ -1389,7 +1554,11 @@ if __name__ == "__main__":
     parser.add_argument("--duplicate_box_threshold", type=int, default=3,
                          help="Flag a box as 'duplicate_box_detected' if it repeats more "
                               "than this many times within one field of one record.")
-    parser.add_argument("--task", default="unified", help="Task name: 'unified' or 'violations_only'")
+    parser.add_argument(
+        "--task", default="unified", choices=VALID_TASKS,
+        help="Task whose output contract to repair against. Determines the wire "
+             "format, the schema, and which repair transforms run.",
+    )
     args = parser.parse_args()
 
     input_path = Path(args.input)

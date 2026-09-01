@@ -10,7 +10,8 @@ import pandas as pd
 from core.config import load_config
 from core.io import get_drive_path, ensure_dir
 from core.logging import get_logger
-from core.naming import task_prefix
+from core.constants import VALID_TASKS
+from core.naming import results_dir_names, task_prefix  # noqa: F401
 from models.model_loader import get_model_info
 
 logger = get_logger(__name__)
@@ -58,13 +59,13 @@ def flatten_metrics(metrics: dict, label: str) -> dict:
     flat["Schema_Adherence_%"] = m.get("structural_schema_adherence_rate", 0.0) * 100
     flat["Prediction_Failure_%"] = m.get("violation_prediction_failure_rate", 0.0) * 100
 
-    # Captioning (absent for violations_only)
+    # Captioning — absent (None) for any task without the caption capability
     flat["BERTScore_F1"] = m.get("captioning_bertscore_f1")
     flat["CLIPScore"] = m.get("captioning_clipscore")
     flat["METEOR"] = m.get("captioning_meteor")
     flat["CIDEr-D"] = m.get("captioning_ciderd")
 
-    # Object grounding (absent for violations_only)
+    # Object grounding — absent (None) for any task without the objects capability
     flat["Grounding_IoU_Macro_Mask"] = m.get("grounding_mask_iou_all_macro_mean_tn0")
     flat["Grounding_IoU_Macro_Greedy"] = m.get("grounding_greedy_iou_all_macro_mean_tn0")
 
@@ -99,7 +100,8 @@ def main():
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--tier", default=default_tier, help="Model tier (e.g., 2b, 4b, 8b)")
-    parser.add_argument("--task", default="unified", help="Task name: 'unified' or 'violations_only'")
+    parser.add_argument("--task", default="unified", choices=VALID_TASKS,
+                        help="Task whose results to compare.")
     parser.add_argument(
         "--version", required=True,
         help="Run version tag of the results to compare (e.g. v4, v5). Must match "
@@ -109,27 +111,17 @@ def main():
 
     model_info = get_model_info(args.tier)
     short_name = model_info["short_name"]
-    prefix = args.task
     tier = args.tier
     version = args.version
 
-    # SFT is evaluated from the 'best' checkpoint (lowest eval_loss) — that is the
-    # checkpoint the merge step feeds to GRPO. GRPO has no best/, so it stays '_final'.
-    if prefix == "unified":
-        baseline_metrics = load_eval_json(f"baseline_{tier}_{version}")
-        if not baseline_metrics:
-            baseline_metrics = load_eval_json("baseline")
-        sft_metrics = load_eval_json(f"unified-sft-{tier}-{version}_best")
-        grpo_metrics = load_eval_json(f"unified-grpo-{tier}-{version}_final")
-    else:
-        # e.g. violations_only -> vo-sft-{version}
-        short_prefix = task_prefix(prefix)
-        # Baseline might be prefixed or not depending on how it was run
-        baseline_metrics = load_eval_json(f"{short_prefix}-baseline-{tier}-{version}")
-        if not baseline_metrics:
-            baseline_metrics = load_eval_json(f"{prefix}-baseline")
-        sft_metrics = load_eval_json(f"{short_prefix}-sft-{tier}-{version}_best")
-        grpo_metrics = load_eval_json(f"{short_prefix}-grpo-{tier}-{version}_final")
+    # One uniform lookup for every task. This used to branch on task == "unified"
+    # to handle the legacy unprefixed 'baseline_<tier>_<version>' folder that
+    # hpc_baseline_unified.sh emitted; baseline naming is now
+    # '<prefix>-baseline-<tier>-<version>' for all four pipelines.
+    names = results_dir_names(args.task, tier, version)
+    baseline_metrics = load_eval_json(names["baseline"])
+    sft_metrics = load_eval_json(names["sft"])
+    grpo_metrics = load_eval_json(names["grpo"])
 
     summary_rows = [
         flatten_metrics(baseline_metrics, "Base"),

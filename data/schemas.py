@@ -7,7 +7,7 @@ Covers:
   - Evaluation result container
 """
 from typing import Any, Dict, List, Optional, Union
-from pydantic import BaseModel, Field, conlist
+from pydantic import BaseModel, Field, conlist, field_validator
 
 
 # ---------------------------------------------------------------------------
@@ -75,12 +75,68 @@ class ViolationsOnlyOutput(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Object-only model output schema
+# Only the 3 object grounding classes — no caption, no violations.
+#
+# All three fields are REQUIRED, unlike UnifiedOutput's object fields which carry
+# default_factory=list. The asymmetry is deliberate. Under `unified`, `caption` is
+# required and therefore anchors the strict schema gate, so the object fields can
+# default harmlessly. object_only has no such anchor: with every field defaulting,
+# the schema would validate `{}` and even `{"excavators": [...]}`, which has three
+# bad consequences —
+#   1. structural_schema_adherence_rate collapses onto json_validity_rate and
+#      stops measuring anything,
+#   2. reward_format becomes free (any parseable JSON object scores 1.0),
+#   3. structural repair's key-alias pass never runs, because the strict gate
+#      already accepted the output — so a real detection emitted under the alias
+#      `excavators` would be silently scored as "no objects detected".
+# Requiring the keys also matches the prompt, which says to return [] for an
+# absent class rather than to omit it. Post-repair evaluation is unaffected either
+# way: metrics_grounding reads pred.get(cls, []), so a missing key and an empty
+# list already score identically.
+# ---------------------------------------------------------------------------
+
+class ObjectOnlyOutput(BaseModel):
+    """Output schema for the object-only task.
+    Only the 3 grounding classes — no caption, no rule violations."""
+    excavator: List[BBox]
+    rebar: List[BBox]
+    worker_with_white_hard_hat: List[BBox]
+
+
+# ---------------------------------------------------------------------------
+# Caption-only model output schema
+# A single scene description. The model emits BARE PROSE for this task (no JSON,
+# no code fence) — evaluation/output_parser.py::parse_output_for_task wraps the
+# raw completion into {"caption": ...} before validation, so the rest of the
+# stack (rewards, structural repair, metrics) stays dict-shaped and unchanged.
+# ---------------------------------------------------------------------------
+
+class CaptionOnlyOutput(BaseModel):
+    """Output schema for the caption-only task. One non-blank caption string."""
+    caption: str
+
+    @field_validator("caption")
+    @classmethod
+    def _caption_must_not_be_blank(cls, v: str) -> str:
+        # For caption_only the caption IS the entire output, so an empty string is
+        # not a degenerate-but-valid answer the way it is under `unified` (where
+        # the other fields still carry signal) — it is a non-answer. Rejecting it
+        # here is what stops an empty completion collecting the format reward.
+        if not isinstance(v, str) or not v.strip():
+            raise ValueError("caption must be a non-empty, non-whitespace string")
+        return v
+
+
+# ---------------------------------------------------------------------------
 # Schema registry — maps task name to output Pydantic model
 # ---------------------------------------------------------------------------
 
 SCHEMA_REGISTRY = {
     "unified": UnifiedOutput,
     "violations_only": ViolationsOnlyOutput,
+    "object_only": ObjectOnlyOutput,
+    "caption_only": CaptionOnlyOutput,
 }
 
 

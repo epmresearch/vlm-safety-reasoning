@@ -7,12 +7,17 @@ evaluation pipeline's output_parser module).
 """
 from typing import Any, Dict, List, Optional
 
-from core.config import load_task_config
 from core.logging import get_logger
-from data.prompt_templates import SYSTEM_PROMPT, UNIFIED_INSPECTION_PROMPT, get_prompt_for_task
+from data.prompt_templates import SYSTEM_PROMPT, get_prompt_for_task
 
 logger = get_logger(__name__)
-DEFAULT_MAX_NEW_TOKENS = load_task_config("unified").get("max_new_tokens", 1000)
+
+# Plain constant, not a config read at import time. This used to be
+# load_task_config("unified")["max_new_tokens"], which pinned a hardcoded task name
+# into module import for every task's inference run. The real budget always comes
+# from the task YAML via experiments/run_inference.py; this is only the fallback for
+# a direct caller that passes nothing.
+DEFAULT_MAX_NEW_TOKENS = 1000
 
 
 def generate_single(

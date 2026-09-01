@@ -1,0 +1,32 @@
+task_name: "caption_only"
+prompt_key: "CAPTION_ONLY_PROMPT"
+
+# Output format: BARE PROSE. This is the one task that does not emit JSON — the
+# caption is the entire output, so wrapping it in a JSON object would add a
+# formatting confound to the quantity being measured. See core/tasks.py
+# (FORMAT_PLAIN_TEXT) and evaluation/output_parser.py::parse_output_for_task.
+output_format: "plain_text"
+
+# Active reward components for GRPO — caption quality is the sole objective.
+# reward_format here rewards *clean prose* (no fence, no JSON, no keys) rather
+# than valid JSON; see rewards/reward_format.py.
+reward_components:
+  - reward_format
+  - reward_caption
+
+reward_weights:
+  reward_format: 0.10
+  reward_caption: 0.90
+
+# SFT input override — see the equivalent note in object_only.yaml. Under
+# caption_only the augmented set would present the same reference caption up to 16
+# times for the same scene.
+sft_dataset_subdir: "datasets/processed"
+
+# Token budgets sized to this task's output: a detailed single-paragraph scene
+# description, without the object/violation JSON the unified response also carries.
+max_new_tokens: 768
+max_completion_length: 768
+max_prompt_length: 2048
+inference_max_seq_length: 2944
+repetition_penalty: 1.0

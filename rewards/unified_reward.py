@@ -262,10 +262,10 @@ ALL_REWARD_COMPONENTS = {
 
 def _make_task_aware_batch_reward(reward_fn: Callable, task: str) -> Callable:
     """Wraps a reward function for task-aware batch execution.
-    
-    For the format reward, injects the task parameter so the correct schema
-    is used for validation. For all other rewards, injects task into
-    _strict_parse_for_task via a module-level context.
+
+    Every component receives ``task=`` so it resolves the right schema and wire
+    format through _strict_parse_for_task. Batched components (reward_caption,
+    reward_reasoning) take it via kwargs; per-sample ones take it as a keyword.
     """
     def batch_fn(prompts=None, completions=None, ground_truth=None, **kwargs):
         if completions is None and prompts is not None:
@@ -277,11 +277,6 @@ def _make_task_aware_batch_reward(reward_fn: Callable, task: str) -> Callable:
         
         import json as _json
         parsed_gts = [_json.loads(gt) if isinstance(gt, str) else gt for gt in ground_truth]
-
-        # For the format reward, pass task explicitly
-        if getattr(reward_fn, '__name__', '') == 'reward_format' and task != 'unified':
-            from rewards.reward_format import compute_reward_for_task
-            return [compute_reward_for_task(c, gt, task=task) for c, gt in zip(completions, parsed_gts)]
 
         # For batched reward functions
         if getattr(reward_fn, 'is_batched', False):
@@ -296,20 +291,23 @@ def _make_task_aware_batch_reward(reward_fn: Callable, task: str) -> Callable:
 def get_reward_funcs_for_task(task: str = "unified") -> Tuple[List[Callable], List[float]]:
     """Returns reward functions and weights for the specified task.
     
-    For 'unified', returns the full 6-component set (identical to
-    get_reward_funcs_and_weights()).
-    For 'violations_only', returns only the violation-relevant subset
-    as specified in the task's YAML config.
-    
+    The active components and their weights are read from
+    configs/tasks/<task>.yaml. A task YAML that omits ``reward_components``
+    falls back to the full 6-component set at default weights, which is what
+    'unified' relies on.
+
     Args:
-        task: Task name ('unified' or 'violations_only').
+        task: Any task registered in core/tasks.py::TASK_REGISTRY.
     
     Returns:
         Tuple of (list of batch-compatible reward functions, list of weights).
     """
     from core.config import load_task_config
+    from core.tasks import validate_task
+
+    validate_task(task)
     task_cfg = load_task_config(task)
-    
+
     # Get active components from task config, defaulting to all components
     active_components = task_cfg.get(
         "reward_components", [name for name, _, _ in REWARD_COMPONENTS]
@@ -328,6 +326,15 @@ def get_reward_funcs_for_task(task: str = "unified") -> Tuple[List[Callable], Li
         funcs.append(_make_task_aware_batch_reward(fn, task))
         weights.append(weight_overrides.get(name, default_weight))
     
+    stray_weights = set(weight_overrides) - set(active_components)
+    if stray_weights:
+        raise ValueError(
+            f"configs/tasks/{task}.yaml declares reward_weights for "
+            f"{sorted(stray_weights)}, which are not in reward_components "
+            f"{list(active_components)}. Unknown weight keys are otherwise ignored "
+            "silently, so the intended weighting would never take effect."
+        )
+
     logger.info(
         f"Task '{task}' reward assembly: {len(funcs)} components, "
         f"names={active_components}, weights={weights}"

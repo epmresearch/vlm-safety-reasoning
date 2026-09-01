@@ -21,26 +21,14 @@ def load_metrics(task: str = "unified", tier: str = "", version: str = ""):
 
     suffix = f"_{tier}" if tier and tier != "2b" else ""
 
-    # SFT is evaluated from 'best' (lowest eval_loss) — the checkpoint the merge step
-    # hands to GRPO. GRPO has no best/, so it stays '_final'.
+    # Folder names come from core.naming.results_dir_names — the same helper the
+    # comparison table uses, so the two can never disagree. The old task ==
+    # "unified" branch existed only for the legacy unprefixed baseline folder,
+    # which is gone.
+    from core.naming import results_dir_names
     models = ["baseline", "sft", "grpo"]
-    if task == "unified":
-        # Legacy underscored, unprefixed baseline folder — see CLAUDE.md.
-        # (The old `if tier == "8b"` branch built exactly the same strings as the
-        # general one and has been removed.)
-        variants = [
-            f"baseline_{tier}_{version}",
-            f"unified-sft-{tier}-{version}_best",
-            f"unified-grpo-{tier}-{version}_final",
-        ]
-    else:
-        from core.naming import task_prefix
-        prefix = task_prefix(task)
-        variants = [
-            f"{prefix}-baseline-{tier}-{version}",
-            f"{prefix}-sft-{tier}-{version}_best",
-            f"{prefix}-grpo-{tier}-{version}_final",
-        ]
+    names = results_dir_names(task, tier, version)
+    variants = [names["baseline"], names["sft"], names["grpo"]]
         
     for model_key, variant in zip(models, variants):
         metrics_file = RESULTS_DIR / variant / "metrics.json"
@@ -456,7 +444,8 @@ def plot_caption_word_stats(metrics_data):
 def main():
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument("--task", default="unified", help="Task name")
+    from core.constants import VALID_TASKS
+    parser.add_argument("--task", default="unified", choices=VALID_TASKS, help="Task name")
     parser.add_argument("--tier", default="", help="Model tier (e.g., 2b, 4b, 8b). Empty defaults to 2b folder structure.")
     parser.add_argument(
         "--version", required=True,
@@ -477,31 +466,41 @@ def main():
     PLOTS_DIR.mkdir(parents=True, exist_ok=True)
     
     print(f"Generating Comprehensive Plot Suite in {PLOTS_DIR}...")
+
+    # Which plot families are meaningful is decided by the task's capabilities, not
+    # by a task-name comparison — see core/tasks.py. The old `!= "violations_only"`
+    # gates would have drawn empty grounding plots for caption_only and empty
+    # captioning plots for object_only, and drew violation plots for both.
+    from core.tasks import CAP_CAPTION, CAP_OBJECTS, CAP_VIOLATIONS, task_has
+    has_caption = task_has(args.task, CAP_CAPTION)
+    has_objects = task_has(args.task, CAP_OBJECTS)
+    has_violations = task_has(args.task, CAP_VIOLATIONS)
+
     plot_formatting(metrics_data, repair_data)
-    
-    if args.task != "violations_only":
+
+    if has_objects:
         plot_grounding_iou(metrics_data)
         plot_grounding_presence(metrics_data)
         plot_grounding_tn0_vs_tn1(metrics_data)
-        
-    plot_safety_violations_f1(metrics_data)
-    plot_iou_conditioned_violations(metrics_data)
-    plot_violation_precision_recall(metrics_data)
-    plot_violation_grounding(metrics_data)
-    
-    if args.task != "violations_only":
-        plot_reasoning_vs_captioning(metrics_data)
-        
-    plot_reasoning_by_rule(metrics_data)
-    
-    plot_radar_summary(metrics_data)
-    if args.task != "violations_only":
-        plot_full_captioning_breakdown(metrics_data)
         plot_grounding_counts(metrics_data)
         plot_mask_vs_greedy_iou(metrics_data)
         plot_exist_vs_all_iou(metrics_data)
+
+    if has_violations:
+        plot_safety_violations_f1(metrics_data)
+        plot_iou_conditioned_violations(metrics_data)
+        plot_violation_precision_recall(metrics_data)
+        plot_violation_grounding(metrics_data)
+        plot_reasoning_by_rule(metrics_data)
+
+    if has_caption:
+        plot_full_captioning_breakdown(metrics_data)
         plot_caption_word_stats(metrics_data)
-        
+
+    # Compares violation-reason quality against caption quality — needs both.
+    if has_caption and has_violations:
+        plot_reasoning_vs_captioning(metrics_data)
+
     plot_radar_summary(metrics_data)
     plot_per_rule_prf1(metrics_data)
     plot_full_reasoning_metrics(metrics_data)

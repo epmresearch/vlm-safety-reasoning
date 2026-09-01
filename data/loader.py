@@ -166,13 +166,27 @@ def load_dataset_splits(
     }
 
 
-def load_processed_dataset() -> DatasetDict:
-    """Loads the fully processed, stratified, and conversational dataset
-    from the processed_subdir. This should be used for all training
-    and baseline inference steps.
+def load_processed_dataset(subdir: str = None) -> DatasetDict:
+    """Loads the fully processed, stratified, and conversational dataset.
+
+    Args:
+        subdir: Optional dataset subdirectory override, relative to the data root
+            (e.g. "datasets/processed"). Defaults to base.yaml's
+            ``dataset.processed_subdir``, which — note the long-standing naming
+            trap — points at datasets/AUGMENTED, not datasets/processed.
+
+            The override exists so a task can opt out of the violation-oversampled
+            augmented set: object_only and caption_only set
+            ``sft_dataset_subdir: datasets/processed`` in their task YAML, because
+            the augmentation duplicates images by rare *violation* rule (rule_4
+            x16, rule_2 x12, rule_3 x6) and those duplicates carry identical boxes
+            and identical captions — no class rebalancing for those tasks, just
+            overfitting pressure. unified and violations_only pass nothing and are
+            unaffected.
     """
     base_cfg = load_base_config()
-    processed_path = get_drive_path(base_cfg["dataset"].get("processed_subdir", "datasets/processed"))
+    resolved = subdir or base_cfg["dataset"].get("processed_subdir", "datasets/processed")
+    processed_path = get_drive_path(resolved)
 
     if not Path(processed_path).exists():
         raise FileNotFoundError(

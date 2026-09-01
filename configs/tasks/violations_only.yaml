@@ -19,6 +19,30 @@ reward_weights:
   reward_violation_grounding: 0.30
   reward_reasoning: 0.20
 
+# --- Reward tuning: closing the over-flagging exploits (B5) ----------------
+# 1) A PREDICTED violation must carry substance (a non-empty reason or at least
+#    one bounding box) to earn identification credit. Without this,
+#    {"reason": "", "bounding_box": []} scored a perfect F-beta = 1.0 on the
+#    0.40-weighted reward_violation_id while contributing nothing to the
+#    TP-conditioned grounding and reasoning components — the cheapest possible
+#    way to farm this task's largest reward.
+require_violation_substance: true
+
+# 2) Credit for correctly calling an image SAFE. The GRPO pool is built 50/50
+#    safe-vs-violation (data/build_grpo_pool.py), NOT the 91/9 imbalance the old
+#    0.15 was justified against. At 50/50 the expected values were
+#        always-safe          : 0.5 * 0.15         = 0.075
+#        always-assert-rule_1 : P(rule_1) * 1.0    ~ 0.385
+#    so unconditional over-flagging beat honest abstention by ~5x, for a policy
+#    that never looks at the image. Honest abstention only wins at c > ~0.78.
+#
+#    0.85 makes a correct "safe" call worth almost as much as a correct violation
+#    call — which is what it is — while still leaving a strict gradient toward
+#    detecting real violations (a missed violation still scores 0.0, and a false
+#    alarm on a safe image still scores 0.0). Applied to all three violation TN
+#    sites together, per CLAUDE.md invariant #6.
+violation_tn_constant: 0.85
+
 # Ultra-safe token lengths (matching unified task ceilings for VRAM safety)
 max_new_tokens: 1024
 max_completion_length: 1024

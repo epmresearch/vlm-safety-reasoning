@@ -2,7 +2,7 @@
 Violation bounding box IoU, conditioned on TP rules only (rules present in BOTH prediction and GT).
 """
 
-from rewards.reward_utils import _strict_parse_for_task, _safe_reward, _is_violation_present
+from rewards.reward_utils import _strict_parse_for_task, _safe_reward, _is_violation_present, reward_constant
 from data.box_utils import normalize_boxes, clean_boxes, scale_1000_to_01, compute_mask_union_iou
 from core.constants import RULES
 from core.logging import get_logger
@@ -32,7 +32,9 @@ def compute_reward(completion: str, ground_truth: dict, **kwargs) -> float:
     if not common_rules:
         # If True Negative (safe image, correctly predicted safe), give baseline anti-hack reward
         if not pred_rules and not gt_rules:
-            return 0.15
+            # Same knob as reward_violation_id — all violation TN sites move
+            # together (CLAUDE.md invariant #6).
+            return float(reward_constant(task, "violation_tn_constant", 0.15))
         return 0.0  # FP or FN (no TPs to score)
 
     ious = []

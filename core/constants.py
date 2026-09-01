@@ -10,9 +10,16 @@ Naming convention:
 # ---------------------------------------------------------------------------
 # Task
 # ---------------------------------------------------------------------------
+# Task names and the authoritative list of them are derived from the task registry
+# in core/tasks.py -- that is the single place a new task is registered.
+from core.tasks import all_task_names as _all_task_names
+
 UNIFIED_TASK_NAME = "unified"
 VIOLATIONS_ONLY_TASK_NAME = "violations_only"
-VALID_TASKS = [UNIFIED_TASK_NAME, VIOLATIONS_ONLY_TASK_NAME]
+OBJECT_ONLY_TASK_NAME = "object_only"
+CAPTION_ONLY_TASK_NAME = "caption_only"
+
+VALID_TASKS = _all_task_names()
 
 # ---------------------------------------------------------------------------
 # Safety Rules

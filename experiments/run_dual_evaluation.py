@@ -18,7 +18,7 @@ from core.run_manifest import save_run_manifest
 from data.loader import load_processed_dataset
 from data.preprocessor import build_gt_dict
 
-from evaluation.output_parser import parse_model_output, validate_unified_output, validate_output_for_task
+from evaluation.output_parser import parse_output_for_task, validate_output_for_task
 from evaluation.metrics_captioning import compute_all_caption_metrics, _check_java_available
 from evaluation.metrics_grounding import compute_grounding_metrics
 from evaluation.metrics_violations import compute_violation_metrics
@@ -65,6 +65,14 @@ def ensure_java8_active():
 
 def run_dual_pass(raw_predictions: List[str], references: List[Dict[str, Any]], images: List[Any], skip_spice: bool = False, spice_only: bool = False, task: str = "unified"):
     logger.info("Parsing and validating outputs...")
+
+    # Metric families are gated on task capabilities, matching
+    # evaluation/evaluator.py. See the note there on why a task-name comparison
+    # is the wrong question.
+    from core.tasks import CAP_CAPTION, CAP_OBJECTS, CAP_VIOLATIONS, task_has
+    wants_caption = task_has(task, CAP_CAPTION)
+    wants_objects = task_has(task, CAP_OBJECTS)
+    wants_violations = task_has(task, CAP_VIOLATIONS)
     
     parsed_preds = []
     failures = []
@@ -73,16 +81,13 @@ def run_dual_pass(raw_predictions: List[str], references: List[Dict[str, Any]], 
     for idx, raw in enumerate(raw_predictions):
         image_id = references[idx].get("image_id", f"unknown_{idx}")
         
-        parsed = parse_model_output(raw)
+        parsed = parse_output_for_task(raw, task=task)
         if parsed is None:
             failures.append({"image_id": image_id, "error_type": "json_parse_error", "raw_prediction": raw})
             parsed_preds.append(None)
             continue
-            
-        if task == "unified":
-            validated = validate_unified_output(parsed)
-        else:
-            validated = validate_output_for_task(parsed, task=task)
+
+        validated = validate_output_for_task(parsed, task=task)
         if validated is None:
             failures.append({"image_id": image_id, "error_type": "schema_validation_error", "raw_prediction": raw})
             parsed_preds.append(None)
@@ -138,13 +143,14 @@ def run_dual_pass(raw_predictions: List[str], references: List[Dict[str, Any]], 
     logger.info("Running STRICT metrics pass...")
     strict_metrics = {}
     if len(pred_captions_strict) > 0:
-        if task != "violations_only":
+        if wants_caption:
             strict_metrics.update(compute_all_caption_metrics(pred_captions_strict, gt_captions_strict, images_strict, include_spice=not skip_spice, spice_only=spice_only, prefix="captioning_"))
         if not spice_only:
-            if task != "violations_only":
+            if wants_objects:
                 strict_metrics.update(compute_grounding_metrics(pred_objects_strict, gt_objects_strict))
-            strict_metrics.update(compute_violation_metrics(pred_violations_strict, gt_violations_strict))
-            strict_metrics.update(batch_score_reasoning(pred_violations_strict, gt_violations_strict, images=images_strict))
+            if wants_violations:
+                strict_metrics.update(compute_violation_metrics(pred_violations_strict, gt_violations_strict))
+                strict_metrics.update(batch_score_reasoning(pred_violations_strict, gt_violations_strict, images=images_strict))
 
     # 4. Pass 2: Valid
     if not failures:
@@ -155,13 +161,14 @@ def run_dual_pass(raw_predictions: List[str], references: List[Dict[str, Any]], 
         logger.info("Running VALID metrics pass...")
         valid_metrics = {}
         if len(pred_captions_valid) > 0:
-            if task != "violations_only":
+            if wants_caption:
                 valid_metrics.update(compute_all_caption_metrics(pred_captions_valid, gt_captions_valid, images_valid, include_spice=not skip_spice, spice_only=spice_only, prefix="captioning_"))
             if not spice_only:
-                if task != "violations_only":
+                if wants_objects:
                     valid_metrics.update(compute_grounding_metrics(pred_objects_valid, gt_objects_valid))
-                valid_metrics.update(compute_violation_metrics(pred_violations_valid, gt_violations_valid))
-                valid_metrics.update(batch_score_reasoning(pred_violations_valid, gt_violations_valid, images=images_valid))
+                if wants_violations:
+                    valid_metrics.update(compute_violation_metrics(pred_violations_valid, gt_violations_valid))
+                    valid_metrics.update(batch_score_reasoning(pred_violations_valid, gt_violations_valid, images=images_valid))
 
     return {
         "metrics": {
@@ -186,7 +193,8 @@ def main():
     parser.add_argument("--spice_only", action="store_true")
     parser.add_argument("--wandb_project", type=str, default=None, help="Weights & Biases project name")
     parser.add_argument("--wandb_run_name", type=str, default=None, help="Weights & Biases run name")
-    parser.add_argument("--task", default="unified", help="Task name: 'unified' or 'violations_only'")
+    from core.constants import VALID_TASKS
+    parser.add_argument("--task", default="unified", choices=VALID_TASKS, help="Task to run. Must be registered in core/tasks.py::TASK_REGISTRY.")
     args = parser.parse_args()
 
     predictions_path = Path(args.predictions_path)

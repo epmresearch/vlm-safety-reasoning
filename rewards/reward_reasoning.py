@@ -6,8 +6,8 @@ import math
 from typing import List, Dict
 from collections import defaultdict
 from rewards.reward_utils import (
-    _strict_parse, _strict_parse_for_task, _safe_batch_reward, _is_violation_present,
-    _embed_texts, _cosine_sim_batch, _ngram_f1,
+    _strict_parse_for_task, _safe_batch_reward, _is_violation_present,
+    _embed_texts, _cosine_sim_batch, _ngram_f1, reward_constant,
 )
 from core.constants import RULES
 from core.logging import get_logger
@@ -44,7 +44,8 @@ def compute_reward(completions: List[str], ground_truths: List[dict], **kwargs) 
         if not common_rules:
             # If True Negative (safe image, correctly predicted safe), give baseline anti-hack reward
             if not pred_rules and not gt_rules:
-                rewards[i] = 0.15
+                # Same knob as reward_violation_id (CLAUDE.md invariant #6).
+                rewards[i] = float(reward_constant(task, "violation_tn_constant", 0.15))
             continue
             
         for r in common_rules:

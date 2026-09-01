@@ -1,5 +1,5 @@
 """
-Generate deep CSV comparison tables for the Violations-Only (VO) pipeline.
+Generate deep CSV comparison tables for any task pipeline.
 
 For each model size (2B, 4B, 8B), produces a single CSV file with:
   - All metric values for Baseline, SFT, and GRPO
@@ -10,7 +10,11 @@ For each model size (2B, 4B, 8B), produces a single CSV file with:
 Also produces a combined "master" CSV with all 9 runs side by side.
 
 Usage:
-    python experiments/generate_comparison_csv.py --version v5
+    python experiments/generate_comparison_csv.py --version v1 --task violations_only
+    python experiments/generate_comparison_csv.py --version v1 --task object_only
+
+Metric groups a task does not produce come out as N/A rather than 0, since the
+underlying metrics.json simply has no such keys.
 """
 
 import json
@@ -27,6 +31,7 @@ PHASES = ["baseline", "sft", "grpo"]
 # generate_tier_csv, generate_master_csv) don't all need it threaded through.
 VERSION = None
 CSV_DIR = None
+TASK = None
 
 # ---------------------------------------------------------------------------
 # Metric groups — organised by evaluation dimension for readability
@@ -169,7 +174,8 @@ METRIC_GROUPS = {
 
 def load_metrics(tier, phase):
     """Load a single metrics.json file for a given tier and phase."""
-    folder = RESULTS_DIR / f"vo-{phase}-{tier}-{VERSION}"
+    from core.naming import results_dir_names
+    folder = RESULTS_DIR / results_dir_names(TASK, tier, VERSION)[phase]
     metrics_file = folder / "metrics.json"
     if metrics_file.exists():
         with open(metrics_file, "r") as f:
@@ -375,22 +381,30 @@ def generate_master_csv(all_data):
 
 def main():
     import argparse
+    from core.constants import VALID_TASKS
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--version", required=True,
-        help="Run version tag of the VO results to summarize (e.g. v5, v6). "
-             "Determines both the result folders read (vo-<phase>-<tier>-<version>) "
-             "and the output directory (csv_comparisons_<version>)."
+        help="Run version tag of the results to summarize (e.g. v1, v2). "
+             "Determines both the result folders read "
+             "(<prefix>-<phase>-<tier>-<version>) and the output directory."
+    )
+    parser.add_argument(
+        "--task", default="violations_only", choices=VALID_TASKS,
+        help="Task whose results to summarize. Also namespaces the output "
+             "directory so two tasks' CSVs never overwrite each other.",
     )
     args = parser.parse_args()
 
-    global VERSION, CSV_DIR
+    global VERSION, CSV_DIR, TASK
     VERSION = args.version
-    CSV_DIR = RESULTS_DIR / f"csv_comparisons_{VERSION}"
+    TASK = args.task
+    from core.naming import task_prefix
+    CSV_DIR = RESULTS_DIR / f"csv_comparisons_{task_prefix(TASK)}_{VERSION}"
     CSV_DIR.mkdir(parents=True, exist_ok=True)
 
     print("=" * 60)
-    print(f"  VO {VERSION} Deep CSV Comparison Generator")
+    print(f"  {task_prefix(TASK)} {VERSION} Deep CSV Comparison Generator")
     print("=" * 60)
 
     all_data = {}

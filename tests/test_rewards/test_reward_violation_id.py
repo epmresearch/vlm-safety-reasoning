@@ -36,7 +36,9 @@ def _gt(r1=None, r2=None, r3=None, r4=None):
 class TestRewardViolationId:
     def test_both_empty_returns_one(self):
         """Correctly identifies safe site — both predict and GT have no violations."""
-        assert compute_reward(_completion(), _gt()) == pytest.approx(0.15)
+        from rewards.reward_utils import reward_constant
+        expected = reward_constant("unified", "violation_tn_constant", 0.15)
+        assert compute_reward(_completion(), _gt()) == pytest.approx(expected)
 
     def test_perfect_single_violation(self):
         """Predicts rule_1, GT has rule_1 → F1=1.0."""

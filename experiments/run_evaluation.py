@@ -24,9 +24,11 @@ Usage:
 import argparse
 import json
 import subprocess
-import shutil as sh
+import shutil
+import shutil as sh  # legacy alias, used by the SPICE cache helpers below
 from pathlib import Path
 
+from core.constants import VALID_TASKS
 from core.config import load_config
 from core.io import ensure_dir, get_drive_path
 from core.logging import get_logger, attach_file_logger
@@ -55,15 +57,41 @@ def ensure_java8_active():
     with a JSON parser error.
     Does nothing if java-8 isn't installed — the caller should have provisioned
     it (e.g. `apt-get install -y openjdk-8-jdk-headless`) before running this.
+
+    Every failure mode here is non-fatal by construction. This function is a
+    convenience for SPICE, which the pipeline always skips (`--skip_spice`), so it
+    must never be able to abort an evaluation that has already paid for inference
+    and structural repair. Previously the `update-alternatives` call was unguarded
+    and raised an uncaught FileNotFoundError on any node where that binary is not
+    on PATH — common on RHEL-family HPC, where it lives in /usr/sbin.
     """
-    verify = subprocess.run(["java", "-version"], capture_output=True, text=True).stderr
+    if shutil.which("java") is None:
+        logger.warning("No `java` on PATH; skipping the Java 8 switch.")
+        return
+
+    try:
+        verify = subprocess.run(["java", "-version"], capture_output=True, text=True).stderr
+    except OSError as e:
+        logger.warning(f"Could not run `java -version` ({e}); skipping the Java 8 switch.")
+        return
     if "1.8" in verify:
         logger.info("Java 8 already active.")
         return
 
-    listing = subprocess.run(
-        ["update-alternatives", "--list", "java"], capture_output=True, text=True
-    ).stdout
+    if shutil.which("update-alternatives") is None:
+        logger.warning(
+            "`update-alternatives` is not on PATH, so the active JRE cannot be "
+            "switched. This only affects SPICE, which the pipeline skips."
+        )
+        return
+
+    try:
+        listing = subprocess.run(
+            ["update-alternatives", "--list", "java"], capture_output=True, text=True
+        ).stdout
+    except OSError as e:
+        logger.warning(f"`update-alternatives --list java` failed ({e}); skipping.")
+        return
     java8_candidates = [line.strip() for line in listing.splitlines() if "java-8" in line]
     if not java8_candidates:
         logger.warning(
@@ -72,7 +100,14 @@ def ensure_java8_active():
         )
         return
 
-    subprocess.run(["update-alternatives", "--set", "java", java8_candidates[0]], check=True)
+    try:
+        subprocess.run(["update-alternatives", "--set", "java", java8_candidates[0]], check=True)
+    except (OSError, subprocess.CalledProcessError) as e:
+        logger.warning(
+            f"Could not switch the active java to {java8_candidates[0]} ({e}). "
+            "Only SPICE is affected, and the pipeline skips it."
+        )
+        return
     verify = subprocess.run(["java", "-version"], capture_output=True, text=True).stderr
     if "1.8" in verify:
         logger.info(f"Switched active java to Java 8: {java8_candidates[0]}")
@@ -103,7 +138,7 @@ def main():
                          help="Weights & Biases project name")
     parser.add_argument("--wandb_run_name", type=str, default=None,
                          help="Weights & Biases run name")
-    parser.add_argument("--task", default="unified", help="Task name: 'unified' or 'violations_only'")
+    parser.add_argument("--task", default="unified", choices=VALID_TASKS, help="Task to run. Must be registered in core/tasks.py::TASK_REGISTRY.")
     args = parser.parse_args()
 
     predictions_path = Path(args.predictions_path)

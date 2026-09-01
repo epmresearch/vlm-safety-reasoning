@@ -4,12 +4,13 @@ Combines all metric functions into a unified evaluation pipeline.
 """
 from typing import Dict, List, Any
 
-from evaluation.output_parser import parse_model_output, validate_unified_output, validate_output_for_task
+from evaluation.output_parser import parse_output_for_task, validate_output_for_task
 from evaluation.metrics_captioning import compute_all_caption_metrics
 from evaluation.metrics_grounding import compute_grounding_metrics
 from evaluation.metrics_violations import compute_violation_metrics
 from evaluation.metrics_structural import compute_structural_metrics
 from evaluation.metrics_reasoning import batch_score_reasoning
+from core.tasks import CAP_CAPTION, CAP_OBJECTS, CAP_VIOLATIONS, task_has
 from core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -25,27 +26,45 @@ def run_full_evaluation(
     """
     Runs the complete evaluation pipeline.
     raw_predictions: list of raw string responses from the model.
-    references: list of ground truth UnifiedOutput dictionaries.
+    references: list of ground truth dicts from data.preprocessor.build_gt_dict.
     images: list of PIL Images (for CLIPScore).
+    task: any task registered in core/tasks.py. Which metric families run is
+        decided by that task's capabilities, NOT by a task-name comparison:
+        captioning needs a `caption` field, grounding needs the object classes,
+        violations and reasoning need the rule_N_violation fields. A task whose
+        output does not contain a family's fields would otherwise be scored
+        against ground truth it was never asked to predict.
     """
-    if images is None:
+    logger.info("Starting full evaluation pipeline...")
+
+    wants_caption = task_has(task, CAP_CAPTION)
+    wants_objects = task_has(task, CAP_OBJECTS)
+    wants_violations = task_has(task, CAP_VIOLATIONS)
+
+    # The text-scoring families are the ones that need pixels (CLIPScore) and a JVM
+    # (METEOR/CIDEr-D/SPICE): captioning directly, and reasoning because it scores
+    # violation reasons through the captioning suite.
+    needs_text_scoring = wants_caption or wants_violations
+
+    if needs_text_scoring and images is None:
         raise ValueError(
             "run_full_evaluation requires `images` (aligned list of PIL Images) "
             "for CLIPScore-based caption/reasoning metrics. Pass images=..., "
             "or drop CLIPScore from the pipeline if you truly want text-only eval."
         )
-    logger.info("Starting full evaluation pipeline...")
-    
+
     # C2 fail-fast: METEOR, CIDEr-D, and SPICE require Java.
     # Detect missing Java upfront instead of silently producing metrics.json
     # with missing keys that are indistinguishable from zero-score metrics.
-    from evaluation.metrics_captioning import _check_java_available
-    if not _check_java_available():
-        raise RuntimeError(
-            "Java is required for METEOR/CIDEr-D/SPICE evaluation but was "
-            "not found on PATH. These metrics will be omitted from the results."
-        )
-    
+    # Gated: object_only scores no text at all and must not need a JVM.
+    if needs_text_scoring:
+        from evaluation.metrics_captioning import _check_java_available
+        if not _check_java_available():
+            raise RuntimeError(
+                "Java is required for METEOR/CIDEr-D/SPICE evaluation but was "
+                "not found on PATH. These metrics will be omitted from the results."
+            )
+
     if len(raw_predictions) != len(references):
         raise ValueError(
             f"Length mismatch: {len(raw_predictions)} predictions vs {len(references)} references"
@@ -63,7 +82,7 @@ def run_full_evaluation(
         image_id = references[i].get("image_id", f"unknown_{i}")
             
         # 1. JSON Parse
-        parsed = parse_model_output(raw_str)
+        parsed = parse_output_for_task(raw_str, task=task)
         if parsed is None:
             parsed_preds.append(None)
             failures.append({
@@ -100,9 +119,9 @@ def run_full_evaluation(
     pred_violations = list(parsed_preds)
     gt_violations = references
     
-    # 2. Captioning metrics (skip for violations_only)
+    # 2. Captioning metrics — tasks producing a `caption` field
     caption_metrics = {}
-    if task != "violations_only":
+    if wants_caption:
         logger.info("Computing captioning metrics...")
         caption_metrics = compute_all_caption_metrics(
             pred_captions, gt_captions, images=images, 
@@ -114,18 +133,20 @@ def run_full_evaluation(
     reasoning_metrics = {}
     
     if not spice_only:
-        # 3. Grounding metrics (skip for violations_only)
-        if task != "violations_only":
+        # 3. Grounding metrics — tasks producing the object classes
+        if wants_objects:
             logger.info("Computing grounding metrics...")
             grounding_metrics = compute_grounding_metrics(pred_objects, gt_objects)
         
-        # 4. Violation metrics (always computed)
-        logger.info("Computing safety violation metrics...")
-        violation_metrics = compute_violation_metrics(pred_violations, gt_violations)
+        # 4. Violation metrics — tasks producing rule_N_violation
+        if wants_violations:
+            logger.info("Computing safety violation metrics...")
+            violation_metrics = compute_violation_metrics(pred_violations, gt_violations)
         
-        # 5. Reasoning metrics (always computed)
-        logger.info("Computing reasoning metrics (Captioning Suite)...")
-        reasoning_metrics = batch_score_reasoning(pred_violations, gt_violations, images=images)
+            # 5. Reasoning metrics — scores the violation `reason` strings, so it is
+            #    gated on the same capability.
+            logger.info("Computing reasoning metrics (Captioning Suite)...")
+            reasoning_metrics = batch_score_reasoning(pred_violations, gt_violations, images=images)
     
     # Combine all results
     all_metrics = {}

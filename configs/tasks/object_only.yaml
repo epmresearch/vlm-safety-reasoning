@@ -1,0 +1,60 @@
+task_name: "object_only"
+prompt_key: "OBJECT_ONLY_PROMPT"
+
+# Output format: minimized JSON wrapped in ```json ... ``` code fences.
+# Only the 3 grounding classes (no caption, no rule violations).
+output_format: "fenced_minimized_json"
+
+# Active reward components for GRPO — object grounding is the sole objective.
+# Caption, violation-id, violation-grounding and reasoning rewards are excluded:
+# this task's output contains none of those fields, so they would each return the
+# schema-parse floor and add nothing but variance.
+reward_components:
+  - reward_format
+  - reward_grounding
+
+reward_weights:
+  reward_format: 0.10
+  reward_grounding: 0.90
+
+# --- Reward tuning: the true-negative floor (B4) ---------------------------
+# Per-class credit for correctly reporting a class as ABSENT. This constant sets
+# the break-even detection quality for each class:
+#
+#     emit class k is positive-EV  <=>  E[IoU_k] > c_k * (1 - p_k) / p_k
+#
+# with p_k = that class's prevalence in the GRPO pool (measured: excavator 0.361,
+# rebar 0.088, worker_with_white_hard_hat 0.115).
+#
+# At the historical flat c = 0.15 the break-even IoUs were 0.27 / 1.55 / 1.15 —
+# two of them above 1.0, i.e. UNREACHABLE. Never emitting rebar or the hard-hat
+# class was strictly dominant no matter how good the detector got, so GRPO would
+# have actively trained this task to stop detecting two of its three classes.
+#
+# These values solve c_k = tau * p_k / (1 - p_k) for a target break-even of
+# tau = 0.5 (emitting is worth it once you can beat IoU 0.5):
+#     excavator  0.5 * 0.361/0.639 = 0.283
+#     rebar      0.5 * 0.088/0.912 = 0.048
+#     hard hat   0.5 * 0.115/0.885 = 0.065
+# Re-derive with scripts/validate_rewards.py --task object_only if the pool changes.
+grounding_tn_constant:
+  excavator: 0.283
+  rebar: 0.048
+  worker_with_white_hard_hat: 0.065
+  default: 0.15
+
+# SFT input override. The shared default (configs/base.yaml's processed_subdir ->
+# datasets/augmented) oversamples rare *violation* rules by duplicating images
+# pixel-augmented up to 16x. For object_only those duplicates carry identical boxes
+# and buy no class rebalancing, so they are pure overfitting pressure. Train on the
+# un-augmented processed split instead.
+sft_dataset_subdir: "datasets/processed"
+
+# Token budgets sized to this task's output. Three box lists is a far shorter
+# completion than the unified caption+objects+violations response, so the 1000/1024
+# ceilings the other tasks carry for VRAM safety are unnecessary here.
+max_new_tokens: 512
+max_completion_length: 512
+max_prompt_length: 2048
+inference_max_seq_length: 2688
+repetition_penalty: 1.0

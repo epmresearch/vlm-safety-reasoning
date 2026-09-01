@@ -22,11 +22,12 @@ import json
 import time
 
 from core.config import load_config, load_task_config
+from core.constants import VALID_TASKS
 from core.io import get_drive_path, ensure_dir
 from core.logging import get_logger, attach_file_logger
 from core.run_manifest import save_run_manifest
 from data.loader import load_processed_dataset
-from data.prompt_templates import SYSTEM_PROMPT, UNIFIED_INSPECTION_PROMPT
+from data.prompt_templates import SYSTEM_PROMPT
 from models.model_loader import load_model_for_inference, get_model_info
 from models.inference import run_inference_batched
 
@@ -63,7 +64,7 @@ def main():
         "--repetition_penalty", type=float, default=None,
         help="Override generation repetition_penalty (default: 1.0, from configs/tasks/unified.yaml)"
     )
-    parser.add_argument("--task", default="unified", help="Task name: 'unified' or 'violations_only'")
+    parser.add_argument("--task", default="unified", choices=VALID_TASKS, help="Task to run. Must be registered in core/tasks.py::TASK_REGISTRY.")
     parser.add_argument(
         "--base_model_override", default=None,
         help="Explicit path to the base model to load (e.g. a merged SFT model, required for GRPO "
@@ -87,10 +88,12 @@ def main():
         # guess — but if that guess also can't find a merged model, abort rather than silently
         # evaluating Base+GRPO (which drops the entire SFT step from the result).
         if base_model_override is None and "grpo" in args.variant.lower():
-            # e.g., vo-grpo-2b-vN -> merged-vo-sft-2b-vN (task-namespaced so unified and
-            # violations_only merged checkpoints can never collide at the same version —
-            # see core.naming.merged_checkpoint_name). Derives the version from the
-            # variant itself (not hardcoded) so this guess stays correct across bumps.
+            # e.g., vo-grpo-2b-vN -> merged-vo-sft-2b-vN (task-namespaced so no two
+            # pipelines' merged checkpoints can collide at the same version — see
+            # core.naming.merged_checkpoint_name). Derives the version from the variant
+            # itself (not hardcoded) so this guess stays correct across bumps. NOTE this
+            # keys on the literal substring "grpo" in the variant name, which every
+            # task's GRPO variant carries by construction (<prefix>-grpo-<tier>-<version>).
             import re as _re
             from core.naming import merged_checkpoint_name
             version_match = _re.search(r"-(v\d+)(?:_[^-]*)?$", args.variant)
@@ -125,10 +128,14 @@ def main():
     # --- Config for max_new_tokens ---
     base_config = load_config(training_kind="sft")
     task_config = load_task_config(args.task)
+    # Task config BEFORE the generic sft/base merge: the task YAML is the documented
+    # source of truth for token budgets, and the old order let any max_new_tokens key
+    # added to sft.yaml/base.yaml silently shadow every task's own budget.
     max_new_tokens = (
         args.max_new_tokens
+        or task_config.get("max_new_tokens")
         or base_config.get("max_new_tokens")
-        or task_config.get("max_new_tokens", 1000)
+        or 1000
     )
     repetition_penalty = (
         args.repetition_penalty

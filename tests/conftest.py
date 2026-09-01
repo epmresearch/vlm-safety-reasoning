@@ -213,3 +213,78 @@ def vo_gt_rule1_violation():
         "rule_3_violation": None,
         "rule_4_violation": None,
     }
+
+# ---------------------------------------------------------------------------
+# Object-only fixtures
+# ---------------------------------------------------------------------------
+
+def _make_object_only_completion(**overrides) -> str:
+    """A well-formed object_only completion: fenced minimized JSON, 3 class keys.
+
+    All three keys are always present because ObjectOnlyOutput requires them —
+    see the rationale in data/schemas.py.
+    """
+    base = {
+        "excavator": [],
+        "rebar": [],
+        "worker_with_white_hard_hat": [],
+    }
+    base.update(overrides)
+    return "```json\n" + json.dumps(base) + "\n```"
+
+
+@pytest.fixture
+def oo_valid_completion_no_objects():
+    return _make_object_only_completion()
+
+
+@pytest.fixture
+def oo_valid_completion_with_excavator():
+    # Predictions are on the [0,1000] Qwen scale.
+    return _make_object_only_completion(excavator=[[100, 200, 300, 400]])
+
+
+@pytest.fixture
+def oo_gt_no_objects():
+    # Ground truth stays on the dataset [0,1] scale.
+    return {
+        "excavator": [],
+        "rebar": [],
+        "worker_with_white_hard_hat": [],
+    }
+
+
+@pytest.fixture
+def oo_gt_with_excavator():
+    return {
+        "excavator": [[0.1, 0.2, 0.3, 0.4]],
+        "rebar": [],
+        "worker_with_white_hard_hat": [],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Caption-only fixtures
+#
+# caption_only's wire format is BARE PROSE — no fence, no JSON. See
+# core/tasks.py::FORMAT_PLAIN_TEXT.
+# ---------------------------------------------------------------------------
+
+def _make_caption_only_completion(caption: str = None) -> str:
+    if caption is None:
+        caption = ("Two workers in white hard hats stand beside a yellow excavator "
+                   "on a muddy site; bundled rebar is stacked at the left edge.")
+    return caption
+
+
+@pytest.fixture
+def co_valid_completion():
+    return _make_caption_only_completion()
+
+
+@pytest.fixture
+def co_gt():
+    return {
+        "caption": ("Two workers wearing white hard hats next to an excavator, "
+                    "with rebar stacked nearby."),
+    }

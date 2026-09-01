@@ -29,6 +29,17 @@ def load_model_strategy() -> Dict[str, Any]:
 
 
 def load_task_config(task: str) -> Dict[str, Any]:
+    """Loads configs/tasks/<task>.yaml for a REGISTERED task.
+
+    The task is validated against core/tasks.py::TASK_REGISTRY first, so an
+    unregistered or misspelled task raises a ValueError naming the registry
+    rather than a FileNotFoundError on a path — the config layer is the earliest
+    point every entry point funnels through, so it is the right place to say
+    "that is not a task" once instead of at each caller.
+    """
+    from core.tasks import validate_task
+
+    validate_task(task)
     path = CONFIG_ROOT / "tasks" / f"{task}.yaml"
     return _load_yaml(path)
 

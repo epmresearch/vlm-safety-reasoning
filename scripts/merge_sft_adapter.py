@@ -4,6 +4,7 @@ import sys
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from core.config import load_config
+from core.constants import VALID_TASKS
 from models.model_loader import get_model_info, load_model_for_training
 
 def main():
@@ -12,12 +13,15 @@ def main():
     parser.add_argument("--tier", required=True, help="Model tier (e.g., 2b, 4b, 8b)")
     parser.add_argument("--adapter_path", required=True, help="Path to your trained SFT adapter (e.g. results/vo-sft-2b-vN/final)")
     parser.add_argument("--output_path", required=True, help="Path to save the new merged base model")
+    # REQUIRED, deliberately no default. This used to default to "violations_only",
+    # which is correct for exactly one caller and silently wrong for every other: a
+    # merge script that omitted --task looked fine while loading another task's
+    # max_seq_length / pixel bounds.
     parser.add_argument(
-        "--task", default="violations_only",
-        help="Task the SFT adapter was trained for (e.g. 'unified', 'violations_only'). "
-             "Determines which task-specific config overrides (e.g. max_seq_length) are "
-             "applied when loading the base model to merge into. Default kept as "
-             "'violations_only' for backward compatibility with existing callers."
+        "--task", required=True, choices=VALID_TASKS,
+        help="Task the SFT adapter was trained for. Determines which task-specific "
+             "config overrides (e.g. max_seq_length, pixel bounds) are applied when "
+             "loading the base model to merge into."
     )
     args = parser.parse_args()
 

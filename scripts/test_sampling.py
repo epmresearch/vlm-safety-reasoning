@@ -4,6 +4,11 @@ from data.loader import load_processed_dataset
 from data.prompt_templates import SYSTEM_PROMPT, get_prompt_for_task
 from qwen_vl_utils import process_vision_info
 
+# Task this smoke test exercises. Any registered task works; the default
+# matches the pipeline most often being debugged.
+TASK = "violations_only"
+
+
 # Make sure this points to your real SFT adapter from yesterday!
 ADAPTER = "/home/nabeel.shan/vlm-finetuning-project1/checkpoints/qwen3vl-8b/vo-sft-8b-v3/final"
 BASE = "unsloth/Qwen3-VL-8B-Instruct"
@@ -25,7 +30,7 @@ img = sample["image"]
 msgs = [
     {"role": "system", "content": [{"type": "text", "text": SYSTEM_PROMPT}]},
     {"role": "user", "content": [{"type": "image", "image": img},
-                                  {"type": "text", "text": get_prompt_for_task("violations_only")}]},
+                                  {"type": "text", "text": get_prompt_for_task(TASK)}]},
 ]
 text = tokenizer.apply_chat_template(msgs, add_generation_prompt=True, tokenize=False)
 img_in, vid_in = process_vision_info(msgs)

@@ -4,15 +4,21 @@ import sys
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from core.config import load_config, load_task_config
+from core.constants import VALID_TASKS
+from core.tasks import validate_task
 from models.model_loader import get_model_info, load_model_for_training
 from data.loader import load_processed_dataset
 from data.preprocessor import build_grpo_dataset_for_task
+from data.prompt_templates import SYSTEM_PROMPT, get_prompt_for_task
 
 def run_preflight(task="violations_only", model_id="2b", base_model_override=None):
     print(">>> 1. Loading configs...")
+    validate_task(task)
     cfg = load_config(task=task, training_kind="grpo")
     sft_cfg = load_config(task=task, training_kind="sft")
     task_cfg = load_task_config(task)
+    print(f"    task={task}  prompt_key={task_cfg.get('prompt_key')}  "
+          f"max_completion_length={cfg.get('max_completion_length')}")
     entry = get_model_info(model_id)
     hf_path = base_model_override or entry["hf_path"]
     if base_model_override:
@@ -42,6 +48,15 @@ def run_preflight(task="violations_only", model_id="2b", base_model_override=Non
     train_split = raw_dataset["train"].select(range(4))
     train_data = build_grpo_dataset_for_task(train_split, task=task)
     
+    print(">>> 3b. Assembling this task's real reward functions...")
+    # Cheap, GPU-free, and the only place a typo in a task YAML's reward_components
+    # or a stray reward_weights key is caught before a multi-hour GRPO job burns.
+    # (The trainer below still runs on a mock reward — this only validates assembly.)
+    from rewards.unified_reward import get_reward_funcs_for_task
+    _reward_funcs, _reward_weights = get_reward_funcs_for_task(task)
+    print(f"    {len(_reward_funcs)} components: "
+          f"{[f.__name__ for f in _reward_funcs]} weights={_reward_weights}")
+
     print(">>> 4. Initializing GRPOTrainer (No training will happen)...")
     from trl import GRPOTrainer, GRPOConfig
 
@@ -167,14 +182,36 @@ def run_preflight(task="violations_only", model_id="2b", base_model_override=Non
         token_len = inputs["input_ids"].shape[-1]
         print(f"Total token length: {token_len}")
         
+        # Text-only baseline measured for THIS task's prompt, not the hardcoded 233
+        # that was measured for the unified/VO prompt and is wrong for every other.
+        text_only_len = None
+        try:
+            text_only_msgs = [
+                {"role": "system", "content": [{"type": "text", "text": SYSTEM_PROMPT}]},
+                {"role": "user", "content": [{"type": "text", "text": get_prompt_for_task(task)}]},
+            ]
+            text_only = tokenizer.apply_chat_template(
+                text_only_msgs, tokenize=False, add_generation_prompt=True
+            )
+            text_only_len = tokenizer(text=[text_only], return_tensors="pt")["input_ids"].shape[-1]
+        except Exception as _e:
+            print(f"    (could not measure text-only baseline: {_e})")
+
         if "pixel_values" in inputs or "pixel_values_videos" in inputs:
             pv_key = "pixel_values" if "pixel_values" in inputs else "pixel_values_videos"
             print(f"pixel_values shape: {inputs[pv_key].shape}")
             print(f"\n✅✅ CONFIRMED: Images ARE being injected as vision tokens!")
-            print(f"✅✅ Token count: {token_len} (text-only would be ~233 — difference = {token_len - 233} image tokens)")
+            if text_only_len is not None:
+                print(f"✅✅ Token count: {token_len} (text-only for this task's prompt = "
+                      f"{text_only_len} — difference = {token_len - text_only_len} image tokens)")
+            else:
+                print(f"✅✅ Token count: {token_len}")
         else:
             print(f"\n❌❌ FAIL: pixel_values NOT in processor output!")
-            print(f"    Token count {token_len} — if ~233, images are being silently dropped!")
+            if text_only_len is not None:
+                print(f"    Token count {token_len} — if ~{text_only_len}, images are being silently dropped!")
+            else:
+                print(f"    Token count {token_len}")
         print("====================================================")
         
     except Exception as e:
@@ -191,6 +228,6 @@ if __name__ == "__main__":
              "tokenizer_name loading path used by a real GRPO run.",
     )
     parser.add_argument("--tier", default="2b")
-    parser.add_argument("--task", default="violations_only")
+    parser.add_argument("--task", default="violations_only", choices=VALID_TASKS)
     args = parser.parse_args()
     run_preflight(task=args.task, model_id=args.tier, base_model_override=args.base_model_override)
