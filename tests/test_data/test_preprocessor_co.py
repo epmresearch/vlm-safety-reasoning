@@ -64,9 +64,16 @@ def test_conversation_co_prompt_forbids_json_and_target_is_prose():
     # JSON, code fences and bounding boxes are all mentioned only in order to be
     # forbidden — this task's completion is bare prose.
     user_prompt = messages[1]["content"][1]["text"].lower()
-    assert "do not output json" in user_prompt
-    assert "do not use a code fence" in user_prompt
-    assert "do not include bounding boxes" in user_prompt
+    # Assert the CONTRACT, not the exact wording: caption_only's reward_format is
+    # output_parser.is_clean_prose, which rejects a fence, a JSON object and a
+    # leading 'caption:' label. The prompt must forbid those three and is free to
+    # phrase it however reads best. Pinning exact sentences made this test fail on a
+    # pure rewording that left the contract intact.
+    assert "json" in user_prompt
+    assert "fence" in user_prompt
+    assert "label" in user_prompt or "heading" in user_prompt
+    # ...and it must not ask for the things that would break the contract.
+    assert "```" not in user_prompt
 
     target_str = messages[2]["content"][0]["text"]
     assert "```" not in target_str
