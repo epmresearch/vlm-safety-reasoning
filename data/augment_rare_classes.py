@@ -1,10 +1,11 @@
 """
-Offline script to augment rare classes (Rule 3 and Rule 4) in the dataset.
+Offline script to augment rare-rule images (Rules 2, 3 and 4) in the dataset.
 Uses Albumentations to apply pixel-level transformations (brightness, contrast, noise, etc.).
 By avoiding spatial transformations (flips, crops), we guarantee that all bounding boxes 
 and text descriptions ("on the left", "on the right") remain perfectly accurate.
 """
 
+import json
 import os
 import argparse
 import numpy as np
@@ -41,6 +42,14 @@ def get_pixel_augmentation_pipeline():
         A.RandomGamma(gamma_limit=(70, 130), p=0.5),
     ])
 
+# Extra copies generated per rare image, keyed by the rule that qualifies it. These
+# are EXTRA copies: an image with num_augs = 16 ends up as 17 rows (original + 16).
+# Values are derived from each rule's scarcity in the train split (rule_4 is the
+# rarest at 46 images). Precedence is rule_4 > rule_2 > rule_3, so an image tripping
+# several rules is counted once, under its rarest rule.
+RULE_MULTIPLIERS = {4: 16, 2: 12, 3: 6}
+
+
 def is_rare_class(sample: dict) -> bool:
     """Returns True if the sample contains Rule 2, 3, or 4 violations."""
     has_rule2 = sample.get("rule_2_violation") is not None
@@ -72,9 +81,9 @@ def augment_sample(sample: dict, transform: A.Compose, aug_index: int) -> dict:
     return new_sample
 
 def main():
-    # No CLI arguments: per-rule augmentation multiplicity is deliberately hardcoded below
-    # (rule_4 x16, rule_2 x12, rule_3 x6) and derived from each rule's scarcity in the
-    # train split. A --num_augmentations flag used to exist but was never read.
+    # No CLI arguments: per-rule multiplicity lives in the module-level
+    # RULE_MULTIPLIERS constant. A --num_augmentations flag used to exist but was
+    # never read, so it silently did nothing.
     argparse.ArgumentParser(
         description="Pixel-only augmentation of rare-rule images. Takes no arguments."
     ).parse_args()
@@ -101,7 +110,7 @@ def main():
         if is_rare_class(train_split[i]):
             rare_indices.append(i)
             
-    logger.info(f"Found {len(rare_indices)} rare images (Rule 3 or Rule 4).")
+    logger.info(f"Found {len(rare_indices)} rare images (Rule 2, 3 or 4).")
     
     if len(rare_indices) == 0:
         logger.info("No rare images found. Exiting.")
@@ -125,13 +134,13 @@ def main():
         has_r4 = sample.get("rule_4_violation") is not None
         
         if has_r4:
-            num_augs = 16
+            num_augs = RULE_MULTIPLIERS[4]
             rule_name = "Rule4"
         elif has_r2:
-            num_augs = 12
+            num_augs = RULE_MULTIPLIERS[2]
             rule_name = "Rule2"
         elif has_r3:
-            num_augs = 6
+            num_augs = RULE_MULTIPLIERS[3]
             rule_name = "Rule3"
         else:
             continue
@@ -176,6 +185,49 @@ def main():
     logger.info(f"Saving fully augmented dataset to {output_dir}")
     # Use max_shard_size="100MB" to prevent memory spikes when saving Arrow files
     ds.save_to_disk(str(output_dir), max_shard_size="100MB")
+
+    # Persist what was actually done. Until now this step logged its counts to stdout
+    # and nothing else, so once a SLURM job's output scrolled away there was no record
+    # of the multipliers used or the resulting per-rule balance -- the exact numbers the
+    # augmentation decision and the SFT step count both depend on. build_grpo_pool.py
+    # has always written a manifest; this brings augmentation in line with it.
+    def _rule_counts(split):
+        cols = [c for c in split.column_names if c != "image"]
+        out = {}
+        for r in (1, 2, 3, 4):
+            key = f"rule_{r}_violation"
+            out[key] = sum(1 for row in split.select_columns(cols)
+                           if isinstance(row.get(key), dict))
+        out["safe"] = sum(
+            1 for row in split.select_columns(cols)
+            if not any(isinstance(row.get(f"rule_{r}_violation"), dict) for r in (1, 2, 3, 4))
+        )
+        out["total"] = len(split)
+        return out
+
+    manifest = {
+        "source_dir": str(input_dir),
+        "output_dir": str(output_dir),
+        "seed": 42,
+        "transforms": "pixel-only (brightness/contrast, JPEG compression, gamma); "
+                      "no spatial transforms, so boxes and directional caption phrases "
+                      "stay valid",
+        "multipliers": {f"rule_{r}": m for r, m in RULE_MULTIPLIERS.items()},
+        "train_rows_before": len(train_split),
+        "rows_generated": len(augmented_ds),
+        "train_rows_after": len(combined_train),
+        "val_rows": len(ds["val"]) if "val" in ds else None,
+        "test_rows": len(ds["test"]) if "test" in ds else None,
+        "note": "val and test are carried over untouched, so all four tasks are still "
+                "evaluated on byte-identical images.",
+        "train_by_rule_before": _rule_counts(train_split),
+        "train_by_rule_after": _rule_counts(combined_train),
+    }
+    manifest_path = output_dir / "augment_manifest.json"
+    with open(manifest_path, "w", encoding="utf-8") as f:
+        json.dump(manifest, f, indent=2, default=str)
+    logger.info(f"Augmentation manifest:\n{json.dumps(manifest, indent=2, default=str)}")
+    logger.info(f"Saved augmentation manifest to {manifest_path}")
     logger.info("Success! Run your data processing script again, but point it to this augmented folder.")
 
 if __name__ == "__main__":
