@@ -13,7 +13,7 @@ correctly routed to the Rule 2/4 bucket by the "AND NOT" clause below.
 Uses HF Dataset.select() with repeated indices so images (and every other
 field) are duplicated cheaply, without re-encoding or re-loading anything.
 """
-from typing import Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from core.logging import get_logger
 
@@ -86,3 +86,72 @@ def build_rare_mask(hf_dataset) -> List[bool]:
         is_rare = any(sample.get(f"rule_{i}_violation") is not None for i in (2, 3, 4))
         mask.append(is_rare)
     return mask
+
+# Rare-class definitions per capability. "Rare" means: an image containing at least one
+# instance of a class the model would otherwise rarely see in a batch.
+#
+# For a batch of 32 and a class present in a fraction p of images, the chance a batch
+# contains NONE of it is (1-p)^32 -- 80% at p=0.7%, 19% at p=5%, 1.7% at p=12%. Those
+# starved steps contribute no gradient for that class, which is why violations needed
+# both augmentation and this sampler: un-augmented rule_4 sits at 46/6308 = 0.7%.
+_RARE_VIOLATION_RULES = (2, 3, 4)
+_RARE_OBJECT_CLASSES = ("rebar", "worker_with_white_hard_hat")
+
+
+def build_rare_mask_for_task(hf_dataset, task: str) -> Optional[List[bool]]:
+    """Task-aware rare mask for StratifiedRareClassSampler.
+
+    Returns None when the task has no meaningful notion of a rare target, in which case
+    the caller should fall back to plain shuffling.
+
+    Rarity is defined by capability, not by task name:
+
+    * ``violations`` -> an image with any Rule 2/3/4 violation. Identical to the legacy
+      ``build_rare_mask``, so ``unified`` and ``violations_only`` behaviour is unchanged.
+    * ``objects`` (and not ``violations``) -> an image containing rebar or a worker in a
+      white hard hat, the two hard classes. Excavator is deliberately excluded: it is the
+      common, visually salient class (2415 train occurrences against 846 and 680), so
+      marking it rare would mark most images rare and the stratification would degenerate
+      to a plain shuffle.
+
+    ``violations`` takes precedence for ``unified`` on purpose. Its violation components
+    carry 0.55 of that task's reward weight against 0.25 for grounding, and stratifying on
+    two different axes at once would over-constrain the ordering without a clear winner.
+    """
+    from core.tasks import CAP_OBJECTS, CAP_VIOLATIONS, task_has
+
+    if task_has(task, CAP_VIOLATIONS):
+        return [
+            any(s.get(f"rule_{i}_violation") is not None for i in _RARE_VIOLATION_RULES)
+            for s in hf_dataset
+        ]
+
+    if task_has(task, CAP_OBJECTS):
+        return [
+            any(s.get(c) for c in _RARE_OBJECT_CLASSES)
+            for s in hf_dataset
+        ]
+
+    return None
+
+
+def rare_class_incidence(hf_dataset, task: str) -> Dict[str, Any]:
+    """Measures what fraction of images carry each rare target, and how often a batch of
+    ``batch_size`` would contain none of it. Reporting only -- no training effect.
+
+    This is the number the object_only stratification decision actually turns on, and it
+    cannot be derived from the paper: Table 4 reports box *occurrences* (rebar 846), not
+    the number of images containing at least one, and images may hold several boxes.
+    """
+    from core.tasks import CAP_OBJECTS, CAP_VIOLATIONS, task_has
+
+    n = len(hf_dataset)
+    counts: Dict[str, int] = {}
+    if task_has(task, CAP_VIOLATIONS):
+        for i in _RARE_VIOLATION_RULES:
+            key = f"rule_{i}_violation"
+            counts[key] = sum(1 for s in hf_dataset if s.get(key) is not None)
+    if task_has(task, CAP_OBJECTS):
+        for c in ("excavator",) + _RARE_OBJECT_CLASSES:
+            counts[c] = sum(1 for s in hf_dataset if s.get(c))
+    return {"n_images": n, "counts": counts}

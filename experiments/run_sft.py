@@ -55,7 +55,8 @@ def main():
     from core.config import load_config
     from core.io import get_drive_path, ensure_dir
     import json
-    from data.oversampling import build_oversampled_indices, build_rare_mask
+    from data.oversampling import (build_oversampled_indices,
+                                   build_rare_mask_for_task)
     # Full merge chain (base -> model_registry -> sft -> tasks/<task>), matching GRPO and
     # the precedence documented in CLAUDE.md. This previously used
     # load_training_config("sft"), which read configs/sft.yaml alone — so a task YAML
@@ -111,25 +112,42 @@ def main():
             rule24_multiplier=sft_cfg.get("oversample_rule24_multiplier", 4),
             rule3_multiplier=sft_cfg.get("oversample_rule3_multiplier", 2),
         )
-
-        # Save the manifest for reproducibility
         manifest_dir = ensure_dir(get_drive_path("datasets", "stats"))
         manifest_path = manifest_dir / f"oversample_manifest_{args.tier}_{args.variant}.json"
         with open(manifest_path, "w") as f:
             json.dump(oversample_manifest, f, indent=2)
         logger.info(f"Saved oversample manifest to {manifest_path}")
-
         train_raw_oversampled = splits["train"].select(oversample_indices)
-
-        logger.info("Building rare mask for stratified sampling...")
-        rare_mask = build_rare_mask(train_raw_oversampled)
     else:
         logger.info(
-            f"Task '{args.task}' does not predict rule violations — skipping "
-            "rare-rule oversampling and rare-mask stratified sampling."
+            f"Task '{args.task}' does not predict rule violations - skipping rare-rule "
+            "oversampling (it is defined purely by which violation rules a sample trips)."
         )
         train_raw_oversampled = splits["train"]
-        rare_mask = None
+
+    # Stratified sampling is a SEPARATE question from oversampling, and applies to any
+    # task with a rare target -- not just violation tasks. build_rare_mask_for_task
+    # picks the axis from the task's capabilities: rules 2/3/4 for violation tasks
+    # (unchanged), rebar + white-hard-hat workers for object_only. It returns None for
+    # caption_only, which has no rare class, and the sampler is then skipped.
+    #
+    # Cheap in the wrong direction: stratifying when it is not needed costs nothing --
+    # every index still appears exactly once per epoch and only the ORDER changes --
+    # whereas not stratifying when it is needed leaves batches with no gradient for a
+    # class. Measure the real incidence with
+    #   python scripts/validate_rewards.py --sft-stats --task object_only
+    logger.info("Building rare mask for stratified sampling...")
+    rare_mask = build_rare_mask_for_task(train_raw_oversampled, args.task)
+    if rare_mask is None:
+        logger.info(
+            f"Task '{args.task}' has no rare-class axis - using plain per-epoch shuffle."
+        )
+    else:
+        n_rare = sum(rare_mask)
+        logger.info(
+            f"Rare mask for '{args.task}': {n_rare}/{len(rare_mask)} rows "
+            f"({n_rare / max(len(rare_mask), 1):.1%}) marked rare."
+        )
 
     if "resolution" in train_raw_oversampled.column_names:
         train_resolutions = train_raw_oversampled["resolution"]

@@ -62,7 +62,7 @@ SLURM CRLF errors — don't defeat it from Windows.
 ### Tests
 
 ```powershell
-python -m pytest tests/ -v                                       # all (~493 tests, no GPU needed)
+python -m pytest tests/ -v                                       # all (~501 tests, no GPU needed)
 python -m pytest tests/test_core -v                               # task registry + name-isolation proof
 python -m pytest tests/test_rewards/test_unified_reward.py -v     # single file
 python -m pytest tests/test_evaluation/test_output_parser.py::test_strip_fences -v   # single test
@@ -78,6 +78,7 @@ python -m pytest tests/test_core/test_ledger_fixes.py -v          # BUG-08..29
 python scripts/validate_rewards.py                       # all four tasks, probe + census
 python scripts/validate_rewards.py --task object_only --probe
 python scripts/validate_rewards.py --task object_only --probe --pool-stats   # on ARC
+python scripts/validate_rewards.py --task object_only --sft-stats            # on ARC
 ```
 
 `scripts/validate_rewards.py` scores synthetic honest and degenerate policies against real
@@ -404,9 +405,49 @@ pipeline. Task-specific formatting is applied lazily at load time by `build_sft_
 *violation* rule (rule_4 ×16, rule_2 ×12, rule_3 ×6) and those duplicates carry identical boxes and identical
 captions — no class rebalancing for those tasks, only overfitting pressure. Augmentation only touches the
 **train** split, so val and test are byte-identical between the two roots and all four tasks are still evaluated
-on exactly the same test images. For the same reason `run_sft.py` skips rare-rule oversampling and the rare-mask
-stratified sampler for tasks without the `violations` capability. Expect ~394 SFT steps for `oo`/`co` versus 512
-for `unified`/`vo`; the first log line reports the actual train/val sizes.
+on exactly the same test images. For the same reason `run_sft.py` skips rare-rule **oversampling** for tasks
+without the `violations` capability — it is defined purely by which violation rules a sample trips. Expect ~394
+SFT steps for `oo`/`co` versus 512 for `unified`/`vo`; the first log line reports the actual train/val sizes.
+
+**Stratified sampling is a separate question from oversampling, and applies more widely.** Oversampling changes
+*how often* a row is seen; the sampler changes only *when* — every index still appears exactly once per epoch.
+`data/oversampling.py::build_rare_mask_for_task` picks the axis from the task's **capabilities**:
+
+| Task | rare axis | why |
+|---|---|---|
+| `unified`, `violations_only` | rules 2/3/4 | unchanged from the legacy `build_rare_mask` |
+| `object_only` | `rebar` or `worker_with_white_hard_hat` | the two hard classes; excavator is excluded — at 2415 train occurrences vs 846 and 680 it would mark most images rare and degenerate to a plain shuffle |
+| `caption_only` | `None` → plain shuffle | there is no rare caption |
+
+`unified` deliberately stratifies on **violations**, not objects: its violation components carry 0.55 of its
+reward weight against 0.25 for grounding, and stratifying two axes at once over-constrains the ordering with no
+clear winner.
+
+**Why `object_only` gets it at all.** For a class present in a fraction *p* of images, the chance a batch of 32
+contains none of it is `(1-p)^32` — 80% at *p* = 0.7% (un-augmented rule_4), 8% at 8%, 1.7% at 12%. Those
+starved steps contribute no gradient for that class. The magnitude for objects is far smaller than for
+violations, but stratifying when it is *not* needed costs nothing, while not stratifying when it *is* leaves
+batches with no signal for a class — so the asymmetry decides it. Measured on a synthetic split at realistic
+prevalence the sampler cut rare-rows-per-batch spread from **sd 2.21 to sd 0.54** with the mean unchanged.
+
+Measure the real incidence before drawing conclusions — the paper cannot answer it, because Table 4 counts box
+*occurrences* (rebar 846) rather than images containing at least one:
+
+```bash
+python scripts/validate_rewards.py --sft-stats --task object_only    # needs the dataset; run on ARC
+```
+
+**Honest limitation:** the mask is a single boolean, so it spreads "contains a rare class" evenly rather than
+guaranteeing each class appears in every batch. At 8% prevalence `worker_with_white_hard_hat` would still be
+absent from ~8% of batches. A per-class guarantee needs a genuinely multi-label sampler, which buys ~8% more
+exposure of one class for real added complexity — and the class-imbalance problem it would address is already
+handled in the reward by `grounding_tn_constant`.
+
+Per-epoch reshuffling works because `models/sft_trainer.py` forwards HF's `set_epoch` onto the sampler
+(`dataloader.set_epoch = sampler.set_epoch`). `get_train_dataloader()` is called once before the epoch loop, so
+without that forward the sampler's epoch would stay pinned and **every epoch would replay byte-identical
+order** — invisible at 1 epoch, silently wasting the second. Both are pinned by
+`tests/test_data/test_rare_mask_for_task.py`.
 
 ### Naming and versioning
 

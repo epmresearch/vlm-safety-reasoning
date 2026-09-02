@@ -385,6 +385,58 @@ def pool_stats():
             safe / n)
 
 
+def sft_stats(task: str, batch_size: int = 32):
+    """Measures rare-class incidence on the task's REAL SFT split and reports how often a
+    batch would contain none of each class.
+
+    This is the number the object_only stratification decision turns on, and it cannot be
+    read off the paper: Table 4 counts box *occurrences* (rebar 846, white-hard-hat 680
+    across 7009 train images), not images containing at least one, and an image may hold
+    several boxes. Reporting only -- nothing here changes training.
+    """
+    from core.config import load_task_config
+    from data.loader import load_processed_dataset
+    from data.oversampling import build_rare_mask_for_task, rare_class_incidence
+
+    print("")
+    print(f"{YELLOW}SFT RARE-CLASS INCIDENCE — {task}{RESET}")
+    cfg = load_task_config(task)
+    subdir = cfg.get("sft_dataset_subdir")
+    try:
+        train = load_processed_dataset(subdir=subdir)["train"]
+    except Exception as e:
+        _info(f"SFT split unavailable ({type(e).__name__}: {e}) — run this on ARC.")
+        return []
+
+    _info(f"split: {subdir or 'default (augmented)'}  rows: {len(train)}")
+    info = rare_class_incidence(train, task)
+    n = info["n_images"]
+    if not info["counts"]:
+        _info("this task has no rare-class axis (caption_only) — plain shuffle is correct")
+        return []
+
+    print(f"      {'class':32s} {'images':>7s} {'prev':>7s} {'batch starved':>14s} {'steps':>7s}")
+    steps = n // batch_size
+    for k, c in sorted(info["counts"].items(), key=lambda kv: kv[1]):
+        pv = c / max(n, 1)
+        starved = (1.0 - pv) ** batch_size
+        colour = RED if starved > 0.20 else (YELLOW if starved > 0.05 else GREEN)
+        print(f"      {k:32s} {c:>7d} {pv:>6.1%} "
+              f"{colour}{starved:>13.1%}{RESET} {int(starved * steps):>7d}")
+
+    mask = build_rare_mask_for_task(train, task)
+    if mask is not None:
+        r = sum(mask)
+        _info(f"rare mask: {r}/{len(mask)} rows ({r / max(len(mask), 1):.1%}) -> "
+              f"StratifiedRareClassSampler spreads these evenly across each epoch")
+        if r / max(len(mask), 1) > 0.5:
+            _info("NOTE: over half the rows are 'rare', so stratification is close to a "
+                  "plain shuffle here — that is fine, just not doing much.")
+    _info(f"batch_size={batch_size}, ~{steps} steps/epoch. A 'starved' batch contributes "
+          "no gradient for that class.")
+    return []
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -396,11 +448,15 @@ def main():
                     help="Recompute class/rule prevalence from datasets/grpo_pool.")
     ap.add_argument("--tokenizer", default=None, help="Override the tokenizer for the census.")
     ap.add_argument("--limit", type=int, default=None, help="Cap rows in the census.")
+    ap.add_argument("--sft-stats", action="store_true",
+                    help="Measure rare-class incidence on the real SFT split (needs the "
+                         "dataset; run on ARC). Reporting only.")
     args = ap.parse_args()
 
     tasks = args.task or list(VALID_TASKS)
-    run_probe = args.probe or not (args.probe or args.census)
-    run_census = args.census or not (args.probe or args.census)
+    _any_mode = args.probe or args.census or args.sft_stats
+    run_probe = args.probe or not _any_mode
+    run_census = args.census or not _any_mode
 
     prevalence, rule_prev, safe_rate = DEFAULT_POOL_PREVALENCE, DEFAULT_RULE_PREVALENCE, DEFAULT_SAFE_RATE
     if args.pool_stats:
@@ -415,6 +471,8 @@ def main():
             failures += probe(t, prevalence, rule_prev, safe_rate)
         if run_census:
             failures += census(t, args.tokenizer, args.limit)
+        if args.sft_stats:
+            failures += sft_stats(t)
 
     print("\n" + "=" * 74)
     if failures:
