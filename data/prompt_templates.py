@@ -31,12 +31,19 @@ These prompts are calibrated against two sources rather than written freehand.
    Against a 48-word reference a 90-word caption scores 0.345 and a 120-word one 0.044.
    An earlier caption prompt said "in detail" and listed five categories to cover, which
    reliably produces 90-120 words -- it was fighting the reward it was meant to maximise,
-   on the component weighted 0.90 in `caption_only`. Hence the explicit "about 3
-   sentences and 50 words".
+   on the component weighted 0.90 in `caption_only`.
 
-   The reason instruction says "ONE sentence" and gives no word count: GT reasons are
-   1.0 sentences, so the sentence constraint already lands the length, and a word count
-   on a one-sentence output is redundant.
+   **No prompt states a word count.** The fix for that is brevity and relative framing,
+   not a number. `Lg` in the penalty above is *this image's own* reference length, and
+   those lengths span p10 = 14 words to p90 = 90 -- a close-up of one bucket against a
+   busy site. So a global "about 50 words" is only correct at the mean and is actively
+   wrong at both tails, and how much to say about a given image is exactly what SFT
+   learns from 6308 targets. The prompts therefore say "concise", "facts only" and "let
+   the detail follow the image" -- which is also how the paper words its own caption
+   prompt ("Do not make assumptions, be concise, and describe facts only. Please
+   describe with only one paragraph"), so our captioning numbers stay comparable to the
+   benchmark. Reason gets "ONE sentence" for the same reason: GT reasons are 1.0
+   sentences, so the sentence constraint lands the length without naming a count.
 
 Two things deliberately kept OUT:
 
@@ -104,9 +111,9 @@ _OBJECT_CLASSES = (
 # order build_target_json emits: caption -> rules -> objects.
 UNIFIED_INSPECTION_PROMPT = (
     "Inspect this construction site image. Output strictly a single JSON code block.\n\n"
-    "1. 'caption': one plain-language paragraph, about 3 sentences and 50 words, "
-    "covering the people, equipment and materials that are actually present and what "
-    "they are doing. State facts you can see; do not speculate.\n"
+    "1. 'caption': one concise paragraph covering the people, equipment and materials "
+    "that are actually present and what they are doing. State only facts you can see, "
+    "and let the amount of detail follow what the image shows.\n"
     "2. Violation keys: judge the image against these four safety rules.\n"
     + _SAFETY_RULES
     + _VIOLATION_INSTRUCTIONS +
@@ -159,11 +166,10 @@ OBJECT_ONLY_PROMPT = (
 CAPTION_ONLY_PROMPT = (
     "Describe this construction site image in one paragraph.\n\n"
     "Cover the people, the construction equipment and the material stockpiles that are "
-    "actually present, what they are doing, and where they are in the scene. Describe "
-    "only facts you can see - do not guess at anything outside the frame and do not "
-    "speculate about intent or danger.\n\n"
-    "Be concise: about 3 sentences and 50 words for a typical scene, and fewer if the "
-    "image shows very little. Match the amount of detail the image actually supports.\n\n"
+    "actually present, what they are doing, and where they are in the scene. Be "
+    "concise and describe only facts you can see - do not make assumptions and do not "
+    "speculate about intent or danger. Let the amount of detail follow what the image "
+    "shows: a close-up of a single machine needs far less than a busy site.\n\n"
     "Reply with the description itself and nothing else - no code fence, no JSON, and no "
     "heading or label in front of it."
 )
