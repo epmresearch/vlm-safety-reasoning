@@ -171,10 +171,43 @@ off-Linux.
 
 ### Data prep
 
+Both derive from `datasets/processed` and neither reads the other, so they can run in
+parallel. **Built and verified on ARC 2026-09-02.**
+
 ```bash
-python -m data.augment_rare_classes     # → datasets/augmented   (SFT input; sbatch scripts/augment_data.sh)
-python data/build_grpo_pool.py          # → datasets/grpo_pool   (GRPO input; no args, no --version)
+sbatch scripts/augment_data.sh          # → datasets/augmented  (SFT input for unified/vo; CPU-only, ~30 min)
+python data/build_grpo_pool.py          # → datasets/grpo_pool   (GRPO input, all four; no args, ~2 min)
+python scripts/dataset_report.py        # → datasets/stats/dataset_report.json  (full inventory)
 ```
+
+Each writes a manifest next to its output, so the composition survives the SLURM log:
+`datasets/augmented/augment_manifest.json` and `datasets/grpo_pool/build_manifest.json`.
+
+**Measured dataset facts.** These are no longer estimates from the paper — they are the
+numbers `build_manifest.json` reports, and the reward and step-count arithmetic
+throughout this file rests on them.
+
+| | rows | rule_1 | rule_2 | rule_3 | rule_4 | safe |
+|---|---|---|---|---|---|---|
+| train (un-augmented) | **6308** | 609 (9.7%) | 53 (0.8%) | 98 (1.6%) | 42 (0.7%) | 5528 (87.6%) |
+| val | **701** | 68 | 6 | 11 | 4 | 615 |
+| **GRPO pool** | **1732** | 677 (**39.1%**) | 59 (3.4%) | 109 (6.3%) | 46 (2.7%) | 866 (**50.0%**) |
+
+Three things this confirms:
+
+- **The pool is exactly 50/50** violation/safe, which is what `violation_tn_constant: 0.85`
+  was solved against — not the ~88%-safe test distribution. The pool takes all 701 val rows
+  plus all 780 train violation images, then draws only 251 train safe images, because val
+  already supplies 615.
+- **rule_1 covers 39.1% of the pool**, the figure the reflexive-flagging EV calculation
+  used. Measured, not assumed.
+- **rule_4 sits at 0.67% of the un-augmented train split**, so a batch of 32 contains none
+  of it **80.8%** of the time — which is precisely why augmentation exists. rule_2 is
+  starved in 76.3% of batches and rule_3 in 60.6%.
+
+Step counts follow directly (`dataloader_drop_last`, 2 epochs, effective batch 32):
+`8198 // 32 × 2 =` **512** for `unified`/`vo`, `6308 // 32 × 2 =` **394** for `oo`/`co`,
+and `1732 // 32 × 2 =` **108** for GRPO (54 updates per epoch).
 
 ### Local analysis (run from repo root — these use relative `Path("evaluation_results")`)
 
@@ -556,12 +589,22 @@ byte-identical test images. That is safe because augmentation only rewrites the 
 
 Augmentation (`data/augment_rare_classes.py`) is **pixel-only** — brightness/contrast, JPEG compression, gamma;
 deliberately no spatial transforms, so bounding boxes and directional caption phrases stay valid. Per-rule
-multiplicity is hardcoded in `main()` (rule_4 ×16, rule_2 ×12, rule_3 ×6) and **overrides the unused
-`--num_augmentations` flag**. Augmented rows are identified *only* by an `_aug<N>` suffix on `image_id`; there is
-no boolean column.
+multiplicity lives in the module-level `RULE_MULTIPLIERS = {4: 16, 2: 12, 3: 6}` (it used to be inline literals
+in `main()`) and **overrides the unused `--num_augmentations` flag**, which is read nowhere. Those are *extra*
+copies, and precedence is rule_4 > rule_2 > rule_3, so an image tripping several rules is duplicated once, under
+its rarest rule. Augmented rows are identified *only* by an `_aug<N>` suffix on `image_id`; there is no boolean
+column.
+
+Expected from the measured train split: `42×16 + 53×12 + 98×6 = 1896` extra rows, minus a handful lost to rule
+overlap, giving 6308 → **8198**. `augment_manifest.json` records the realised counts; check
+`train_by_rule_after` puts rules 2/3/4 in the 650–740 band against rule_1's ~677, and that `val_rows` and
+`test_rows` are unchanged — augmentation must touch **train only**, which is what keeps all four tasks scored on
+byte-identical test images.
 
 `build_grpo_pool.py` composes: the entire val split + every train violation image + enough random train safe
-images to reach ~50/50. It reads pre-augmentation data because GRPO runs a single epoch, where near-duplicate
+images to reach ~50/50. Measured on the real build: all **701** val rows + all **780** train violation images +
+**251** train safe images = **1732**, landing at exactly 866/866. Only 251 safe images are drawn because val
+already contributes 615. It reads pre-augmentation data because GRPO runs few epochs, where near-duplicate
 images would produce correlated reward groups instead of independent signal.
 
 ### Rewards and the output contract
@@ -664,15 +707,23 @@ Prompts are defined **only** in `data/prompt_templates.py` — never hardcode on
 
    **Why they were retuned.** A true-negative constant sets the break-even detection quality for a class:
    emitting boxes for class *k* is positive-EV only when `E[IoU_k] > c·(1−p_k)/p_k`, where `p_k` is that
-   class's prevalence in the GRPO pool. At a flat `c = 0.15` and the measured prevalences (excavator 0.361,
-   rebar 0.088, worker_with_white_hard_hat 0.115) the break-evens were **0.27 / 1.55 / 1.15** — two of them
-   above 1.0, i.e. *unreachable*. Suppressing those two classes was strictly dominant regardless of how good
-   the detector became. All three JSON tasks now carry frequency-aware values solving for a 0.5 break-even.
+   class's prevalence in the GRPO pool. At a flat `c = 0.15` and the prevalences from `docs/stats/`
+   (excavator 0.361, rebar 0.088, worker_with_white_hard_hat 0.115) the break-evens were **0.27 / 1.55 / 1.15**
+   — two of them above 1.0, i.e. *unreachable*. Suppressing those two classes was strictly dominant regardless
+   of how good the detector became. All three JSON tasks now carry frequency-aware values solving for a 0.5
+   break-even.
 
-   Likewise `violation_tn_constant: 0.15` made always-asserting rule_1 (EV ≈ 0.391, since rule_1 covers 39%
-   of the pool) beat honest abstention (EV 0.075) by 5×, for a policy that never looks at the image. It is
-   now `0.85`, above the ≈0.78 crossover. The old rationale — "balance the EV against the 91% imbalance" —
-   never described what GRPO sees: `build_grpo_pool.py` builds the pool **50/50**.
+   **Those three object prevalences are still the one unverified input.** They came from co-occurrence
+   matrices, not from the pool, which did not exist when the constants were set. The pool now does exist, so
+   confirm them and re-derive the break-evens before any `object_only` GRPO run — `scripts/dataset_report.py`
+   prints the table directly, and `validate_rewards.py --task object_only --probe --pool-stats` fails the build
+   above 0.75. The **violation** prevalences below no longer need this caveat: they are measured.
+
+   Likewise `violation_tn_constant: 0.15` made always-asserting rule_1 (EV ≈ 0.391, since rule_1 covers
+   **39.1%** of the pool — 677 of 1732, now measured) beat honest abstention (EV 0.075) by 5×, for a policy
+   that never looks at the image. It is now `0.85`, above the ≈0.78 crossover. The old rationale — "balance the
+   EV against the 91% imbalance" — never described what GRPO sees: the pool is **exactly 50/50**, 866
+   violation and 866 safe.
 
    **On affine invariance.** CLAUDE.md used to claim the constant was irrelevant under TRL's
    `scale_rewards='group'`. That holds only for groups taking **two** distinct values. Verified: at 2 values
