@@ -470,11 +470,16 @@ Measure the real incidence before drawing conclusions — the paper cannot answe
 python scripts/validate_rewards.py --sft-stats --task object_only    # needs the dataset; run on ARC
 ```
 
-**Honest limitation:** the mask is a single boolean, so it spreads "contains a rare class" evenly rather than
-guaranteeing each class appears in every batch. At 8% prevalence `worker_with_white_hard_hat` would still be
-absent from ~8% of batches. A per-class guarantee needs a genuinely multi-label sampler, which buys ~8% more
-exposure of one class for real added complexity — and the class-imbalance problem it would address is already
-handled in the reward by `grounding_tn_constant`.
+**Settled by measurement, ARC 2026-09-02.** On the real `object_only` SFT split (6308 rows) the per-class
+starvation is mild: excavator 34.5% prevalence → **0.0%** of batches empty, rebar 12.1% → **1.6%**,
+`worker_with_white_hard_hat` 9.8% → **3.7%**. The single boolean mask is therefore sufficient and the
+multi-label sampler is **not** needed — it would buy at most ~4% more exposure of one class for real added
+complexity. The mask still spreads "contains a rare class" rather than guaranteeing each class per batch; that
+residual is the 1.6–3.7% above.
+
+For contrast, the same figure on the **un-augmented** violation axis is what justifies augmentation:
+rule_4 0.67% → **80.6%** of batches empty, rule_2 → 76.3%, rule_3 → 60.7%. After augmentation all three fall to
+**≈5–6%**.
 
 Per-epoch reshuffling works because `models/sft_trainer.py` forwards HF's `set_epoch` onto the sampler
 (`dataloader.set_epoch = sampler.set_epoch`). `get_train_dataloader()` is called once before the epoch loop, so
@@ -726,11 +731,19 @@ Prompts are defined **only** in `data/prompt_templates.py` — never hardcode on
    of how good the detector became. All three JSON tasks now carry frequency-aware values solving for a 0.5
    break-even.
 
-   **Those three object prevalences are still the one unverified input.** They came from co-occurrence
-   matrices, not from the pool, which did not exist when the constants were set. The pool now does exist, so
-   confirm them and re-derive the break-evens before any `object_only` GRPO run — `scripts/dataset_report.py`
-   prints the table directly, and `validate_rewards.py --task object_only --probe --pool-stats` fails the build
-   above 0.75. The **violation** prevalences below no longer need this caveat: they are measured.
+   **Confirmed against the real pool, ARC 2026-09-02.** The `docs/stats/` estimates were close, so the
+   constants stand unchanged — this was the last unverified input to the reward design and it checks out:
+
+   | class | assumed *p* | measured *p* | *c* | break-even IoU |
+   |---|---|---|---|---|
+   | excavator | 0.361 | **0.3545** | 0.283 | **0.515** |
+   | rebar | 0.088 | **0.0837** | 0.048 | **0.525** |
+   | worker_with_white_hard_hat | 0.115 | **0.1189** | 0.065 | **0.482** |
+
+   All three sit at ≈0.5 and far below the 0.75 ceiling, so every class is worth detecting and none is
+   dominated by suppression. Re-check with `scripts/dataset_report.py` (prints this table) or
+   `validate_rewards.py --task object_only --probe --pool-stats` (fails the build above 0.75) if the pool is
+   ever rebuilt.
 
    Likewise `violation_tn_constant: 0.15` made always-asserting rule_1 (EV ≈ 0.391, since rule_1 covers
    **39.1%** of the pool — 677 of 1732, now measured) beat honest abstention (EV 0.075) by 5×, for a policy
@@ -812,6 +825,17 @@ Parse/schema failures reach the metrics as `None`, are **never** credited rule_0
 - Watch `frac_reward_zero_std`: a recorded run showed 0.53, i.e. over half the unique images per update produced
   identical rewards across all 8 rollouts and contributed no gradient. `reward_format/std` is 0.0 post-SFT
   (saturated, zero gradient contribution) — that's expected, not a bug.
+- **`object_only` has a structural version of that problem, now measured: 50.9% of the GRPO pool (881 of 1732)
+  contains none of the three target classes.** For those images the target is `{"excavator":[],"rebar":[],
+  "worker_with_white_hard_hat":[]}`, so a policy that has learned to abstain scores the true-negative constant
+  on all 8 rollouts — identical rewards, zero advantage, no gradient. That predicts a `frac_reward_zero_std`
+  floor near 0.5 for `object_only` regardless of learning rate, and it lines up with the 0.53 recorded
+  elsewhere. It is a **throughput** problem (about half the rollout compute buys nothing), not a bias one: the
+  images are still valid supervision for *when* to abstain, which is why they are correct to keep in SFT.
+  The lever, if it becomes worth pulling, is pool composition in `build_grpo_pool.py` — the pool is balanced on
+  *violations*, and object presence is a different axis. Read the actual number off the 2b smoke run before
+  changing anything; CLAUDE.md's "do not add a per-task pool" still holds until there is evidence it costs real
+  wall-clock.
 - Pre-warm the `all-MiniLM-L6-v2` cache (`SENTENCE_TRANSFORMERS_HOME`); the caption/reasoning rewards download it
   mid-training otherwise.
 

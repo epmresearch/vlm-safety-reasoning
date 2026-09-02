@@ -18,13 +18,23 @@ These prompts are calibrated against two sources rather than written freehand.
      rules below name *observable* cues (a scaffold, an open trench) instead of metre
      thresholds the model cannot estimate from a single 2D image.
 
-2. The ground-truth text itself, measured over the annotations (9012 caption records,
-   1305 violation reasons):
+2. The ground-truth text itself. Measured per split by `scripts/dataset_report.py` on
+   ARC 2026-09-02 -- and the two splits differ, which an earlier version of this note got
+   wrong by quoting the test figures as if they were the training reference:
 
-   | field   | mean words | median | p90 | sentences |
-   |---------|-----------:|-------:|----:|----------:|
-   | caption |       48.5 |     44 |  90 |       3.6 |
-   | reason  |       13.3 |     12 |  19 |       1.0 |
+   | split          | rows | caption words: mean / median / p10 / p90 / max | sentences |
+   |----------------|-----:|-----------------------------------------------:|----------:|
+   | train (6308)   | 6308 |            55.0 / 54 / 36 / 75 / 134           |      3.02 |
+   | test  (3004)   | 3004 |            48.5 / 44 / 14 / 90 / 163           |      3.58 |
+
+   Reason length varies by rule, all one sentence: rule_1 11.8 words, rule_2 12.1,
+   rule_3 10.1, **rule_4 18.1**.
+
+   Note the train/test shift: training captions are longer and much tighter (p10 36)
+   than test captions (p10 14). That is a property of the dataset, not something a prompt
+   can fix -- and it is a further argument against naming any fixed length, since a model
+   tuned to the training mean is scored against per-image test references that reach as
+   low as 14 words.
 
    `reward_caption` and `reward_reasoning` both multiply their similarity score by a
    Gaussian length penalty, `exp(-0.5*((Lp-Lg)/sigma)^2)`, `sigma = max(0.6*Lg, 5)`.
@@ -34,11 +44,11 @@ These prompts are calibrated against two sources rather than written freehand.
    on the component weighted 0.90 in `caption_only`.
 
    **No prompt states a word count.** The fix for that is brevity and relative framing,
-   not a number. `Lg` in the penalty above is *this image's own* reference length, and
-   those lengths span p10 = 14 words to p90 = 90 -- a close-up of one bucket against a
-   busy site. So a global "about 50 words" is only correct at the mean and is actively
-   wrong at both tails, and how much to say about a given image is exactly what SFT
-   learns from 6308 targets. The prompts therefore say "concise", "facts only" and "let
+   not a number. `Lg` in the penalty above is *this image's own* reference length, and on
+   test those span p10 = 14 words to p90 = 90 -- a close-up of one bucket against a busy
+   site. So a global "about 50 words" is only correct at the mean and is actively wrong at
+   both tails, and how much to say about a given image is exactly what SFT learns from
+   6308 targets. The prompts therefore say "concise", "facts only" and "let
    the detail follow the image" -- which is also how the paper words its own caption
    prompt ("Do not make assumptions, be concise, and describe facts only. Please
    describe with only one paragraph"), so our captioning numbers stay comparable to the
