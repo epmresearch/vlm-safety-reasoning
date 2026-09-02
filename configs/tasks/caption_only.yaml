@@ -27,6 +27,5 @@ sft_dataset_subdir: "datasets/processed"
 # description, without the object/violation JSON the unified response also carries.
 max_new_tokens: 768
 max_completion_length: 768
-max_prompt_length: 2048
 inference_max_seq_length: 2944
 repetition_penalty: 1.0

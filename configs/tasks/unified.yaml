@@ -49,6 +49,9 @@ max_new_tokens: 1024   # single response covers caption + objects + violations
 # desynchronised unified's GRPO budget from its own max_new_tokens above, and
 # nothing would have flagged it. Keep these two numbers equal.
 max_completion_length: 1024
-max_prompt_length: 2048
-inference_max_seq_length: 2816   # NEW. Verified: full sweep of test(3004) prompt-only, max=1519+1000gen+margin=2770
+inference_max_seq_length: 3200   # was 2816. unified carries the longest prompt of the four
+                                 # (caption + 3 object classes + 4 rules ~= 540 text tokens,
+                                 # ~1810 with vision) yet had the second-SMALLEST window, so
+                                 # max_prompt_length = 3200-1024 = 2176 was 1792 and TRUNCATED
+                                 # the prompt. Matched to violations_only.
 repetition_penalty: 1.0   # NEW - locked-in production default per ablation

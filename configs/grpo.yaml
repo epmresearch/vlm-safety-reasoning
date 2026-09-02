@@ -3,9 +3,18 @@
 # reads the pre-built pool (datasets/grpo_pool) unconditionally and never calls
 # data/oversampling.py. Those keys are SFT-only and live in configs/sft.yaml.
 num_generations: 8
-max_prompt_length: 2048        # was 1024 — verified max is 1519 tokens (see unified.yaml comment)
-max_completion_length: 1000
-max_seq_length: 3250           # ADDED — must cover max_prompt + max_completion + margin
+max_prompt_length: 2304        # was 2048. The prompts now carry the paper's rule wording and the
+                               # reason-style guidance, so the worst case (unified) is ~540 text
+                               # tokens + ~1270 vision = ~1810, leaving only 238 of margin at 2048.
+                               # 2304 + max_completion_length 1024 = 3328 <= max_seq_length 3400.
+max_completion_length: 1024    # fallback only — every task YAML overrides this (1024 for
+                               # unified/violations_only, 768 for object_only/caption_only).
+                               # Kept equal to the LARGEST task value so this file's own
+                               # prompt+completion arithmetic reflects the true worst case.
+max_seq_length: 3600           # must cover max_prompt_length + max_completion_length + margin
+                               # (2304 + 1024 = 3328, leaving 272). A LOAD window, not an
+                               # allocation, so raising it costs nothing.
+                               # A LOAD window, not an allocation, so raising it costs nothing.
 learning_rate: 2.0e-6   # was 2.0e-7, which could not move the policy at all.
                         #
                         # Sizing argument, not a guess. Over 108 steps with warmup 0.05 +

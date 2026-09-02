@@ -298,16 +298,25 @@ logs the actual train/val sizes at startup. GRPO, all four tasks: 2 epochs over 
 unique images per update = **108 steps**, `save_steps: 20`. If the first SLURM log line disagrees with the
 expected step count, the config did not merge as expected.
 
-**Live token budgets.** All four fit with margin; `max_new_tokens` is kept equal to `max_completion_length` per
-task, so inference can never truncate an output GRPO trained the policy to produce. Worst case is
-`violations_only`/`unified` at 2048 + 1024 = 3072 against `max_seq_length: 3250`.
+**Live token budgets.** `max_new_tokens` is kept equal to `max_completion_length` per task, so inference can
+never truncate an output GRPO trained the policy to produce. `max_prompt_length` is **shared** — it lives once
+in `grpo.yaml` and is deliberately *not* pinned per task, because it caps the prompt, which is not a per-task
+quantity; only the output length is.
 
-| Task | `max_new_tokens` = `max_completion_length` | GRPO 2048 + completion | Inference window | real prompt 1519 + gen |
-|---|---|---|---|---|
-| `unified` | 1024 | 3072 | 2816 | 2543 |
-| `violations_only` | 1024 | 3072 | 3200 | 2543 |
-| `object_only` | 768 | 2816 | 2688 | 2287 |
-| `caption_only` | 768 | 2816 | 2944 | 2287 |
+Prompt sizes below are text + ~1270 vision tokens at the 1.2 MP cap. They grew when the prompts took on the
+paper's rule wording and the reason-style guidance, which is what forced `max_prompt_length` up to 2304 and
+`max_seq_length` to 3600.
+
+| Task | completion | prompt (text + vision) | GRPO 2304 + completion | inference window | inference prompt cap |
+|---|---|---|---|---|---|
+| `unified` | 1024 | ~540 + 1270 = ~1810 | 3328 | 3200 | 2176 |
+| `violations_only` | 1024 | ~390 + 1270 = ~1660 | 3328 | 3200 | 2176 |
+| `object_only` | 768 | ~265 + 1270 = ~1535 | 3072 | 2688 | 1920 |
+| `caption_only` | 768 | ~215 + 1270 = ~1485 | 3072 | 2944 | 2176 |
+
+Worst case is 3328 against `max_seq_length: 3600`. `unified` carries the longest prompt of the four yet used to
+have the second-*smallest* inference window (2816), so its prompt cap was 1792 against an ~1810-token prompt —
+it would have silently truncated. Its window is now matched to `violations_only`.
 
 A completion that truncates mid-JSON fails the parse, which zeroes **every** reward component — so a
 truncation is indistinguishable from a terrible model. Confirm real target lengths with

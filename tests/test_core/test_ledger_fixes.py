@@ -338,7 +338,12 @@ def test_bug28_unified_declares_its_grpo_budgets():
     cfg = load_task_config("unified")
     assert cfg["max_completion_length"] == cfg["max_new_tokens"], \
         "unified's GRPO completion budget and inference budget must match"
-    assert "max_prompt_length" in cfg
+    # max_prompt_length is deliberately NOT pinned per task: it caps the PROMPT,
+    # which is not a per-task quantity (only the output length is). It lives once
+    # in configs/grpo.yaml. Pinning it in all four task YAMLs duplicated one value
+    # four ways, so raising it in grpo.yaml silently changed nothing.
+    from core.config import load_config
+    assert "max_prompt_length" in load_config(task="unified", training_kind="grpo")
 
 
 @pytest.mark.parametrize("task", ["unified", "violations_only", "object_only", "caption_only"])
@@ -346,7 +351,12 @@ def test_all_tasks_pin_their_own_token_budgets(task):
     from core.config import load_task_config
     cfg = load_task_config(task)
     for key in ("max_new_tokens", "max_completion_length",
-                "max_prompt_length", "inference_max_seq_length"):
+                "inference_max_seq_length"):
         assert key in cfg, f"{task} does not pin {key}"
-    assert cfg["max_prompt_length"] + cfg["max_completion_length"] <= 3250, \
-        f"{task} exceeds the GRPO max_seq_length of 3250"
+    # The prompt cap is shared, so check the real pairing: this task's completion
+    # budget against the shared cap, both read from the merged config.
+    from core.config import load_config
+    g = load_config(task=task, training_kind="grpo")
+    assert g["max_prompt_length"] + cfg["max_completion_length"] <= g["max_seq_length"], (
+        f"{task}: prompt cap {g['max_prompt_length']} + completion "
+        f"{cfg['max_completion_length']} exceeds max_seq_length {g['max_seq_length']}")
