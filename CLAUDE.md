@@ -310,6 +310,18 @@ because SFT trains on one concatenated sequence while GRPO generates prompt and 
 `max_seq_length` was previously passed to `SFTTrainer` as a kwarg it does not accept, so the configured 2048
 was dropped and the real ceiling was `max_length`'s default of **1024** — below the observed 1865 max.
 
+
+**`max_seq_length` is now 2560, not 2048.** The 2048 figure was verified against a full train+val sweep at
+max 1865 tokens with zero truncations — but that sweep used the *old* ~233-token prompt. The rewritten prompts
+are ~520 tokens for `unified`, pushing its worst-case sequence to ~2150, which would have **truncated**
+silently at 2048. It is a truncation ceiling rather than a preallocation, so sequences below it cost nothing
+and only the longest pay; 4096 was in use previously, so 2560 is well inside what already fit.
+
+And the gate that should have caught this was itself blind: `validate_rewards.py --census` compared
+**text-only** length against a cap that governs **text + vision**, printing a note telling the reader to add
+the vision tokens rather than adding them itself — so it could report PASS while targets truncated. It now
+measures the real vision-token count by pushing one image through the processor under the configured pixel
+bounds, adds it, and fails on the true total.
 Two things that regularly trip people up here:
 
 - **`max_completion_length` is per rollout, not per group.** Each of the 8 rollouts gets the full budget; it is

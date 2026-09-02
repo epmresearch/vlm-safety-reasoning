@@ -322,27 +322,68 @@ def census(task, tokenizer_name=None, limit=None):
 
     prompt = get_prompt_for_task(task)
     base = len(tok(SYSTEM_PROMPT + prompt).input_ids)
-    lengths = []
     rows = splits["train"]
-    n = min(limit or len(rows), len(rows))
-    for i in range(n):
-        target = build_target_json(rows[i], task=task)
-        lengths.append(base + len(tok(target).input_ids))
 
-    lengths.sort()
-    p99 = lengths[int(0.99 * (len(lengths) - 1))]
-    print(f"      text-only prompt      {base}")
-    print(f"      min / mean / p99 / max  {lengths[0]} / {sum(lengths)//len(lengths)} / {p99} / {lengths[-1]}")
-    print(f"      SFT max_seq_length      {cap}")
-    _info("NOTE: this excludes vision tokens (~1176-1270 at the 1.2 MP cap). "
-          "Add them for the true sequence length.")
+    # Vision tokens count toward SFTConfig.max_length, which bounds prompt + target as
+    # ONE sequence. An earlier version of this census compared TEXT-ONLY length against
+    # that cap and merely printed a note telling the reader to add the vision tokens
+    # themselves -- so it could print PASS while the real sequence truncated. Measure
+    # them instead: push one real image through the processor under the configured pixel
+    # bounds and read the grid.
+    vision = None
+    try:
+        from transformers import AutoProcessor
+        proc = AutoProcessor.from_pretrained(name)
+        ip = getattr(proc, "image_processor", None)
+        if ip is not None:
+            lo = sft_cfg.get("image_min_pixels")
+            hi = sft_cfg.get("image_max_pixels")
+            if lo and hi:
+                ip.size = {"shortest_edge": lo, "longest_edge": hi}
+                for attr, val in (("min_pixels", lo), ("max_pixels", hi)):
+                    if hasattr(ip, attr):
+                        setattr(ip, attr, val)
+            out = ip(images=[rows[0]["image"]], return_tensors="pt")
+            grid = out["image_grid_thw"][0]
+            merge = getattr(ip, "merge_size", 2) or 2
+            vision = int(int(grid[0]) * int(grid[1]) * int(grid[2]) // (merge * merge))
+    except Exception as e:
+        _info(f"could not measure vision tokens ({type(e).__name__}) — falling back to 1270")
+
+    measured = vision is not None
+    if vision is None:
+        vision = 1270  # documented worst case at the 1.2 MP cap
+
+    # Column-wise access so the image is decoded only for the one probe above.
+    cols = [c for c in rows.column_names if c != "image"]
+    text_only = []
+    n = min(limit or len(rows), len(rows))
+    for row in rows.select_columns(cols).select(range(n)):
+        text_only.append(base + len(tok(build_target_json(row, task=task)).input_ids))
+
+    text_only.sort()
+    totals = [t + vision for t in text_only]
+    p99 = totals[int(0.99 * (len(totals) - 1))]
+    print(f"      text-only prompt        {base}")
+    print(f"      vision tokens           {vision}"
+          f"{'  (measured)' if measured else '  (assumed worst case)'}")
+    print(f"      text-only min/mean/max  {text_only[0]} / "
+          f"{sum(text_only)//len(text_only)} / {text_only[-1]}")
+    print(f"      TRUE  min/p99/max       {totals[0]} / {p99} / {totals[-1]}"
+          f"   {DIM}(text + vision){RESET}")
+    print(f"      SFTConfig.max_length    {cap}")
 
     failures = []
-    if lengths[-1] >= cap:
-        failures.append(f"{task}: longest text sequence {lengths[-1]} >= max_seq_length {cap} — targets truncate")
+    if totals[-1] >= cap:
+        failures.append(
+            f"{task}: longest sequence {totals[-1]} (text {text_only[-1]} + vision {vision}) "
+            f">= max_length {cap} — targets TRUNCATE. Raise sft.yaml max_seq_length, or "
+            f"shorten the prompt."
+        )
         _fail(failures[-1])
     else:
-        _ok(f"{task}: longest text sequence {lengths[-1]} < {cap} ({cap - lengths[-1]} tokens of margin)")
+        _ok(f"{task}: longest sequence {totals[-1]} < {cap} "
+            f"({cap - totals[-1]} tokens of margin, vision included)")
     return failures
 
 

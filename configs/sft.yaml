@@ -3,7 +3,15 @@ num_train_epochs: 2    # 8198 augmented rows / bs 32 = 256 steps/epoch -> 512 to
 learning_rate: 1.0e-4
 warmup_ratio: 0.10
 weight_decay: 0.01
-max_seq_length: 2048   # was 4096. Verified: full sweep of train(6308)+val(701), max=1865, 0 truncations
+max_seq_length: 2560   # was 2048, and before that 4096. 2048 was verified against a full sweep of
+                       # train(6308)+val(701) at max=1865 with 0 truncations -- but that sweep used the
+                       # OLD ~233-token prompt. The rewritten prompts are ~520 tokens for unified, which
+                       # pushes its worst-case sequence to ~2150 and would TRUNCATE at 2048. This is a
+                       # truncation ceiling, not a preallocation, so sequences below it cost nothing and
+                       # only the longest pay -- and 4096 was previously in use, so 2560 is well inside
+                       # what already fit. Confirm with: python scripts/validate_rewards.py --census
+                       # (which now adds the measured VISION tokens before comparing; it used to compare
+                       # text-only against this cap and could pass while truncating).
 load_in_4bit: true
 
 optim: "adamw_8bit"
