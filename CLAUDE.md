@@ -595,11 +595,24 @@ copies, and precedence is rule_4 > rule_2 > rule_3, so an image tripping several
 its rarest rule. Augmented rows are identified *only* by an `_aug<N>` suffix on `image_id`; there is no boolean
 column.
 
-Expected from the measured train split: `42×16 + 53×12 + 98×6 = 1896` extra rows, minus a handful lost to rule
-overlap, giving 6308 → **8198**. `augment_manifest.json` records the realised counts; check
-`train_by_rule_after` puts rules 2/3/4 in the 650–740 band against rule_1's ~677, and that `val_rows` and
-`test_rows` are unchanged — augmentation must touch **train only**, which is what keeps all four tasks scored on
-byte-identical test images.
+**Realised on ARC 2026-09-02** (`augment_manifest.json`), and it decomposes exactly:
+
+| | rule_1 | rule_2 | rule_3 | rule_4 | safe | total |
+|---|---|---|---|---|---|---|
+| before | 609 | 53 | 98 | 42 | 5528 | **6308** |
+| after | 871 | 689 | 696 | 714 | 5528 | **8198** |
+
+`42×17 = 714` for rule_4, `53×13 = 689` for rule_2, and `97×7 + 1×17 = 696` for rule_3 — that last term is the
+one rule_3 image which also trips rule_4 and so was duplicated under the rarer rule. Extra copies therefore come
+to `42×16 + 53×12 + 97×6 =` **1890**, exactly the `rows_generated` the manifest reports, and `6308 + 1890 =
+8198` → **512 SFT steps**.
+
+The rebalancing is the point: the rule spread collapses from **14.5:1** (609 vs 42) to **1.26:1** (871 vs 689),
+and the safe share falls from 87.6% to 67.4%. rule_1 rises 609 → 871 only because rule_1 images that *also* trip
+a rarer rule get duplicated under it.
+
+`val_rows: 701` and `test_rows: 3004` are unchanged, which is the invariant that matters — augmentation touches
+**train only**, so all four tasks are still scored on byte-identical test images.
 
 `build_grpo_pool.py` composes: the entire val split + every train violation image + enough random train safe
 images to reach ~50/50. Measured on the real build: all **701** val rows + all **780** train violation images +
