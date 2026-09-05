@@ -160,20 +160,49 @@ def test_grpo_lora_shape_is_explicit_not_inherited():
 
 
 # ---------------------------------------------------------------------------
-# B2 — the GRES type must match the memory profile the config is tuned for
+# B2 — the GRES type must match each stage's memory profile
 # ---------------------------------------------------------------------------
 
+# GPU policy. The gpu-h100 partition holds BOTH card types -- four H100 nodes and one
+# H200 node (egh2, 2 GPUs) -- so the GRES *type* is what actually selects the hardware,
+# and the partition must never change.
+#
+# Only GRPO needs the H200: configs/grpo.yaml is tuned for its 141 GB
+# (per_device_train_batch_size 16, steps_per_generation 4, no image_max_pixels cap), and
+# its own comment records batch 16 OOM'ing at 92.97/93.12 GiB on a 93 GB H100. The other
+# three stages are indifferent to the card, so pinning them to the plentiful H100s keeps
+# them from queueing behind the single H200 node.
+STAGE_GRES = {
+    "hpc_baseline.sh": "gpu:h100:1",
+    "hpc_sft.sh": "gpu:h100:1",
+    "hpc_merge_sft.sh": "gpu:h100:1",
+    "hpc_grpo.sh": "gpu:h200:1",
+}
+
+
 @pytest.mark.parametrize("name", PHASE_SCRIPTS)
-def test_b2_scripts_request_h200_gres(name):
-    """configs/grpo.yaml is tuned for the H200's 141 GB — its own comment records
-    that per_device_train_batch_size 16 OOM'd at 92.97/93.12 GiB on a 93 GB H100.
-    The gpu-h100 partition contains both card types, so the GRES type is what
-    actually selects the hardware."""
+def test_b2_each_stage_requests_the_right_gpu(name):
     text = (SCRIPTS / name).read_text(encoding="utf-8")
-    assert "--gres=gpu:h200:1" in text, f"{name} must request an H200"
-    assert "--gres=gpu:h100:1" not in text, f"{name} still requests an H100"
+    want = STAGE_GRES[name]
+    other = "gpu:h100:1" if want == "gpu:h200:1" else "gpu:h200:1"
+
+    assert f"--gres={want}" in text, f"{name} must request {want}"
+    assert f"#SBATCH --gres={other}" not in text, (
+        f"{name} still carries an #SBATCH request for {other}"
+    )
     # The partition is correct and must not change: it holds both card types.
     assert "--partition=gpu-h100" in text, f"{name} must stay on the gpu-h100 partition"
+
+
+def test_b2_only_grpo_asks_for_the_scarce_h200():
+    """Guards the policy itself, not one script: if a future edit moves SFT onto the H200,
+    the whole schedule serialises behind two GPUs again and nothing else would notice."""
+    on_h200 = [n for n in PHASE_SCRIPTS
+               if "#SBATCH --gres=gpu:h200:1" in (SCRIPTS / n).read_text(encoding="utf-8")]
+    assert on_h200 == ["hpc_grpo.sh"], (
+        f"exactly one stage should request the H200, got {on_h200}. Only GRPO's memory "
+        "profile requires 141 GB; every other stage should use the plentiful H100s."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -449,13 +478,14 @@ def test_census_derives_the_vision_ceiling_rather_than_sampling_one_image():
 
 
 def test_submitter_can_override_gres_for_every_stage():
-    """The partition holds one H200 node against four H100 nodes, and every hpc_*.sh
-    hardcodes --gres=gpu:h200:1, so without an override the whole schedule serialises
-    behind two GPUs. --gres beats the in-file directive exactly as --mem and --time do.
+    """--gres is an ESCAPE HATCH, not the normal mechanism. The per-stage policy lives in
+    the scripts (see STAGE_GRES): H100 for baseline/sft/merge, H200 for GRPO. This flag
+    exists to force every stage onto one card type for a debug run, so it deliberately
+    applies to all four and overrides both halves of that policy -- including pulling
+    GRPO off the H200, which only makes sense alongside an image_max_pixels cap.
 
-    Asserts the flag reaches ALL FOUR stages: a partial override would split one
-    pipeline across two GPU types, where the merge → GRPO handoff is the stage that
-    cares (grpo.yaml's memory profile is tuned for 141 GB).
+    Default behaviour must stay untouched: no --gres on the sbatch line at all, so each
+    script's own directive governs.
     """
     import subprocess
 

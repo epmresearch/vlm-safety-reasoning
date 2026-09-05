@@ -5,7 +5,12 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=150G
-#SBATCH --gres=gpu:h200:1
+#SBATCH --gres=gpu:h100:1
+# GPU POLICY: baseline / sft / merge run on H100, GRPO runs on H200.
+# The gpu-h100 partition holds four H100 nodes against ONE H200 node (egh2, 2 GPUs), so
+# pinning the cheap stages to H100 keeps them out of the queue behind GRPO. This stage is
+# indifferent to the card -- only GRPO's memory profile is tuned for 141 GB (see
+# hpc_grpo.sh). Overridable per-submission with submit_pipeline.py --gres.
 # NOTE: partition gpu-h100 contains BOTH H100 (mgh1,mgh3-5) and H200 (egh2) nodes.
 # The GRES type is what actually selects the card. configs/grpo.yaml is tuned for
 # the H200's 141 GB (per_device_train_batch_size: 16 is documented as OOMing at

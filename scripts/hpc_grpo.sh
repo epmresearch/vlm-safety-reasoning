@@ -6,6 +6,12 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=250G
 #SBATCH --gres=gpu:h200:1
+# GPU POLICY: GRPO is the ONE stage that requires the H200. configs/grpo.yaml is tuned
+# for its 141 GB -- per_device_train_batch_size 16, steps_per_generation 4, and no
+# image_max_pixels cap. On a 93 GB H100 that profile OOMs, and the failing allocation is
+# a shape-dependent vision buffer, so halving the batch does NOT help; the fix would be
+# re-adding image_max_pixels: 602112, which changes what the model sees and makes runs
+# non-comparable. So this stage waits for egh2 rather than degrading the config.
 # NOTE: partition gpu-h100 contains BOTH H100 (mgh1,mgh3-5) and H200 (egh2) nodes.
 # The GRES type is what actually selects the card. configs/grpo.yaml is tuned for
 # the H200's 141 GB (per_device_train_batch_size: 16 is documented as OOMing at

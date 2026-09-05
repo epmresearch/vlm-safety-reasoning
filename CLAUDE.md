@@ -62,7 +62,7 @@ SLURM CRLF errors — don't defeat it from Windows.
 ### Tests
 
 ```powershell
-python -m pytest tests/ -v                                       # all (~504 tests, no GPU needed)
+python -m pytest tests/ -v                                       # all (~505 tests, no GPU needed)
 python -m pytest tests/test_core -v                               # task registry + name-isolation proof
 python -m pytest tests/test_rewards/test_unified_reward.py -v     # single file
 python -m pytest tests/test_evaluation/test_output_parser.py::test_strip_fences -v   # single test
@@ -128,21 +128,28 @@ names (`vlm-sft-oo`) and log files (`sft_oo_%j.out`) — the same names as befor
 On Windows these submitters degrade gracefully — `sbatch` is missing, so they print the exact commands with
 `DUMMY_JOB_ID`. Useful as a dry run, and the fastest way to eyeball that two tasks' paths do not overlap.
 
-**Choosing the GPU: `--gres`.** Every `hpc_*.sh` hardcodes `--gres=gpu:h200:1`, because `grpo.yaml`'s memory
-profile (`per_device_train_batch_size: 16`, no `image_max_pixels` cap) is tuned for the H200's 141 GB. But
-`gpu-h100` holds **one** H200 node (`egh2`, 2 GPUs) against four H100 nodes, so leaving it at the default
-serialises every job behind those two GPUs. `--gres` overrides it for all four stages at once, the same way
-`--mem` and `--time` already beat the in-file directives:
+**GPU policy: H100 for everything except GRPO.** The `gpu-h100` partition holds **both** card types — four
+H100 nodes against **one** H200 node (`egh2`, 2 GPUs) — so the GRES *type*, not the partition, selects the
+hardware.
 
-```bash
-python scripts/submit_pipeline.py --task caption_only --tiers 2b --version v1 --gres gpu:h100:1
-```
+| stage | GRES | why |
+|---|---|---|
+| `hpc_baseline.sh` | `gpu:h100:1` | indifferent to the card; H100s are plentiful |
+| `hpc_sft.sh` | `gpu:h100:1` | same |
+| `hpc_merge_sft.sh` | `gpu:h100:1` | same |
+| **`hpc_grpo.sh`** | **`gpu:h200:1`** | `grpo.yaml` is tuned for 141 GB |
 
-`baseline`, `sft` and `merge` are unaffected by the choice. **GRPO is not**: on a 93 GB H100 the documented fix
-is to re-add `image_max_pixels: 602112` to `configs/grpo.yaml` — and note that the failing allocation is a
-shape-dependent vision buffer, so *halving the batch size does not help*. `tests/test_core/test_blocker_fixes.py`
-asserts the override reaches all four stages, since a partial one would split a single pipeline across two GPU
-types.
+Only GRPO needs the H200. Its config (`per_device_train_batch_size: 16`, `steps_per_generation: 4`, **no**
+`image_max_pixels` cap) OOM'd at 92.97/93.12 GiB on a 93 GB H100, and the failing allocation is a
+shape-dependent *vision* buffer, so halving the batch does **not** help — the only H100 fix is re-adding
+`image_max_pixels: 602112`, which changes what the model sees and makes runs non-comparable. So GRPO waits for
+`egh2` rather than degrading its config, while the three cheap stages stay out of that queue.
+
+`submit_pipeline.py --gres gpu:h100:1` is an **escape hatch**, not the normal path: it forces *every* stage onto
+one card type for a debug run, GRPO included. Without it no `--gres` reaches the `sbatch` line at all and each
+script's own directive governs. `tests/test_core/test_blocker_fixes.py` pins the per-stage policy and asserts
+**exactly one** stage asks for the scarce H200 — if a future edit moves SFT onto it, the whole schedule
+serialises behind two GPUs and nothing else would notice.
 
 ### Individual stages
 
