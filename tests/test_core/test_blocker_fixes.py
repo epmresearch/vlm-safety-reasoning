@@ -378,3 +378,60 @@ def test_b6_ensure_java8_active_is_fully_guarded():
     assert src.count("try:") >= 3, "each subprocess call must be guarded"
     assert 'shutil.which("java")' in src
     assert 'shutil.which("update-alternatives")' in src
+
+
+# ---------------------------------------------------------------------------
+# Token budgets: the cap must cover TEXT + VISION, not text alone
+# ---------------------------------------------------------------------------
+
+# Each vision token covers patch_size^2 * merge_size^2 pixels (14^2 * 2^2 = 784 for
+# Qwen3-VL), and apply_pixel_bounds caps post-resize area at image_max_pixels, so the
+# vision side of a sequence can never exceed image_max_pixels / 784 tokens.
+_VISION_TOKEN_PIXELS = 14 * 14 * 2 * 2
+
+
+def test_sft_max_length_covers_text_plus_vision():
+    """SFTConfig.max_length bounds prompt + target + VISION as one sequence.
+
+    This has been wrong twice, both times by comparing the wrong quantity against it:
+
+      * 2048 was verified by a full train+val sweep at max 1865 tokens -- but with the
+        OLD ~233-token prompt. The rewritten prompts pushed unified's text side to 1110.
+      * 2560 was then set against a SAMPLED vision-token count. Sampling is not a
+        ceiling: two dataset roots measured 209 and 1064 tokens from their first rows.
+
+    The ceiling is analytic, so assert against it rather than against any measurement.
+    1110 is unified's measured text max (ARC 2026-09-05, train+val, 8198+701 rows).
+    """
+    from core.config import load_config
+
+    cfg = load_config(task="unified", training_kind="sft")
+    cap = cfg["max_seq_length"]
+    vision = cfg["image_max_pixels"] // _VISION_TOKEN_PIXELS
+    text_max = 1110
+
+    assert vision + text_max < cap, (
+        f"worst-case sequence {text_max} (text) + {vision} (vision, from image_max_pixels "
+        f"{cfg['image_max_pixels']}) = {text_max + vision} does not fit in max_seq_length "
+        f"{cap}. Raise the cap, shorten the prompt, or lower image_max_pixels."
+    )
+
+
+def test_census_derives_the_vision_ceiling_rather_than_sampling_one_image():
+    """The census must not pair a max text length with a single image's vision count.
+
+    Guarding the approach, not the number: a future edit that goes back to sampling
+    would silently restore a gate that passes while sequences truncate.
+    """
+    src = (REPO / "scripts" / "validate_rewards.py").read_text(encoding="utf-8")
+    census = src[src.index("def census("):src.index("def pool_stats(")]
+
+    assert "image_max_pixels" in census, (
+        "census must derive its vision-token ceiling from image_max_pixels"
+    )
+    assert "WORST CASE" in census, "census must report the worst case it checks"
+    # The sampled probe may stay for context, but must not be what the verdict uses.
+    verdict = census[census.index("failures = []"):]
+    assert "sampled" not in verdict, (
+        "the pass/fail branch must use the analytic ceiling, not the sampled image"
+    )

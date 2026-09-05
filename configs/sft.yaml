@@ -3,15 +3,22 @@ num_train_epochs: 2    # 8198 augmented rows / bs 32 = 256 steps/epoch -> 512 to
 learning_rate: 1.0e-4
 warmup_ratio: 0.10
 weight_decay: 0.01
-max_seq_length: 2560   # was 2048, and before that 4096. 2048 was verified against a full sweep of
-                       # train(6308)+val(701) at max=1865 with 0 truncations -- but that sweep used the
-                       # OLD ~233-token prompt. The rewritten prompts are ~520 tokens for unified, which
-                       # pushes its worst-case sequence to ~2150 and would TRUNCATE at 2048. This is a
-                       # truncation ceiling, not a preallocation, so sequences below it cost nothing and
-                       # only the longest pay -- and 4096 was previously in use, so 2560 is well inside
-                       # what already fit. Confirm with: python scripts/validate_rewards.py --census
-                       # (which now adds the measured VISION tokens before comparing; it used to compare
-                       # text-only against this cap and could pass while truncating).
+max_seq_length: 3072   # Bounds prompt + target + VISION as ONE sequence (SFTConfig.max_length).
+                       # History, because two earlier values were both wrong for the same reason:
+                       #   4096 -> 2048: verified by a full train+val sweep at max 1865 tokens, but
+                       #                 with the OLD ~233-token prompt.
+                       #   2048 -> 2560: the rewritten prompts are ~605 tokens for unified, so the
+                       #                 text side alone grew to 1110.
+                       #   2560 -> 3072: 2560 was still set against a SAMPLED vision-token count.
+                       #                 The real ceiling is analytic: apply_pixel_bounds caps area
+                       #                 at image_max_pixels 1204224, and each output token covers
+                       #                 patch^2 * merge^2 = 784 px, so vision can reach
+                       #                 1204224/784 = 1536 tokens. Worst case for unified is
+                       #                 1110 + 1536 = 2646, which OVERFLOWS 2560.
+                       # 3072 leaves 426 tokens of margin. This is a truncation ceiling, not a
+                       # preallocation -- batches pad to the longest sequence in the batch, not to
+                       # this -- so raising it costs nothing and 4096 was previously in use.
+                       # Confirm with: python scripts/validate_rewards.py --census
 load_in_4bit: true
 
 optim: "adamw_8bit"

@@ -325,65 +325,78 @@ def census(task, tokenizer_name=None, limit=None):
     rows = splits["train"]
 
     # Vision tokens count toward SFTConfig.max_length, which bounds prompt + target as
-    # ONE sequence. An earlier version of this census compared TEXT-ONLY length against
-    # that cap and merely printed a note telling the reader to add the vision tokens
-    # themselves -- so it could print PASS while the real sequence truncated. Measure
-    # them instead: push one real image through the processor under the configured pixel
-    # bounds and read the grid.
-    vision = None
+    # ONE sequence, so the census has to add them before comparing against the cap.
+    #
+    # Two earlier versions of this got it wrong, both by comparing the wrong quantity:
+    #   1. text-only length vs the cap, with a printed note telling the reader to add
+    #      the vision tokens themselves -- so it passed while sequences truncated;
+    #   2. max text length + the vision count of ONE SAMPLED IMAGE. Images vary hugely:
+    #      two dataset roots measured 209 and 1064 tokens from their respective first
+    #      rows. A sample of one is not a ceiling.
+    #
+    # The ceiling is analytic and guaranteed by the pixel cap, so derive it rather than
+    # sampling. Every output token covers patch_size^2 * merge_size^2 pixels (784 for
+    # Qwen3-VL at 14/2), and apply_pixel_bounds caps post-resize area at image_max_pixels,
+    # so vision tokens can never exceed image_max_pixels / 784.
+    patch, merge, tok_px = 14, 2, 14 * 14 * 2 * 2
+    sampled = None
     try:
         from transformers import AutoProcessor
         proc = AutoProcessor.from_pretrained(name)
         ip = getattr(proc, "image_processor", None)
         if ip is not None:
-            lo = sft_cfg.get("image_min_pixels")
-            hi = sft_cfg.get("image_max_pixels")
-            if lo and hi:
-                ip.size = {"shortest_edge": lo, "longest_edge": hi}
-                for attr, val in (("min_pixels", lo), ("max_pixels", hi)):
-                    if hasattr(ip, attr):
-                        setattr(ip, attr, val)
+            patch = int(getattr(ip, "patch_size", patch) or patch)
+            merge = int(getattr(ip, "merge_size", merge) or merge)
+            tok_px = patch * patch * merge * merge
             out = ip(images=[rows[0]["image"]], return_tensors="pt")
-            grid = out["image_grid_thw"][0]
-            merge = getattr(ip, "merge_size", 2) or 2
-            vision = int(int(grid[0]) * int(grid[1]) * int(grid[2]) // (merge * merge))
+            g = out["image_grid_thw"][0]
+            sampled = int(int(g[0]) * int(g[1]) * int(g[2]) // (merge * merge))
     except Exception as e:
-        _info(f"could not measure vision tokens ({type(e).__name__}) — falling back to 1270")
+        _info(f"processor unavailable ({type(e).__name__}) — using default patch/merge geometry")
 
-    measured = vision is not None
-    if vision is None:
-        vision = 1270  # documented worst case at the 1.2 MP cap
+    hi = sft_cfg.get("image_max_pixels")
+    if hi:
+        vision = int(hi) // tok_px
+        vision_src = f"ceiling from image_max_pixels {hi} / {tok_px}"
+    else:
+        vision = 1536
+        vision_src = "no image_max_pixels configured — assuming 1536"
 
-    # Column-wise access so the image is decoded only for the one probe above.
-    cols = [c for c in rows.column_names if c != "image"]
+    # Column-wise access so the image is decoded only for the one probe above. Scan val
+    # too: the trainer truncates eval sequences at the same ceiling.
     text_only = []
-    n = min(limit or len(rows), len(rows))
-    for row in rows.select_columns(cols).select(range(n)):
-        text_only.append(base + len(tok(build_target_json(row, task=task)).input_ids))
+    for split_name in ("train", "val"):
+        if split_name not in splits:
+            continue
+        sp = splits[split_name]
+        cols = [c for c in sp.column_names if c != "image"]
+        k = min(limit or len(sp), len(sp))
+        for row in sp.select_columns(cols).select(range(k)):
+            text_only.append(base + len(tok(build_target_json(row, task=task)).input_ids))
 
     text_only.sort()
-    totals = [t + vision for t in text_only]
-    p99 = totals[int(0.99 * (len(totals) - 1))]
+    worst = text_only[-1] + vision
     print(f"      text-only prompt        {base}")
-    print(f"      vision tokens           {vision}"
-          f"{'  (measured)' if measured else '  (assumed worst case)'}")
+    print(f"      vision tokens           {vision}   {DIM}({vision_src}){RESET}")
+    if sampled is not None:
+        print(f"      {DIM}one sampled image       {sampled}  — for reference only; "
+              f"images vary, so this is NOT the ceiling{RESET}")
     print(f"      text-only min/mean/max  {text_only[0]} / "
-          f"{sum(text_only)//len(text_only)} / {text_only[-1]}")
-    print(f"      TRUE  min/p99/max       {totals[0]} / {p99} / {totals[-1]}"
-          f"   {DIM}(text + vision){RESET}")
+          f"{sum(text_only)//len(text_only)} / {text_only[-1]}   "
+          f"{DIM}({len(text_only)} rows, train+val){RESET}")
+    print(f"      WORST CASE              {text_only[-1]} + {vision} = {worst}")
     print(f"      SFTConfig.max_length    {cap}")
 
     failures = []
-    if totals[-1] >= cap:
+    if worst >= cap:
         failures.append(
-            f"{task}: longest sequence {totals[-1]} (text {text_only[-1]} + vision {vision}) "
-            f">= max_length {cap} — targets TRUNCATE. Raise sft.yaml max_seq_length, or "
-            f"shorten the prompt."
+            f"{task}: worst-case sequence {worst} (text {text_only[-1]} + vision {vision}) "
+            f">= max_length {cap} — targets TRUNCATE. Raise sft.yaml max_seq_length, "
+            f"shorten the prompt, or lower image_max_pixels."
         )
         _fail(failures[-1])
     else:
-        _ok(f"{task}: longest sequence {totals[-1]} < {cap} "
-            f"({cap - totals[-1]} tokens of margin, vision included)")
+        _ok(f"{task}: worst case {worst} < {cap} ({cap - worst} tokens of margin)")
     return failures
 
 

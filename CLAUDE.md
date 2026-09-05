@@ -62,7 +62,7 @@ SLURM CRLF errors — don't defeat it from Windows.
 ### Tests
 
 ```powershell
-python -m pytest tests/ -v                                       # all (~501 tests, no GPU needed)
+python -m pytest tests/ -v                                       # all (~503 tests, no GPU needed)
 python -m pytest tests/test_core -v                               # task registry + name-isolation proof
 python -m pytest tests/test_rewards/test_unified_reward.py -v     # single file
 python -m pytest tests/test_evaluation/test_output_parser.py::test_strip_fences -v   # single test
@@ -311,17 +311,25 @@ because SFT trains on one concatenated sequence while GRPO generates prompt and 
 was dropped and the real ceiling was `max_length`'s default of **1024** — below the observed 1865 max.
 
 
-**`max_seq_length` is now 2560, not 2048.** The 2048 figure was verified against a full train+val sweep at
-max 1865 tokens with zero truncations — but that sweep used the *old* ~233-token prompt. The rewritten prompts
-are ~520 tokens for `unified`, pushing its worst-case sequence to ~2150, which would have **truncated**
-silently at 2048. It is a truncation ceiling rather than a preallocation, so sequences below it cost nothing
-and only the longest pay; 4096 was in use previously, so 2560 is well inside what already fit.
+**`max_seq_length` is 3072, and it has been wrong twice — both times by comparing the wrong quantity.**
+It bounds prompt + target + **vision** as one sequence, and the vision side has an *analytic* ceiling: every
+output token covers `patch² × merge² = 784` pixels, and `apply_pixel_bounds` caps post-resize area at
+`image_max_pixels`, so vision can reach `1204224 / 784 =` **1536 tokens**.
 
-And the gate that should have caught this was itself blind: `validate_rewards.py --census` compared
-**text-only** length against a cap that governs **text + vision**, printing a note telling the reader to add
-the vision tokens rather than adding them itself — so it could report PASS while targets truncated. It now
-measures the real vision-token count by pushing one image through the processor under the configured pixel
-bounds, adds it, and fails on the true total.
+| value | set against | why it was wrong |
+|---|---|---|
+| 2048 | a full train+val sweep, max 1865 | that sweep used the **old ~233-token prompt** |
+| 2560 | max text + one *sampled* image's vision count | a sample is not a ceiling — two roots measured **209** and **1064** tokens from their first rows |
+| **3072** | max text + the **1536** ceiling | `unified` worst case is `1110 + 1536 = 2646`; 426 tokens of margin |
+
+Measured on ARC 2026-09-05 (train+val, text-only max): `unified` 1110, `object_only` 670, `violations_only`
+648, `caption_only` 301. It is a truncation ceiling, not a preallocation — batches pad to the longest sequence
+*in the batch* — so raising it costs nothing, and 4096 was previously in use.
+
+`validate_rewards.py --census` now derives that ceiling instead of sampling, scans train **and** val, and fails
+on the true worst case. `tests/test_core/test_blocker_fixes.py` pins both the arithmetic and the approach, so a
+future edit cannot go back to sampling.
+
 Two things that regularly trip people up here:
 
 - **`max_completion_length` is per rollout, not per group.** Each of the 8 rollouts gets the full budget; it is
@@ -330,8 +338,7 @@ Two things that regularly trip people up here:
   long. Its real job is bounding the damage from a degenerate repeating generation.
 - **Vision tokens count inside `max_prompt_length`.** The `{"type": "image"}` placeholder expands to ~1176–1270
   real tokens at the 1.2 MP cap, which is why the measured worst-case prompt is **1519** tokens (~233 text +
-  ~1270 vision), not ~233. `scripts/validate_rewards.py --census` measures **text only** and says so — add the
-  vision tokens before comparing any census number to a ceiling.
+  ~1270 vision), not ~233. `validate_rewards.py --census` adds this ceiling automatically now; it used to report text only.
 
 `run_grpo` additionally mutates `sft_cfg` in place (`max_seq_length`, `load_in_4bit`, gradient checkpointing,
 pixel bounds) — **reading `configs/sft.yaml` will not tell you what GRPO actually loaded.** Read the
