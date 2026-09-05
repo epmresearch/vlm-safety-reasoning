@@ -5,7 +5,9 @@ mis-trained a model. They are pinned here because every one of them was invisibl
 in normal operation: the code ran, produced plausible output, and was wrong.
 """
 import inspect
+import os
 import pathlib
+import sys
 import re
 
 import pytest
@@ -443,4 +445,30 @@ def test_census_derives_the_vision_ceiling_rather_than_sampling_one_image():
     verdict = census[census.index("failures = []"):]
     assert "sampled" not in verdict, (
         "the pass/fail branch must use the analytic ceiling, not the sampled image"
+    )
+
+
+def test_submitter_can_override_gres_for_every_stage():
+    """The partition holds one H200 node against four H100 nodes, and every hpc_*.sh
+    hardcodes --gres=gpu:h200:1, so without an override the whole schedule serialises
+    behind two GPUs. --gres beats the in-file directive exactly as --mem and --time do.
+
+    Asserts the flag reaches ALL FOUR stages: a partial override would split one
+    pipeline across two GPU types, where the merge → GRPO handoff is the stage that
+    cares (grpo.yaml's memory profile is tuned for 141 GB).
+    """
+    import subprocess
+
+    base = [sys.executable, "scripts/submit_pipeline.py", "--task", "caption_only",
+            "--tiers", "2b", "--version", "v1", "--skip-preload"]
+    env = {**os.environ, "PYTHONPATH": str(REPO)}
+
+    plain = subprocess.run(base, cwd=REPO, capture_output=True, text=True, env=env).stdout
+    over = subprocess.run(base + ["--gres", "gpu:h100:1"], cwd=REPO,
+                          capture_output=True, text=True, env=env).stdout
+
+    assert plain.count("Running: sbatch") == 4, "expected 4 submissions"
+    assert "--gres" not in plain, "default must leave the in-file gres alone"
+    assert over.count("--gres=gpu:h100:1") == 4, (
+        "every stage must carry the override, or one pipeline spans two GPU types"
     )

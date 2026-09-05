@@ -74,7 +74,7 @@ PHASE_SCRIPTS = {
 
 
 def submit_job(script_path, args, dependencies=None, mem=None, time=None,
-               job_name=None, log_stem=None):
+               job_name=None, log_stem=None, gres=None):
     cmd = ["sbatch"]
 
     if dependencies:
@@ -87,6 +87,14 @@ def submit_job(script_path, args, dependencies=None, mem=None, time=None,
 
     if time:
         cmd.append(f"--time={time}")
+
+    # Every hpc_*.sh hardcodes --gres=gpu:h200:1 because grpo.yaml's memory profile
+    # (per_device_train_batch_size 16, no image_max_pixels cap) is tuned for the
+    # H200's 141 GB. But the partition holds one H200 node against four H100 nodes,
+    # so everything serialises behind two GPUs. Overriding here beats the in-file
+    # directive, exactly as --mem and --time already do.
+    if gres:
+        cmd.append(f"--gres={gres}")
 
     # Command-line --job-name / --output / --error beat the in-file #SBATCH
     # directives, which is how one generic script yields per-task job names and
@@ -153,6 +161,9 @@ def build_parser(task_default=None):
     )
     parser.add_argument("--tiers", nargs="+", default=["2b", "4b", "8b"], help="Model tiers to run")
     parser.add_argument(
+        "--gres", default=None,
+        help="Override the GPU request for every stage, e.g. gpu:h100:1. The scripts default to gpu:h200:1; on an H100 (93 GB) GRPO also needs image_max_pixels: 602112 in configs/grpo.yaml.")
+    parser.add_argument(
         "--version", required=True,
         help="Run version tag (e.g. v1, v2). Stamped into every variant name this "
              "pipeline produces (baseline/SFT/merge/GRPO) — the only thing you need "
@@ -167,7 +178,7 @@ def build_parser(task_default=None):
     return parser
 
 
-def run(task: str, tiers, version: str, skip_preload: bool = False):
+def run(task: str, tiers, version: str, skip_preload: bool = False, gres=None):
     # run_inference.py reverse-engineers the merged-SFT base from the variant name using
     # the regex -(v\d+)(?:_[^-]*)?$. A free-form tag like "v5b" or "2025-08" yields an
     # empty version, a wrong merged path, and a SystemExit — but only AFTER GRPO training
@@ -216,6 +227,7 @@ def run(task: str, tiers, version: str, skip_preload: bool = False):
             time=TIME_CONFIG["baseline"],
             job_name=slurm_job_name(task, "baseline"),
             log_stem=slurm_log_stem(task, "baseline"),
+            gres=gres,
         )
 
         # 2. SFT + Evaluation (no dependencies, runs in parallel with Baseline)
@@ -226,6 +238,7 @@ def run(task: str, tiers, version: str, skip_preload: bool = False):
             time=TIME_CONFIG["sft"],
             job_name=slurm_job_name(task, "sft"),
             log_stem=slurm_log_stem(task, "sft"),
+            gres=gres,
         )
 
         # 3. Merge SFT adapter into base model (depends on SFT finishing).
@@ -238,6 +251,7 @@ def run(task: str, tiers, version: str, skip_preload: bool = False):
             time=TIME_CONFIG["merge"],
             job_name=slurm_job_name(task, "merge"),
             log_stem=slurm_log_stem(task, "merge"),
+            gres=gres,
         )
 
         # 4. GRPO + Evaluation (depends on Merge finishing successfully)
@@ -249,6 +263,7 @@ def run(task: str, tiers, version: str, skip_preload: bool = False):
             time=TIME_CONFIG["grpo"],
             job_name=slurm_job_name(task, "grpo"),
             log_stem=slurm_log_stem(task, "grpo"),
+            gres=gres,
         )
 
         print(
@@ -259,7 +274,8 @@ def run(task: str, tiers, version: str, skip_preload: bool = False):
 
 def main(task_default=None, argv=None):
     args = build_parser(task_default).parse_args(argv)
-    run(args.task, args.tiers, args.version, skip_preload=args.skip_preload)
+    run(args.task, args.tiers, args.version, skip_preload=args.skip_preload,
+        gres=args.gres)
 
 
 if __name__ == "__main__":
