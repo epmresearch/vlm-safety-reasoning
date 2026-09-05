@@ -9,13 +9,15 @@ max_seq_length: 3072   # Bounds prompt + target + VISION as ONE sequence (SFTCon
                        #                 with the OLD ~233-token prompt.
                        #   2048 -> 2560: the rewritten prompts are ~605 tokens for unified, so the
                        #                 text side alone grew to 1110.
-                       #   2560 -> 3072: 2560 was still set against a SAMPLED vision-token count.
-                       #                 The real ceiling is analytic: apply_pixel_bounds caps area
-                       #                 at image_max_pixels 1204224, and each output token covers
-                       #                 patch^2 * merge^2 = 784 px, so vision can reach
-                       #                 1204224/784 = 1536 tokens. Worst case for unified is
-                       #                 1110 + 1536 = 2646, which OVERFLOWS 2560.
-                       # 3072 leaves 426 tokens of margin. This is a truncation ceiling, not a
+                       #   2560 -> 3072: headroom only. 2560 was set against a SAMPLED vision
+                       #                 count, which is not a ceiling; the ceiling is analytic --
+                       #                 apply_pixel_bounds caps area at image_max_pixels 1204224
+                       #                 and each token covers patch^2*merge^2 px, measured at 1024
+                       #                 on ARC (patch 16, merge 2), so vision tops out at 1176.
+                       #                 Worst case unified = 1110 + 1176 = 2286, which 2560 would
+                       #                 in fact have fitted; 2048 would NOT (2286 > 2048), so the
+                       #                 earlier raise was necessary and this one is margin.
+                       # 3072 leaves 786 tokens of margin on the worst task. A truncation ceiling, not a
                        # preallocation -- batches pad to the longest sequence in the batch, not to
                        # this -- so raising it costs nothing and 4096 was previously in use.
                        # Confirm with: python scripts/validate_rewards.py --census

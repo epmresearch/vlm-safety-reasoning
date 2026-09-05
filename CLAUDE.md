@@ -313,18 +313,20 @@ was dropped and the real ceiling was `max_length`'s default of **1024** — belo
 
 **`max_seq_length` is 3072, and it has been wrong twice — both times by comparing the wrong quantity.**
 It bounds prompt + target + **vision** as one sequence, and the vision side has an *analytic* ceiling: every
-output token covers `patch² × merge² = 784` pixels, and `apply_pixel_bounds` caps post-resize area at
-`image_max_pixels`, so vision can reach `1204224 / 784 =` **1536 tokens**.
+output token covers `patch² × merge²` pixels — **1024 measured on ARC** (patch 16, merge 2) — and
+`apply_pixel_bounds` caps post-resize area at `image_max_pixels`, so vision tops out at
+`1204224 / 1024 =` **1176 tokens**, matching the ~1176–1270 figure recorded elsewhere.
 
-| value | set against | why it was wrong |
+| value | set against | verdict |
 |---|---|---|
-| 2048 | a full train+val sweep, max 1865 | that sweep used the **old ~233-token prompt** |
-| 2560 | max text + one *sampled* image's vision count | a sample is not a ceiling — two roots measured **209** and **1064** tokens from their first rows |
-| **3072** | max text + the **1536** ceiling | `unified` worst case is `1110 + 1536 = 2646`; 426 tokens of margin |
+| 2048 | a full train+val sweep, max 1865 | **too small** — that sweep used the *old ~233-token prompt*; `unified` now needs 2286 |
+| 2560 | max text + one *sampled* image's vision count | would have fitted, but only by luck: a sample is not a ceiling, and two roots measured **77** and **1064** tokens |
+| **3072** | max text + the **1176** ceiling | 786 tokens of margin on the worst task |
 
 Measured on ARC 2026-09-05 (train+val, text-only max): `unified` 1110, `object_only` 670, `violations_only`
-648, `caption_only` 301. It is a truncation ceiling, not a preallocation — batches pad to the longest sequence
-*in the batch* — so raising it costs nothing, and 4096 was previously in use.
+648, `caption_only` 301 → worst cases 2286 / 1846 / 1824 / 1477. It is a truncation ceiling, not a
+preallocation — batches pad to the longest sequence *in the batch* — so raising it costs nothing, and 4096 was
+previously in use.
 
 `validate_rewards.py --census` now derives that ceiling instead of sampling, scans train **and** val, and fails
 on the true worst case. `tests/test_core/test_blocker_fixes.py` pins both the arithmetic and the approach, so a

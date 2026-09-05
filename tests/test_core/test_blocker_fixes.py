@@ -384,9 +384,16 @@ def test_b6_ensure_java8_active_is_fully_guarded():
 # Token budgets: the cap must cover TEXT + VISION, not text alone
 # ---------------------------------------------------------------------------
 
-# Each vision token covers patch_size^2 * merge_size^2 pixels (14^2 * 2^2 = 784 for
-# Qwen3-VL), and apply_pixel_bounds caps post-resize area at image_max_pixels, so the
-# vision side of a sequence can never exceed image_max_pixels / 784 tokens.
+# Each vision token covers patch_size^2 * merge_size^2 pixels, and apply_pixel_bounds
+# caps post-resize area at image_max_pixels, so the vision side can never exceed
+# image_max_pixels / that figure.
+#
+# Qwen3-VL measured 1024 px/token on ARC (patch 16, merge 2) -> a 1176-token ceiling at
+# the 1.2 MP cap, which matches the ~1176-1270 figure recorded elsewhere. This test
+# deliberately uses the SMALLER patch-14 geometry (784 px/token -> 1536 tokens), because
+# fewer pixels per token means MORE tokens: it is the conservative direction, and it
+# keeps the assertion valid if the backbone is ever swapped for one with finer patches.
+# validate_rewards.py reads the real geometry off the processor at runtime.
 _VISION_TOKEN_PIXELS = 14 * 14 * 2 * 2
 
 
@@ -402,6 +409,8 @@ def test_sft_max_length_covers_text_plus_vision():
 
     The ceiling is analytic, so assert against it rather than against any measurement.
     1110 is unified's measured text max (ARC 2026-09-05, train+val, 8198+701 rows).
+    With the real 1176-token vision ceiling that is 2286; this test checks the
+    conservative 2646 instead, so it fails before reality does.
     """
     from core.config import load_config
 
