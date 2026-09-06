@@ -236,6 +236,18 @@ def run_sft_unified(
         response_part="<|im_start|>assistant\n",
     )
 
+    # Loaded here, BEFORE the W&B init below that references it in its config dict.
+    # BLOCKER, fixed: this used to live only further down (by the git-metadata block),
+    # after the `config={..., "task_cfg": task_cfg}` reference — Python's scoping makes
+    # any name assigned anywhere in a function local to the whole function, so reading
+    # it before that later assignment raised UnboundLocalError unconditionally, on
+    # every SFT run, every task, every tier, right after model load.
+    from core.config import load_task_config
+    try:
+        task_cfg = load_task_config(task)
+    except FileNotFoundError:
+        task_cfg = {}
+
     # --- W&B: init BEFORE training, persist run_id IMMEDIATELY ---
     import wandb
     from core.wandb_utils import init_run
@@ -270,13 +282,9 @@ def run_sft_unified(
         json.dump({**static_manifest_fields, "status": "starting"}, f, indent=2)
         
     # Dump the full merged configuration for local reproducibility
+    # (task_cfg was already loaded above, before the W&B init that needs it)
     from data.prompt_templates import SYSTEM_PROMPT, get_prompt_for_task
-    from core.config import load_task_config
-    try:
-        task_cfg = load_task_config(task)
-    except FileNotFoundError:
-        task_cfg = {}
-        
+
     # Capture Git metadata
     import subprocess
     git_commit = "unknown"

@@ -91,6 +91,25 @@ def run_grpo(
     if "load_in_4bit" in cfg:
         sft_cfg["load_in_4bit"] = cfg["load_in_4bit"]
 
+    # Override SFT's adapter shape with GRPO's own. load_model_for_training() reads
+    # lora/finetune_* EXCLUSIVELY off the sft_cfg dict it receives (models/model_loader.py),
+    # so without this copy-over grpo.yaml's own `lora:` block and four `finetune_*`
+    # switches -- despite that file's comment claiming they configure GRPO's adapter --
+    # were silently inert: the fresh GRPO adapter was actually shaped by
+    # configs/sft.yaml, not configs/grpo.yaml. This was a no-op on OBSERVED behaviour
+    # only because the two files' values happened to be identical; editing grpo.yaml's
+    # rank for a deliberate GRPO-side ablation would have changed nothing.
+    if "lora" in cfg:
+        sft_cfg["lora"] = cfg["lora"]
+    for _k in (
+        "finetune_vision_layers",
+        "finetune_language_layers",
+        "finetune_attention_modules",
+        "finetune_mlp_modules",
+    ):
+        if _k in cfg:
+            sft_cfg[_k] = cfg[_k]
+
     # Override SFT's vision resolution bounds with GRPO's own (memory-safety knob —
     # GRPO now genuinely runs real images through the vision encoder + generation KV
     # cache, unlike SFT's single forward pass, so it can need a tighter cap on H100).

@@ -502,3 +502,90 @@ def test_submitter_can_override_gres_for_every_stage():
     assert over.count("--gres=gpu:h100:1") == 4, (
         "every stage must carry the override, or one pipeline spans two GPU types"
     )
+
+
+# ---------------------------------------------------------------------------
+# B7 — run_sft_unified must not reference task_cfg before assigning it
+# ---------------------------------------------------------------------------
+def test_b7_task_cfg_is_assigned_before_its_first_use_in_run_sft_unified():
+    """models/sft_trainer.py:run_sft_unified used to build the W&B config dict with
+    `"task_cfg": task_cfg` while `task_cfg = load_task_config(task)` lived further down
+    the SAME function, in the git-metadata block. Python makes any name assigned
+    anywhere in a function local to the whole function, so that read raised
+    UnboundLocalError unconditionally -- on every SFT run, every task, every tier,
+    right after model load and before a single training step.
+
+    `run_sft.py` imports unsloth at module load and cannot even be imported on
+    Windows, so this is an AST check on source rather than a live call -- it asserts
+    the ORDERING GUARANTEE (first Store before any Load), which is what actually
+    matters and survives future refactors better than pinning line numbers.
+    """
+    import ast
+
+    src = (REPO / "models" / "sft_trainer.py").read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    fn = next(
+        n for n in ast.walk(tree)
+        if isinstance(n, ast.FunctionDef) and n.name == "run_sft_unified"
+    )
+
+    first_store_line = None
+    first_load_line = None
+    for node in ast.walk(fn):
+        if isinstance(node, ast.Name) and node.id == "task_cfg":
+            if isinstance(node.ctx, ast.Store) and first_store_line is None:
+                first_store_line = node.lineno
+            if isinstance(node.ctx, ast.Load) and first_load_line is None:
+                first_load_line = node.lineno
+
+    assert first_store_line is not None, "task_cfg is never assigned in run_sft_unified"
+    assert first_load_line is not None, "task_cfg is never read in run_sft_unified"
+    assert first_store_line < first_load_line, (
+        f"task_cfg is read at line {first_load_line} before its first assignment at "
+        f"line {first_store_line} -- this is an UnboundLocalError waiting to fire on "
+        f"every SFT run."
+    )
+
+
+# ---------------------------------------------------------------------------
+# B8 — GRPO's own lora/finetune_* block must actually reach the model loader
+# ---------------------------------------------------------------------------
+def test_b8_grpo_yaml_lora_and_finetune_keys_reach_load_model_for_training():
+    """configs/grpo.yaml declaring a lora/finetune_* block is necessary but not
+    sufficient: models/grpo_trainer.py::run_grpo loads TWO configs (`cfg` from the
+    grpo chain, `sft_cfg` from the sft chain) and calls
+    `load_model_for_training(sft_cfg=sft_cfg, ...)` -- and model_loader.py reads
+    lora/finetune_* EXCLUSIVELY off whichever dict is passed as sft_cfg. Only a
+    handful of keys (max_seq_length, use_gradient_checkpointing, load_in_4bit,
+    image_{min,max}_pixels) were ever copied from `cfg` onto `sft_cfg` before that
+    call, so grpo.yaml's own lora block and finetune_* switches were silently inert
+    -- a no-op on OBSERVED behaviour only because sft.yaml and grpo.yaml happened to
+    hold identical values. Editing grpo.yaml's rank for a GRPO-side ablation would
+    have changed nothing.
+
+    Guards the FIX (the copy-over block), not just the declaration the existing
+    test_grpo_lora_shape_is_explicit_not_inherited already covers.
+    """
+    src = (REPO / "models" / "grpo_trainer.py").read_text(encoding="utf-8")
+    # Isolate the body of run_grpo up to the load_model_for_training call, so a
+    # match elsewhere in the file (e.g. in a docstring) can't produce a false pass.
+    start = src.index("def run_grpo(")
+    call_site = src.index("model, tokenizer, _ = load_model_for_training(", start)
+    body = src[start:call_site]
+
+    assert '"lora" in cfg' in body or "'lora' in cfg" in body, (
+        "grpo.yaml's lora block is never copied onto sft_cfg before "
+        "load_model_for_training() is called -- it will read sft.yaml's lora "
+        "block instead, silently."
+    )
+    for key in (
+        "finetune_vision_layers",
+        "finetune_language_layers",
+        "finetune_attention_modules",
+        "finetune_mlp_modules",
+    ):
+        assert key in body, (
+            f"grpo.yaml's {key!r} override is never copied onto sft_cfg before "
+            "load_model_for_training() is called -- it will read sft.yaml's value "
+            "instead, silently."
+        )
