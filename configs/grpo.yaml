@@ -120,6 +120,27 @@ dataloader_drop_last: true       # Absent before -- TrainingArguments defaults t
                                   # arithmetic something the config actually enforces,
                                   # not merely something that happens to be true.
 
+scale_rewards: "group"           # TRL 0.23.0's own default; pinned explicitly for the
+                                  # same reason as loss_type above. This is NOT cosmetic --
+                                  # CLAUDE.md's GRPO learning-rate sizing argument names
+                                  # "scale_rewards=group" as one of the three brakes that
+                                  # make 2e-6 safe (advantages are normalised by in-group
+                                  # std, so raw reward magnitude cannot inflate step size).
+                                  # That argument was true only by coincidence of an
+                                  # unpinned TRL default; a future TRL version changing its
+                                  # own default would have silently invalidated it with no
+                                  # log line and no error. No behaviour change today.
+
+# seed is NOT declared here. base.yaml's `seed: 42` already reaches this file's
+# merged config for free (load_config's merge chain always starts with
+# load_base_config()) -- confirmed: load_config('unified','grpo')['seed'] == 42.
+# The actual bug was that models/grpo_trainer.py never read cfg["seed"] back out
+# into GRPOConfig(seed=...), so the value that was already sitting in the merged
+# dict never reached the trainer -- harmless only because GRPOConfig's own
+# default also happens to be 42. Fixed in grpo_trainer.py, not here: adding a
+# second `seed: 42` in this file would just be the exact "same fact duplicated
+# in two places" trap CLAUDE.md already warns about elsewhere.
+
 # Model loading — will be used via load_model_for_training
 load_in_4bit: true
 use_gradient_checkpointing: "unsloth"

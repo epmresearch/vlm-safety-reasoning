@@ -3,7 +3,10 @@ prompt_key: "VIOLATIONS_ONLY_PROMPT"
 
 # Output format: minimized JSON wrapped in ```json ... ``` code fences.
 # Only contains rule_1_violation through rule_4_violation (no caption, no objects).
-output_format: "fenced_minimized_json"
+#
+# No output_format: key here (removed -- see unified.yaml's task YAML for why):
+# nothing read it, and the real source of truth is
+# core/tasks.py::TaskSpec.output_format, a different vocabulary.
 
 # Active reward components for GRPO — only violation-relevant subset.
 # Caption and object grounding rewards are excluded.

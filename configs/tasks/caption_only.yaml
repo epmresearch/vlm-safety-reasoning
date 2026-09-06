@@ -5,7 +5,10 @@ prompt_key: "CAPTION_ONLY_PROMPT"
 # caption is the entire output, so wrapping it in a JSON object would add a
 # formatting confound to the quantity being measured. See core/tasks.py
 # (FORMAT_PLAIN_TEXT) and evaluation/output_parser.py::parse_output_for_task.
-output_format: "plain_text"
+#
+# No output_format: key here (removed -- see unified.yaml's task YAML for why):
+# nothing read it, and the real source of truth is
+# core/tasks.py::TaskSpec.output_format, a different vocabulary.
 
 # Active reward components for GRPO — caption quality is the sole objective.
 # reward_format here rewards *clean prose* (no fence, no JSON, no keys) rather

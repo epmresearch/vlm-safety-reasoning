@@ -3,7 +3,10 @@ prompt_key: "OBJECT_ONLY_PROMPT"
 
 # Output format: minimized JSON wrapped in ```json ... ``` code fences.
 # Only the 3 grounding classes (no caption, no rule violations).
-output_format: "fenced_minimized_json"
+#
+# No output_format: key here (removed -- see unified.yaml's task YAML for why):
+# nothing read it, and the real source of truth is
+# core/tasks.py::TaskSpec.output_format, a different vocabulary.
 
 # Active reward components for GRPO — object grounding is the sole objective.
 # Caption, violation-id, violation-grounding and reasoning rewards are excluded:

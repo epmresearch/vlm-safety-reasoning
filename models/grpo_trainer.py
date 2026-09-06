@@ -282,6 +282,13 @@ def run_grpo(
         loss_type=cfg.get("loss_type", "dapo"),
         mask_truncated_completions=cfg.get("mask_truncated_completions", True),
         dataloader_drop_last=cfg.get("dataloader_drop_last", True),
+        scale_rewards=cfg.get("scale_rewards", "group"),
+        # cfg["seed"] already resolves to base.yaml's value (load_config's merge
+        # chain always starts with load_base_config()) -- this was sitting in the
+        # merged dict unread. Explicit now so a base.yaml seed change (e.g. a
+        # multi-seed ablation) actually reaches GRPO instead of silently staying
+        # pinned at GRPOConfig's own default.
+        seed=cfg.get("seed", 42),
         report_to="wandb",
         remove_unused_columns=False,
         log_completions=True,

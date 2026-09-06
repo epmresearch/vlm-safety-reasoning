@@ -681,3 +681,67 @@ def test_b10_task_and_tier_flags_are_required_not_defaulted(relpath, flag):
     assert "default=" not in call_text, (
         f"{relpath}: {flag} still carries a default= alongside required=True"
     )
+
+
+# ---------------------------------------------------------------------------
+# B11 — scale_rewards and seed must reach GRPOConfig explicitly, not rely on
+# an unpinned TRL default / a merged-but-unread value
+# ---------------------------------------------------------------------------
+def test_b11_grpo_config_pins_scale_rewards_and_seed():
+    """scale_rewards="group" is treated by CLAUDE.md as one of GRPO's three
+    load-bearing safety brakes for the 2e-6 learning rate (advantages are
+    normalised by in-group std, so raw reward magnitude cannot inflate step
+    size) -- but it was never explicitly set, true only by coincidence of TRL
+    0.23.0's own default. seed was a different shape of the same problem:
+    base.yaml's seed already reaches the merged GRPO config for free (the merge
+    chain always starts with load_base_config()), but models/grpo_trainer.py
+    never read cfg["seed"] back out into GRPOConfig(seed=...), so the value
+    sitting in the merged dict never reached the trainer -- harmless only
+    because GRPOConfig's own default also happens to be 42.
+    """
+    from core.config import load_config
+
+    for task in ("unified", "violations_only", "object_only", "caption_only"):
+        cfg = load_config(task=task, training_kind="grpo")
+        assert cfg.get("scale_rewards") == "group", (
+            f"{task}: scale_rewards must be pinned 'group' in configs/grpo.yaml -- "
+            "CLAUDE.md's GRPO learning-rate sizing argument depends on it"
+        )
+        assert cfg.get("seed") == 42, (
+            f"{task}: seed must resolve to base.yaml's value through the merge "
+            "chain"
+        )
+
+    src = (REPO / "models" / "grpo_trainer.py").read_text(encoding="utf-8")
+    assert 'scale_rewards=cfg.get("scale_rewards"' in src, (
+        "grpo_config_kwargs never reads scale_rewards from the merged config -- "
+        "it would never reach GRPOConfig"
+    )
+    assert 'seed=cfg.get("seed"' in src, (
+        "grpo_config_kwargs never reads seed from the merged config -- a "
+        "base.yaml seed change would silently never reach GRPO"
+    )
+
+
+# ---------------------------------------------------------------------------
+# B12 — output_format in task YAMLs must not exist as a dead, disagreeing key
+# ---------------------------------------------------------------------------
+def test_b12_task_yamls_do_not_declare_a_dead_output_format_key():
+    """output_format used to be written into every configs/tasks/<task>.yaml
+    (e.g. "fenced_minimized_json"), but nothing ever read it -- the live source
+    of truth is core/tasks.py::TaskSpec.output_format, which uses a DIFFERENT
+    vocabulary (FORMAT_FENCED_JSON, not "fenced_minimized_json"). A decorative
+    key in a different vocabulary from the real one is worse than no key: it
+    looks authoritative and would silently disagree with core/tasks.py the
+    moment anyone wired it in. Removed rather than reconciled, since nothing
+    needs a YAML-level override of a value core/tasks.py already owns per task.
+    """
+    import yaml
+
+    for task_yaml in (REPO / "configs" / "tasks").glob("*.yaml"):
+        cfg = yaml.safe_load(task_yaml.read_text(encoding="utf-8"))
+        assert "output_format" not in cfg, (
+            f"{task_yaml.name}: output_format must not be declared here -- it is "
+            "dead config that disagrees in vocabulary with the real source of "
+            "truth, core/tasks.py::TaskSpec.output_format"
+        )

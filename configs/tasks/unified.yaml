@@ -3,7 +3,14 @@ prompt_key: "UNIFIED_INSPECTION_PROMPT"
 
 # Output format: minimized JSON wrapped in ```json ... ``` code fences.
 # No indentation, no extra whitespace. Single-line JSON body.
-output_format: "fenced_minimized_json"
+#
+# This used to be pinned here as `output_format: "fenced_minimized_json"`, but
+# nothing ever read that key -- the live source of truth is
+# core/tasks.py::TaskSpec.output_format (FORMAT_FENCED_JSON), a DIFFERENT
+# vocabulary from what was written here. A decorative key that would disagree
+# with the real one the moment anyone wired it in; removed rather than fixed to
+# match, since nothing needs a YAML-level override of a value core/tasks.py
+# already owns per-task.
 
 # NOTE: no reward_components / reward_weights block on purpose. Omitting
 # reward_components makes get_reward_funcs_for_task() fall back to the full
