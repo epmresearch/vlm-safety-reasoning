@@ -277,6 +277,11 @@ def run_grpo(
         generation_kwargs={"do_sample": True},
         bf16=cfg.get("bf16", True),
         optim=cfg.get("optim", "adamw_8bit"),
+        # Explicit rather than inherited from TRL's own default -- see the comments
+        # in configs/grpo.yaml next to each key for why this specific value.
+        loss_type=cfg.get("loss_type", "dapo"),
+        mask_truncated_completions=cfg.get("mask_truncated_completions", True),
+        dataloader_drop_last=cfg.get("dataloader_drop_last", True),
         report_to="wandb",
         remove_unused_columns=False,
         log_completions=True,

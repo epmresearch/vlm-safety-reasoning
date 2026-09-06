@@ -138,7 +138,7 @@ def main():
                          help="Weights & Biases project name")
     parser.add_argument("--wandb_run_name", type=str, default=None,
                          help="Weights & Biases run name")
-    parser.add_argument("--task", default="unified", choices=VALID_TASKS, help="Task to run. Must be registered in core/tasks.py::TASK_REGISTRY.")
+    parser.add_argument("--task", required=True, choices=VALID_TASKS, help="Task to run. Must be registered in core/tasks.py::TASK_REGISTRY.")
     args = parser.parse_args()
 
     predictions_path = Path(args.predictions_path)

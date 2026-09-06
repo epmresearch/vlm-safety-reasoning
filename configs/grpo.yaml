@@ -83,6 +83,43 @@ weight_decay: 0.01
 lr_scheduler_type: "cosine"
 max_grad_norm: 0.3
 
+# --- GRPOConfig fields that used to be undeclared -- reachable only through TRL's ---
+# --- own default, so a TRL upgrade could silently change them out from under us. ---
+loss_type: "dapo"               # TRL 0.23.0's own default; pinned explicitly rather than
+                                 # inherited so it survives a version bump. Aggregates
+                                 # per-token loss by the active-token count in the global
+                                 # accumulated batch, which TRL's own docs give as the fix
+                                 # for exactly the length-bias problem this repo would
+                                 # otherwise have: completions range from a handful of
+                                 # tokens (object_only's box lists) to ~1000 (unified's
+                                 # full caption+objects+violations JSON), and the
+                                 # classical "grpo" loss (per-sequence normalization)
+                                 # systematically favours the shorter ones. No behaviour
+                                 # change -- this is what has been running; now it is
+                                 # written down.
+mask_truncated_completions: true  # TRL default is false. Overridden ON: TRL's own docs
+                                   # (citing the DAPO paper) call this "a good practice
+                                   # for training stability" -- a completion cut off at
+                                   # max_completion_length had no real stopping decision,
+                                   # and this repo already has a documented live
+                                   # truncation risk (worst case 3328 tokens against
+                                   # max_seq_length 3600, CLAUDE.md's "Live token
+                                   # budgets"). A truncated rollout already scores 0 on
+                                   # every reward component (the parse fails); this stops
+                                   # it from ALSO shaping the loss on tokens that were
+                                   # never a real stopping decision, rather than training
+                                   # on what is effectively noise from the length budget.
+dataloader_drop_last: true       # Absent before -- TrainingArguments defaults this to
+                                  # false, so the trailing partial batch each epoch
+                                  # (1732 rows / (per_device_train_batch_size=16 *
+                                  # steps_per_generation=4)=64 per DataLoader batch ->
+                                  # 27 full batches + 4 leftover rows) was still being
+                                  # processed as an undersized generation batch. Set to
+                                  # match sft.yaml's own dataloader_drop_last: true and
+                                  # to make the documented "1732 // 32 x 2 = 108 steps"
+                                  # arithmetic something the config actually enforces,
+                                  # not merely something that happens to be true.
+
 # Model loading — will be used via load_model_for_training
 load_in_4bit: true
 use_gradient_checkpointing: "unsloth"

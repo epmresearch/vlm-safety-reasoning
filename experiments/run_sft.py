@@ -21,21 +21,22 @@ logger = get_logger(__name__)
 
 
 def main():
-    # Parse just the task arg first to load config
-    parser_task = argparse.ArgumentParser(add_help=False)
-    parser_task.add_argument("--task", default="unified", choices=VALID_TASKS)
-    args_task, _ = parser_task.parse_known_args()
-
-    config = load_config(task=args_task.task)
-    default_tier = config.get("active_tier", "2b")
+    # No early bootstrap parse needed: `paths.*` (used just below for the log dir)
+    # is task-independent, so a single task-agnostic load_config() call covers it.
+    config = load_config()
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--tier", default=default_tier, help="Model tier (e.g., 2b, 4b, 8b)")
+    # --tier and --task are both REQUIRED, not defaulted. A silent default
+    # ("2b" from active_tier, "unified" from a literal) meant a hand-run/debug
+    # invocation that forgot either flag would train silently against the wrong
+    # tier or the wrong task's config, rather than erroring immediately -- the
+    # same failure shape as the "unified-sft-v4" stale-variant default below.
+    parser.add_argument("--tier", required=True, help="Model tier (e.g., 2b, 4b, 8b)")
     # Required, not defaulted: the old default ("unified-sft-v4") silently wrote a
     # stale, unversioned variant if a caller forgot the flag.
     parser.add_argument("--variant", required=True, help="Variant name, e.g. oo-sft-8b-v1")
     parser.add_argument(
-        "--task", default="unified", choices=VALID_TASKS,
+        "--task", required=True, choices=VALID_TASKS,
         help="Task to train. Selects the prompt, the SFT target format, and the "
              "input dataset subdir.",
     )

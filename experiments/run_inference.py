@@ -36,10 +36,12 @@ logger = get_logger(__name__)
 
 def main():
     config = load_config()
-    default_tier = config.get("active_tier", "2b")
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--tier", default=default_tier, help="Model tier (e.g., 2b, 4b, 8b)")
+    # Required, not defaulted from active_tier: a hand-run invocation that forgot
+    # --tier used to silently run against whichever tier model_registry.yaml's
+    # active_tier happened to pin, rather than erroring immediately.
+    parser.add_argument("--tier", required=True, help="Model tier (e.g., 2b, 4b, 8b)")
     parser.add_argument(
         "--variant", default=None,
         help="SFT checkpoint variant name (e.g., unified-sft-v4). "
@@ -64,7 +66,7 @@ def main():
         "--repetition_penalty", type=float, default=None,
         help="Override generation repetition_penalty (default: 1.0, from configs/tasks/unified.yaml)"
     )
-    parser.add_argument("--task", default="unified", choices=VALID_TASKS, help="Task to run. Must be registered in core/tasks.py::TASK_REGISTRY.")
+    parser.add_argument("--task", required=True, choices=VALID_TASKS, help="Task to run. Must be registered in core/tasks.py::TASK_REGISTRY.")
     parser.add_argument(
         "--base_model_override", default=None,
         help="Explicit path to the base model to load (e.g. a merged SFT model, required for GRPO "

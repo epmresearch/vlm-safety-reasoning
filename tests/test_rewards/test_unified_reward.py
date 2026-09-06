@@ -150,30 +150,49 @@ class TestBatchRewardFunctions:
 
 
 class TestRepetitionPenalty:
-    """Now applied in the LIVE path, per component. Multiplying each component is
+    """Applied in the LIVE path, per component. Multiplying each component is
     identical to multiplying the total, because TRL sums linearly:
         sum_k w_k * (f * r_k) == f * sum_k w_k * r_k
+
+    PRODUCTION DEFAULT IS OFF. Every task YAML sets `repetition_penalty: 1.0`,
+    which `_apply_repetition_penalty` now reads directly (it used to read a
+    second, never-set key `repetition_penalty_factor` and silently apply 0.5
+    regardless of what any YAML said -- see test_production_default_is_off
+    below). The mechanism tests force a non-1.0 factor via monkeypatch so they
+    keep testing the >5-repeat detection and 0.5x scaling math itself, not
+    today's production config.
     """
 
     @staticmethod
     def _repeated(n=10):
         return _make_valid_completion(excavator=[[100, 100, 500, 500]] * n)
 
-    def test_penalty_fires_on_repeated_boxes(self):
+    @staticmethod
+    def _forced_factor(monkeypatch, factor):
+        """Forces _apply_repetition_penalty to see `factor` regardless of what
+        the real task YAML says, so these tests probe the MECHANISM."""
+        import rewards.unified_reward as m
+        monkeypatch.setattr(m, "reward_constant", lambda task, key, default: factor)
+
+    def test_penalty_fires_on_repeated_boxes(self, monkeypatch):
+        self._forced_factor(monkeypatch, 0.5)
         clean = _make_valid_completion(excavator=[[100, 100, 500, 500]])
         rep = self._repeated()
         assert _apply_repetition_penalty([1.0], [rep], "unified") == [pytest.approx(0.5)]
         assert _apply_repetition_penalty([1.0], [clean], "unified") == [pytest.approx(1.0)]
 
-    def test_threshold_is_more_than_five_identical_boxes(self):
+    def test_threshold_is_more_than_five_identical_boxes(self, monkeypatch):
+        self._forced_factor(monkeypatch, 0.5)
         five = _make_valid_completion(excavator=[[1, 1, 2, 2]] * 5)
         six = _make_valid_completion(excavator=[[1, 1, 2, 2]] * 6)
         assert _apply_repetition_penalty([1.0], [five], "unified") == [pytest.approx(1.0)]
         assert _apply_repetition_penalty([1.0], [six], "unified") == [pytest.approx(0.5)]
 
-    def test_penalty_reaches_the_live_reward_functions(self):
+    def test_penalty_reaches_the_live_reward_functions_when_enabled(self, monkeypatch):
         """The regression this fixes: the penalty existed only in Mode 2, so the
-        path GRPO actually uses had no repetition check at all."""
+        path GRPO actually uses had no repetition check at all. Forces the
+        factor on (see class docstring: production itself now ships it off)."""
+        self._forced_factor(monkeypatch, 0.5)
         funcs, _ = get_reward_funcs_for_task("unified")
         by_name = {f.__name__: f for f in funcs}
         gts = [json.dumps(GT_SAFE)]
@@ -182,14 +201,27 @@ class TestRepetitionPenalty:
         assert clean == pytest.approx(1.0)
         assert rep == pytest.approx(0.5), "repetition penalty did not reach the live path"
 
+    def test_production_default_is_off(self):
+        """User decision: the repetition penalty should be OFF in production.
+        Every task YAML's `repetition_penalty: 1.0` must genuinely disable it
+        -- reading the REAL merged config, no monkeypatch."""
+        for task in ("unified", "violations_only", "object_only", "caption_only"):
+            rep = _apply_repetition_penalty([1.0], [self._repeated()], task)
+            assert rep == [pytest.approx(1.0)], (
+                f"task {task!r} still applies a repetition penalty in production; "
+                "expected repetition_penalty: 1.0 in its task YAML to disable it"
+            )
+
     def test_unparseable_completion_is_not_penalised_twice(self):
         assert _apply_repetition_penalty([0.0], ["bad json"], "unified") == [0.0]
 
-    def test_caption_only_can_never_trigger_it(self):
-        """caption_only parses to {"caption": ...} with no boxes."""
+    def test_caption_only_can_never_trigger_it(self, monkeypatch):
+        """caption_only parses to {"caption": ...} with no boxes. Forces the
+        factor on so this genuinely tests "no boxes" rather than trivially
+        passing because the penalty is off by config."""
+        self._forced_factor(monkeypatch, 0.5)
         assert _apply_repetition_penalty([1.0], ["a" * 50], "caption_only") == [pytest.approx(1.0)]
 
     def test_factor_of_one_disables_it(self, monkeypatch):
-        import rewards.unified_reward as m
-        monkeypatch.setattr(m, "reward_constant", lambda task, key, default: 1.0)
+        self._forced_factor(monkeypatch, 1.0)
         assert _apply_repetition_penalty([1.0], [self._repeated()], "unified") == [1.0]

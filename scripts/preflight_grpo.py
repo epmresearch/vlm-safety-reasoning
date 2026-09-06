@@ -227,7 +227,9 @@ if __name__ == "__main__":
              "(e.g. checkpoints/qwen3vl-2b/merged-vo-sft-2b-vN) to test the exact model+"
              "tokenizer_name loading path used by a real GRPO run.",
     )
-    parser.add_argument("--tier", default="2b")
-    parser.add_argument("--task", default="violations_only", choices=VALID_TASKS)
+    # Required, not defaulted: a forgotten --tier/--task used to silently preflight
+    # the wrong model/task ("2b"/"violations_only") rather than erroring immediately.
+    parser.add_argument("--tier", required=True)
+    parser.add_argument("--task", required=True, choices=VALID_TASKS)
     args = parser.parse_args()
     run_preflight(task=args.task, model_id=args.tier, base_model_override=args.base_model_override)

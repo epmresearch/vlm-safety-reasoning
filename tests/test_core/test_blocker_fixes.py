@@ -589,3 +589,95 @@ def test_b8_grpo_yaml_lora_and_finetune_keys_reach_load_model_for_training():
             "load_model_for_training() is called -- it will read sft.yaml's value "
             "instead, silently."
         )
+
+
+# ---------------------------------------------------------------------------
+# B9 — three GRPOConfig fields must not rely on an unpinned TRL default
+# ---------------------------------------------------------------------------
+def test_b9_grpo_config_pins_loss_type_mask_truncated_and_drop_last():
+    """loss_type, mask_truncated_completions and dataloader_drop_last used to be
+    absent from the entire GRPO config chain, so their real values were whatever
+    TRL 0.23.0 happened to default to (dapo / False / False) -- true only by
+    coincidence of that specific TRL version, and a future upgrade could change
+    any of them with no log line and no error. All three are now explicit,
+    user-decided values in configs/grpo.yaml, threaded through in
+    models/grpo_trainer.py's grpo_config_kwargs.
+    """
+    from core.config import load_config
+
+    for task in ("unified", "violations_only", "object_only", "caption_only"):
+        cfg = load_config(task=task, training_kind="grpo")
+        assert cfg.get("loss_type") == "dapo", (
+            f"{task}: loss_type must be pinned in configs/grpo.yaml, not left to "
+            "whatever TRL currently defaults to"
+        )
+        assert cfg.get("mask_truncated_completions") is True, (
+            f"{task}: mask_truncated_completions must be pinned True -- a "
+            "truncated rollout already scores 0 on every reward component; it "
+            "should not also shape the loss on tokens with no real stopping "
+            "decision"
+        )
+        assert cfg.get("dataloader_drop_last") is True, (
+            f"{task}: dataloader_drop_last must be pinned True for GRPO, matching "
+            "sft.yaml, so the documented '1732 // 32 x 2 = 108 steps' arithmetic "
+            "is enforced rather than merely assumed"
+        )
+
+    src = (REPO / "models" / "grpo_trainer.py").read_text(encoding="utf-8")
+    for key in ("loss_type", "mask_truncated_completions", "dataloader_drop_last"):
+        assert f'{key}=cfg.get("{key}"' in src, (
+            f"grpo_config_kwargs never reads {key!r} from the merged config -- "
+            "the YAML value would never reach GRPOConfig"
+        )
+
+
+# ---------------------------------------------------------------------------
+# B10 — --task / --tier must be required, not silently defaulted, at every
+# manual/debug entry point
+# ---------------------------------------------------------------------------
+
+# (file, flag) pairs that used to carry a silent default (active_tier's "2b",
+# or a literal "unified"/"violations_only") instead of requiring the caller to
+# say which task/tier they mean. The orchestrated hpc_*.sh path always passes
+# both explicitly, so this only ever mattered for a hand-run/debug invocation
+# -- exactly the situation where a silently-wrong default is most dangerous.
+REQUIRED_TASK_TIER_FLAGS = [
+    ("experiments/run_sft.py", "--task"),
+    ("experiments/run_sft.py", "--tier"),
+    ("experiments/run_grpo.py", "--task"),
+    ("experiments/run_grpo.py", "--tier"),
+    ("experiments/run_inference.py", "--task"),
+    ("experiments/run_inference.py", "--tier"),
+    ("experiments/run_evaluation.py", "--task"),
+    ("experiments/compare_results.py", "--task"),
+    ("experiments/compare_results.py", "--tier"),
+    ("scripts/preflight_grpo.py", "--task"),
+    ("scripts/preflight_grpo.py", "--tier"),
+]
+
+
+@pytest.mark.parametrize("relpath,flag", REQUIRED_TASK_TIER_FLAGS)
+def test_b10_task_and_tier_flags_are_required_not_defaulted(relpath, flag):
+    """A regex on the add_argument(...) call for `flag`, not an import + real
+    argparse run: several of these files import unsloth at module level (or
+    transitively) and cannot be imported on Windows/no-GPU. The pattern below
+    matches the flag's OWN add_argument call specifically (up to the next
+    add_argument), so a `default=` on some other flag in the same file can't
+    produce a false pass.
+    """
+    src = (REPO / relpath).read_text(encoding="utf-8")
+    # Isolate this flag's add_argument(...) call text, from its own occurrence
+    # of the flag literal up to the next add_argument( -- reliable because
+    # every add_argument call in these files is on its own statement.
+    idx = src.index(f'"{flag}"')
+    end = src.find("add_argument(", idx + 1)
+    call_text = src[idx:end] if end != -1 else src[idx:idx + 400]
+
+    assert "required=True" in call_text, (
+        f"{relpath}: {flag} must be required=True, not silently defaulted -- a "
+        "hand-run invocation that forgets this flag should error immediately, "
+        "not train/evaluate/compare against the wrong task or tier."
+    )
+    assert "default=" not in call_text, (
+        f"{relpath}: {flag} still carries a default= alongside required=True"
+    )

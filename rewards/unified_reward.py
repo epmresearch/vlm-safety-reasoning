@@ -53,8 +53,6 @@ REWARD_COMPONENTS: List[Tuple[str, Callable, float]] = [
     ("reward_reasoning",           _reward_reasoning,           0.10),
 ]
 
-# Repetition pathology penalty factor (applied multiplicatively to final score)
-REPETITION_PENALTY_FACTOR = 0.5
 
 
 # ---------------------------------------------------------------------------
@@ -83,11 +81,18 @@ def _apply_repetition_penalty(scores, completions, task: str):
     saying nothing.
 
     Trigger: >5 occurrences of one identical box tuple, pooled across every box
-    field the task owns. Tunable per task via `repetition_penalty_factor`
-    (default 0.5); set it to 1.0 to disable. caption_only parses to a caption with
-    no boxes, so it can never fire there.
+    field the task owns. Tunable per task via the SAME `repetition_penalty` key
+    every task YAML already sets for inference-time generation (see
+    experiments/run_inference.py); 1.0 disables it, <1.0 halves (or scales) the
+    score on a repeating completion. This used to read a second, never-set key
+    (`repetition_penalty_factor`), which silently defaulted to 0.5 regardless of
+    what any task YAML said -- every GRPO run to date trained with this penalty
+    fully active even though every task YAML's `repetition_penalty: 1.0` (with
+    unified.yaml's comment reading "locked-in production default per ablation")
+    clearly intended it disabled. One key now, matching that intent.
+    caption_only parses to a caption with no boxes, so it can never fire there.
     """
-    factor = float(reward_constant(task, "repetition_penalty_factor", 0.5))
+    factor = float(reward_constant(task, "repetition_penalty", 1.0))
     if factor >= 1.0:
         return scores
 

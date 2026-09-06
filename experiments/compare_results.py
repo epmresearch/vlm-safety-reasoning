@@ -96,11 +96,13 @@ def flatten_metrics(metrics: dict, label: str) -> dict:
 
 def main():
     config = load_config()
-    default_tier = config.get("active_tier", "2b")
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--tier", default=default_tier, help="Model tier (e.g., 2b, 4b, 8b)")
-    parser.add_argument("--task", default="unified", choices=VALID_TASKS,
+    # Required, not defaulted: a forgotten --tier/--task used to silently compare
+    # the wrong run (active_tier's "2b", or the literal "unified") rather than
+    # erroring immediately.
+    parser.add_argument("--tier", required=True, help="Model tier (e.g., 2b, 4b, 8b)")
+    parser.add_argument("--task", required=True, choices=VALID_TASKS,
                         help="Task whose results to compare.")
     parser.add_argument(
         "--version", required=True,
