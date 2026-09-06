@@ -101,8 +101,9 @@ _VIOLATION_INSTRUCTIONS = (
     "this image that violates it. If you cannot see such a violation, output null for "
     "that rule. Rules are independent: any number of them may be violated, or none.\n"
     "   For a violated rule output "
-    "{\"reason\":\"...\", \"bounding_box\":[[xmin, ymin, xmax, ymax]]}, where the box "
-    "encloses the violation and is scaled 0-1000.\n"
+    "{\"reason\":\"...\", \"bounding_box\":[[xmin, ymin, xmax, ymax]]}, where each box "
+    "encloses one person, edge or machine that violates it and is scaled 0-1000. List "
+    "more than one box if more than one instance violates the same rule.\n"
     "   Write the reason as ONE sentence saying who or what is at fault, identified by "
     "position or appearance, and what the breach is.\n"
 )
