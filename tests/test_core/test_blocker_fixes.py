@@ -798,3 +798,89 @@ def test_b13_grpo_walltime_does_not_exceed_partition_max_time():
         f"hpc_grpo.sh's own #SBATCH --time={m2.group(1)!r} exceeds the real "
         "gpu-h100 partition MaxTime (1-00:00:00)"
     )
+
+
+# ---------------------------------------------------------------------------
+# B14 — no function may reference a name before its own local import/
+# assignment of that same name (the "shadowed by a later local import"
+# UnboundLocalError class of bug)
+# ---------------------------------------------------------------------------
+
+# Every direct entry point / trainer module reachable from the orchestrated
+# pipeline. This is a GENERAL static check (not the specific run_sft.py case),
+# added after that exact shape of bug reached a real SLURM submission:
+# experiments/run_sft.py::main() had a module-level `from core.config import
+# load_config` PLUS a second, redundant local `from core.config import
+# load_config` further down inside main() -- and Python's scoping rule makes
+# ANY name assigned/imported anywhere in a function body local to that WHOLE
+# function, retroactively. The early `config = load_config()` call ran before
+# that later local import ever executed, so every single invocation raised
+# UnboundLocalError. This bug PREDATES this test suite (confirmed present in
+# commit 56676a2, before the six-track pipeline audit) and was only caught
+# because it crashed both violations_only-2b and unified-2b's SFT jobs on the
+# first real submission -- the earlier audit's AST-based test_b7 checked this
+# exact failure shape only for models/sft_trainer.py's `task_cfg`, not for
+# this file's `load_config`.
+ENTRY_POINT_FILES = [
+    "experiments/run_sft.py",
+    "experiments/run_grpo.py",
+    "experiments/run_inference.py",
+    "experiments/run_evaluation.py",
+    "experiments/compare_results.py",
+    "scripts/preflight_grpo.py",
+    "scripts/merge_sft_adapter.py",
+    "scripts/submit_pipeline.py",
+    "models/sft_trainer.py",
+    "models/grpo_trainer.py",
+    "models/model_loader.py",
+    "models/inference.py",
+]
+
+
+@pytest.mark.parametrize("relpath", ENTRY_POINT_FILES)
+def test_b14_no_name_used_before_its_own_local_import_in_any_function(relpath):
+    """For every function in `relpath`: if that function ALSO imports a name
+    locally (shadowing any module-level import of the same name for the
+    function's entire body), the first LOAD of that name must not occur
+    before the first local import/assignment binds it. A plain `import X`
+    used only after being locally re-imported is fine; using it BEFORE that
+    local import is the exact UnboundLocalError shape this test exists to
+    catch, regardless of which name or which file it recurs in next.
+    """
+    import ast
+
+    src = (REPO / relpath).read_text(encoding="utf-8")
+    tree = ast.parse(src)
+
+    for fn in [n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]:
+        locally_imported = set()
+        for node in ast.walk(fn):
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                for a in node.names:
+                    locally_imported.add((a.asname or a.name).split(".")[0])
+        if not locally_imported:
+            continue
+
+        first_use, first_bind = {}, {}
+        for node in ast.walk(fn):
+            if (
+                isinstance(node, ast.Name)
+                and node.id in locally_imported
+                and isinstance(node.ctx, ast.Load)
+            ):
+                first_use.setdefault(node.id, node.lineno)
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                for a in node.names:
+                    bound = (a.asname or a.name).split(".")[0]
+                    if bound in locally_imported:
+                        first_bind.setdefault(bound, node.lineno)
+
+        for name, use_line in first_use.items():
+            bind_line = first_bind.get(name)
+            assert bind_line is None or use_line >= bind_line, (
+                f"{relpath}: {fn.name}() reads {name!r} at line {use_line}, "
+                f"before that name's own local import/assignment at line "
+                f"{bind_line} -- Python's scoping makes {name!r} local to the "
+                f"WHOLE function because of that later import, so this is an "
+                f"UnboundLocalError on every call, not a maybe."
+            )

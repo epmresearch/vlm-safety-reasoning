@@ -53,7 +53,16 @@ def main():
     log_file = logs_dir / f"run_{args.tier}_{args.variant}_{timestamp}.txt"
     attach_file_logger(str(log_file))
 
-    from core.config import load_config
+    # NOT re-imported here: load_config is already imported at module level
+    # (line 12). A second local `from core.config import load_config` used to
+    # live on this line -- harmless-looking, since it imports the identical
+    # name -- but ANY import/assignment to a name anywhere in a function body
+    # makes that name local to the WHOLE function in Python, retroactively.
+    # That turned `config = load_config()` at the top of main() into an
+    # UnboundLocalError on every single invocation: this bug predates this
+    # session (confirmed present in the pre-audit commit 56676a2) and crashed
+    # both the violations_only-2b and unified-2b SFT jobs (47863506, 47863518)
+    # on the first real submission of this pipeline.
     from core.io import get_drive_path, ensure_dir
     import json
     from data.oversampling import (build_oversampled_indices,
