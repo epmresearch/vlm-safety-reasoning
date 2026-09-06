@@ -152,7 +152,7 @@ GPUs) — so the GRES *type*, not the partition, selects the hardware.
 | `hpc_baseline.sh` | `gpu:h100:1` | indifferent to the card; H100s are plentiful |
 | `hpc_sft.sh` | `gpu:h100:1` | same |
 | `hpc_merge_sft.sh` | `gpu:h100:1` | same |
-| **`hpc_grpo.sh`** | **`gpu:h200:1`** | see below — this needs re-verifying |
+| **`hpc_grpo.sh`** | **`gpu:h200:1`** | see below — kept deliberately, not re-tested |
 
 `submit_pipeline.py --gres gpu:h100:1` is an **escape hatch**: it forces *every* stage onto one card type for a
 debug run, GRPO included. Without it no `--gres` reaches the `sbatch` line and each script's own directive
@@ -168,11 +168,12 @@ and passes **`sft_cfg`** — which unconditionally carries `image_min_pixels: 20
 14.6 MP; that was true only **before** the pixel-bounds key-rename fix, and `models/model_loader.py`'s own
 comment says as much: *"This previously wrote `{min_pixels, max_pixels}`... the cap was never applied — which
 is the most likely cause of the recorded 92.97/93.12 GiB OOM."* **That OOM figure — the evidence the H200-only
-policy rests on — was measured under the old, broken (uncapped) code.** Nobody has re-tested GRPO on an H100
-under the corrected, capped code. It's entirely possible the H100 now works fine; it's also possible
-generation-time KV cache (256 live sequences at higher `steps_per_generation`) OOMs for an unrelated reason.
-**Run one real GRPO smoke step on an H100 before trusting either conclusion** — this determines whether the
-whole 12-job GRPO grid must queue behind 2 scarce GPUs or can spread across 10.
+policy originally rested on — was measured under the old, broken (uncapped) code**, and nobody has re-tested
+GRPO on an H100 under the corrected, capped code, so it's entirely possible the H100 would work fine now.
+
+**Decision (2026-09-05): keep GRPO on H200, everything else on H100 — no re-test planned.** Raised as an open
+question during the audit; the call is to stick with the existing split rather than spend a smoke-test cycle
+chasing it. The reasoning above stays here as context for a future revisit, not as a pending action item.
 
 ### Individual stages
 
