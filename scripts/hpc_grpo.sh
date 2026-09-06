@@ -7,17 +7,27 @@
 #SBATCH --mem=250G
 #SBATCH --gres=gpu:h200:1
 # GPU POLICY: GRPO is the ONE stage that requires the H200. configs/grpo.yaml is tuned
-# for its 141 GB -- per_device_train_batch_size 16, steps_per_generation 4, and no
-# image_max_pixels cap. On a 93 GB H100 that profile OOMs, and the failing allocation is
-# a shape-dependent vision buffer, so halving the batch does NOT help; the fix would be
-# re-adding image_max_pixels: 602112, which changes what the model sees and makes runs
-# non-comparable. So this stage waits for egh2 rather than degrading the config.
+# for its 141 GB -- per_device_train_batch_size 16, steps_per_generation 4.
+# CORRECTED: GRPO is NOT actually uncapped -- models/grpo_trainer.py::run_grpo passes
+# sft_cfg (which unconditionally carries configs/sft.yaml's image_max_pixels: 1204224)
+# into load_model_for_training, so the same 1.2MP cap SFT trains under already applies
+# here; grpo.yaml's own override block for this key is dead code (nothing sets it).
+# The historical 92.97/93.12 GiB OOM on a 93GB H100 was measured BEFORE the
+# pixel-bounds key-rename fix, i.e. under images that were silently uncapped at the
+# time -- that evidence predates the fix that makes the cap real, and nobody has
+# re-tested GRPO on an H100 since. Kept on H200 by deliberate decision (2026-09-05),
+# not because the OOM is confirmed to still happen under today's code.
 # NOTE: partition gpu-h100 contains BOTH H100 (mgh1,mgh3-5) and H200 (egh2) nodes.
-# The GRES type is what actually selects the card. configs/grpo.yaml is tuned for
-# the H200's 141 GB (per_device_train_batch_size: 16 is documented as OOMing at
-# 92.97/93.12 GiB on a 93 GB H100), so the H200 must be requested explicitly.
+# The GRES type is what actually selects the card, NOT the partition -- and
+# --time is a PARTITION property, so it binds identically regardless of GRES type.
 # Only egh2 has H200s (2 of them) — expect queue waits.
-#SBATCH --time=48:00:00
+#SBATCH --time=24:00:00
+# Was 48:00:00 -- gpu-h100's real MaxTime is 1-00:00:00 (24h), confirmed via
+# `scontrol show partition gpu-h100`. A 48h ask is rejected at submission, not at
+# runtime, so this was silently unsubmittable. 24h has no confirmed headroom for
+# 4b/8b (the only recorded GRPO walltime is from an invalid prompt-only run) --
+# if the wall is hit, models/grpo_trainer.py auto-resumes from the last checkpoint
+# (save_steps: 20), so re-submitting this same job continues rather than restarts.
 #SBATCH --output=/home/%u/vlm-finetuning-project1/logs/%x_%j.out
 #SBATCH --error=/home/%u/vlm-finetuning-project1/logs/%x_%j.err
 #SBATCH --mail-type=BEGIN,END,FAIL

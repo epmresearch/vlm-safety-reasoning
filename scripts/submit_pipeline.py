@@ -58,11 +58,23 @@ TIME_CONFIG = {
     "baseline": "12:00:00",
     "sft": "12:00:00",
     "merge": "01:30:00",
-    # 48h, not 24h: GRPO is 2 epochs, and per-step cost rose once images actually
-    # reached the model. The post-training stages (inference on 3004 + repair + eval)
-    # cost ~4-7h on top and cannot be compressed. Over-requesting only costs queue
-    # priority; being killed at 90% costs the entire run.
-    "grpo": "48:00:00",
+    # Was 48:00:00. The gpu-h100 partition's real MaxTime is 1-00:00:00 (24h) --
+    # confirmed via `scontrol show partition gpu-h100` -- and that cap is a
+    # PARTITION property, not a GRES-type one: it binds GRPO's H200 request
+    # exactly as it would an H100 request. A 48h ask was silently unsubmittable;
+    # sbatch rejects an over-limit --time immediately, so every GRPO job (the
+    # last stage in the chain) would fail at submission while baseline/sft/merge
+    # queued fine, with nothing about it looking like a training failure.
+    #
+    # 24h has NO confirmed headroom for the larger tiers: the only recorded
+    # GRPO walltime (5h12m/epoch) is from a prompt-only run -- images never
+    # reached the model -- so it is not evidence for what real image-conditioned
+    # generation costs at 4b/8b. If a GRPO job is killed by the wall, it is not
+    # lost: models/grpo_trainer.py auto-resumes from the last checkpoint
+    # (save_steps: 20, so at most ~20 steps of progress at risk), so the
+    # response to a timeout is to re-submit the identical grpo job (same
+    # variant) again, not to restart the pipeline.
+    "grpo": "24:00:00",
 }
 
 PHASE_SCRIPTS = {

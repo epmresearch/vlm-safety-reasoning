@@ -176,6 +176,22 @@ GRPO on an H100 under the corrected, capped code, so it's entirely possible the 
 question during the audit; the call is to stick with the existing split rather than spend a smoke-test cycle
 chasing it. The reasoning above stays here as context for a future revisit, not as a pending action item.
 
+**Walltime: `gpu-h100`'s real `MaxTime` is `1-00:00:00` (24h), confirmed via `scontrol show partition gpu-h100`
+on ARC 2026-09-06.** `--time` is a partition property, not a GRES-type one — it binds a `gpu:h200:1` request
+exactly as it would `gpu:h100:1`. GRPO's walltime was `48:00:00` and has been corrected to `24:00:00` in both
+`TIME_CONFIG` (`scripts/submit_pipeline.py`) and `hpc_grpo.sh`'s own `#SBATCH --time=` directive. The old value
+was silently unsubmittable: `sbatch` rejects an over-limit `--time` at submission, not at runtime, so baseline/
+sft/merge would have queued fine while every GRPO job — the last stage in the chain — simply never got
+scheduled, looking nothing like a training failure. Pinned by
+`tests/test_core/test_blocker_fixes.py::test_b13_grpo_walltime_does_not_exceed_partition_max_time`.
+
+**24h has no confirmed headroom for the larger tiers.** The only recorded GRPO walltime (5h12m/epoch) is from a
+prompt-only run — images never reached the model — so it says nothing about what real image-conditioned
+generation costs at 4b/8b. If a GRPO job is killed by the wall, it is not lost: `models/grpo_trainer.py`
+auto-resumes from the last checkpoint (`save_steps: 20`, so at most ~20 steps of progress at risk) — the
+response to a timeout is to **re-submit the identical GRPO job** (same variant name), which continues rather
+than restarts. Watch the 2b run's actual `train_runtime` before assuming 4b/8b fit.
+
 ### Individual stages
 
 ```bash

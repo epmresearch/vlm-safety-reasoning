@@ -745,3 +745,56 @@ def test_b12_task_yamls_do_not_declare_a_dead_output_format_key():
             "dead config that disagrees in vocabulary with the real source of "
             "truth, core/tasks.py::TaskSpec.output_format"
         )
+
+
+# ---------------------------------------------------------------------------
+# B13 — GRPO's --time request must not exceed the real cluster MaxTime
+# ---------------------------------------------------------------------------
+def test_b13_grpo_walltime_does_not_exceed_partition_max_time():
+    """gpu-h100's real MaxTime is 1-00:00:00 (24h), confirmed via
+    `scontrol show partition gpu-h100` on ARC 2026-09-06. --time is a PARTITION
+    property, not a GRES-type one, so it binds a gpu:h200:1 request exactly as
+    it would a gpu:h100:1 one -- the earlier 48:00:00 request was rejected at
+    submission (sbatch refuses an over-limit --time immediately), which is
+    silent in the worst possible way: baseline/sft/merge would queue fine while
+    every GRPO job -- the last stage in the chain -- failed to submit at all,
+    looking nothing like a training failure.
+
+    Pins BOTH places this value is set: scripts/submit_pipeline.py's
+    TIME_CONFIG (what actually reaches the sbatch command line, and therefore
+    what actually governs) and scripts/hpc_grpo.sh's in-file #SBATCH directive
+    (the fallback if that script is ever run directly without the wrapper).
+    """
+    import re
+    import subprocess
+    import sys
+
+    def _to_seconds(spec: str) -> int:
+        # SLURM accepts several --time formats; TIME_CONFIG/hpc_grpo.sh only
+        # ever use HH:MM:SS or D-HH:MM:SS, so only those two need parsing here.
+        if "-" in spec:
+            days, rest = spec.split("-", 1)
+            h, m, s = (int(x) for x in rest.split(":"))
+            return int(days) * 86400 + h * 3600 + m * 60 + s
+        h, m, s = (int(x) for x in spec.split(":"))
+        return h * 3600 + m * 60 + s
+
+    MAX_TIME_SECONDS = _to_seconds("1-00:00:00")  # scontrol show partition gpu-h100
+
+    submitter_src = (REPO / "scripts" / "submit_pipeline.py").read_text(encoding="utf-8")
+    m = re.search(r'"grpo":\s*"([\d:\-]+)"', submitter_src)
+    assert m, "TIME_CONFIG['grpo'] not found in submit_pipeline.py"
+    assert _to_seconds(m.group(1)) <= MAX_TIME_SECONDS, (
+        f"submit_pipeline.py TIME_CONFIG['grpo'] = {m.group(1)!r} exceeds the "
+        "real gpu-h100 partition MaxTime (1-00:00:00) -- sbatch will reject "
+        "this at submission, and since --time on the command line overrides "
+        "the in-file directive, this is the value that actually governs."
+    )
+
+    hpc_grpo_src = (REPO / "scripts" / "hpc_grpo.sh").read_text(encoding="utf-8")
+    m2 = re.search(r"#SBATCH --time=([\d:\-]+)", hpc_grpo_src)
+    assert m2, "#SBATCH --time= not found in hpc_grpo.sh"
+    assert _to_seconds(m2.group(1)) <= MAX_TIME_SECONDS, (
+        f"hpc_grpo.sh's own #SBATCH --time={m2.group(1)!r} exceeds the real "
+        "gpu-h100 partition MaxTime (1-00:00:00)"
+    )
