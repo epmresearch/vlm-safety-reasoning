@@ -257,6 +257,49 @@ def test_b3_apply_pixel_bounds_is_a_noop_without_an_image_processor():
     apply_pixel_bounds(_TextOnly(), 1, 2)  # must not raise
 
 
+def test_b3_apply_pixel_bounds_survives_a_read_only_min_max_pixels_property():
+    """Real crash, confirmed from a live SLURM job: transformers==5.4.0's
+    Qwen2VLImageProcessor implements min_pixels/max_pixels as read-only
+    @property attributes derived from `size` (getter only, no setter).
+    `hasattr(obj, attr)` only tests whether the GETTER succeeds -- it returns
+    True for a read-only property just as it would for a plain attribute -- so
+    the old `if hasattr(...): setattr(...)` guard was not actually a "can I
+    set this" check, and crashed with
+        AttributeError: property of 'Qwen2VLImageProcessor' object has no setter
+    on every single baseline/SFT/GRPO inference call (this is the no-adapter
+    load path model_loader.py::load_model_for_inference always exercises).
+    Reproduced here with a fake processor whose min_pixels/max_pixels are
+    real read-only properties, not plain attributes.
+    """
+    from models.model_loader import apply_pixel_bounds
+
+    class _ReadOnlyPixelsProcessor:
+        def __init__(self):
+            self.size = {"shortest_edge": 3136, "longest_edge": 1003520}
+
+        @property
+        def min_pixels(self):
+            return self.size["shortest_edge"]
+
+        @property
+        def max_pixels(self):
+            return self.size["longest_edge"]
+
+    class _FakeTokenizer:
+        def __init__(self):
+            self.image_processor = _ReadOnlyPixelsProcessor()
+
+    tok = _FakeTokenizer()
+    apply_pixel_bounds(tok, min_pixels=200704, max_pixels=1204224)  # must not raise
+
+    ip = tok.image_processor
+    # The real cap (image_processor.size) must still apply even though the
+    # legacy plain-attribute sync silently could not.
+    assert ip.size == {"shortest_edge": 200704, "longest_edge": 1204224}
+    assert ip.min_pixels == 200704
+    assert ip.max_pixels == 1204224
+
+
 # ---------------------------------------------------------------------------
 # B4 — no class may be un-emittable
 # ---------------------------------------------------------------------------

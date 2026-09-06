@@ -300,10 +300,28 @@ def apply_pixel_bounds(
 
     # Some transformers versions also read these as plain instance attributes (they are
     # set from `size` in __init__ and not re-derived on assignment). Keep them in sync so
-    # the cap binds on every read path.
+    # the cap binds on every read path -- BEST EFFORT ONLY. The real cap is already applied
+    # above via `image_processor.size`, which is the key every code path in transformers
+    # actually reads (per the derivation above); this loop exists purely for older
+    # versions that additionally cache the value as a plain attribute.
+    #
+    # `hasattr` is NOT a safe "can I set this" check: it only tests whether the GETTER
+    # succeeds, and a read-only @property (getter, no setter) still passes it. Confirmed
+    # from a real crash: transformers==5.4.0's Qwen2VLImageProcessor implements
+    # min_pixels/max_pixels as read-only properties derived from `size`, so `hasattr`
+    # returned True but `setattr` raised "property of 'Qwen2VLImageProcessor' object has
+    # no setter" -- crashing every baseline/SFT/GRPO inference call (this is the
+    # no-adapter load path, used by baseline; the adapter path calls the same function).
+    # Try/except makes this genuinely best-effort instead of load-bearing.
     for attr, value in (("min_pixels", current_min), ("max_pixels", current_max)):
-        if hasattr(image_processor, attr):
+        try:
             setattr(image_processor, attr, value)
+        except AttributeError:
+            logger.debug(
+                f"image_processor.{attr} is read-only on this transformers version "
+                "(no setter) -- skipping the legacy-attribute sync; the real cap is "
+                "already applied via image_processor.size."
+            )
 
     logger.info(
         f"Applied image pixel bounds (area, via size shortest_edge/longest_edge): "
