@@ -190,14 +190,12 @@ python -m experiments.run_evaluation --predictions_path "$PREDS/repair_applied/p
   --skip_spice --task object_only
 ```
 
-`--task` carries `choices=VALID_TASKS` at every entry point, but **still defaults to `"unified"`** (or, for
-`preflight_grpo.py`, `"violations_only"`) rather than being required at `run_sft.py`, `run_grpo.py`,
-`run_inference.py`, `run_evaluation.py` and `compare_results.py` — a hand-run stage that forgets `--task`
-silently runs the wrong config rather than erroring. `--tier` has the same silent-default shape via
-`active_tier` in `model_registry.yaml` (currently `"2b"`). Both are safe on the orchestrated path (the four
-`hpc_*.sh` always pass both explicitly) — the exposure is manual/debug invocation, which is exactly how you'd
-run these when chasing a problem. **Always pass both flags explicitly by hand.**
-`merge_sft_adapter.py --task` is the one entry point where this was already fixed (made required).
+`--task` and `--tier` are both `required=True` (`choices=VALID_TASKS` on `--task`) at every direct entry
+point — `run_sft.py`, `run_grpo.py`, `run_inference.py`, `run_evaluation.py`, `compare_results.py`,
+`scripts/preflight_grpo.py`, and `merge_sft_adapter.py`. Neither flag has a silent default any more (the old
+`active_tier`/`"unified"` fallbacks are gone); a hand-run invocation that forgets either now errors
+immediately instead of training/evaluating/comparing against the wrong config. The orchestrated `hpc_*.sh`
+path was never affected either way — it always passed both explicitly.
 
 `python scripts/preflight_grpo.py --tier 2b --task object_only` runs a sanity check before burning a GRPO job.
 It assembles the task's real reward functions (catching a `reward_components` typo early) and measures the
@@ -250,10 +248,11 @@ Each writes a manifest next to its output: `datasets/augmented/augment_manifest.
   images the honest answer and the degenerate "always empty" answer are the *same string* — see
   [Rewards](#rewards-and-the-output-contract).
 
-Step counts (`dataloader_drop_last`, 2 epochs, effective batch 32): `8198 // 32 × 2 =` **512** for
+Step counts (`dataloader_drop_last: true`, 2 epochs, effective batch 32): `8198 // 32 × 2 =` **512** for
 `unified`/`vo` SFT, `6308 // 32 × 2 =` **394** for `oo`/`co` SFT, and `1732 // 32 × 2 =` **108** for GRPO (all
-four tasks — but see the GRPO config table below: `dataloader_drop_last` is never actually set for GRPO, so
-this floor-division arithmetic is currently *assumed*, not enforced by config).
+four tasks). `dataloader_drop_last` is now explicit in `configs/grpo.yaml` (it used to be absent from the
+GRPO chain, defaulting to `TrainingArguments`' own `False`), so this floor-division arithmetic is enforced,
+not assumed.
 
 ### Local analysis (run from repo root — these use relative `Path("evaluation_results")`)
 
@@ -303,21 +302,12 @@ two of this repo's ghost-variable bugs (both now fixed, both listed below).
 | `image_max_pixels: 1204224` (1.2 MP cap) | Uncapped, up to 14.6 MP — `apply_pixel_bounds` wrote a key shape transformers rejects | **Fixed.** Writes `{"shortest_edge","longest_edge"}` — a key rename, those keys hold pixel *areas* |
 | GRPO adapter shape (`lora`/`finetune_*`) from `grpo.yaml` | From `configs/sft.yaml`'s values instead — the copy-over block that moves keys from `cfg` to `sft_cfg` never included `lora`/`finetune_*`, so `load_model_for_training` (which reads exclusively off `sft_cfg`) never saw `grpo.yaml`'s declared block | **Fixed 2026-09-05.** Copy-over now includes `lora` and all four `finetune_*` keys. Was a no-op on *observed* behaviour only because the two files' values happened to be identical — editing `grpo.yaml`'s rank for a GRPO-side ablation would have silently done nothing |
 | `run_sft_unified`'s W&B init logs `task_cfg` | `UnboundLocalError` on every single SFT run, every task, every tier, right after model load — `task_cfg` was referenced in the W&B config dict before being assigned (the load lived further down, in the git-metadata block) | **Fixed 2026-09-05.** Load moved above the W&B init |
-| `repetition_penalty: 1.0` in every task YAML, `unified.yaml`'s comment reads *"locked-in production default per ablation"* (i.e., someone concluded the reward-side penalty should be off) | The reward-shaping penalty is read from a **different key**, `repetition_penalty_factor`, which no YAML sets — so it always falls back to its Python default **`0.5` (ACTIVE)**. Every GRPO run to date has trained with this penalty on, contrary to the checked-in intent | **Not fixed — needs your decision.** See below |
-| `scale_rewards="group"`, treated by this doc as one of GRPO's three load-bearing safety brakes | Never explicitly set in `grpo_config_kwargs` — true only because it happens to be TRL 0.23.0's own default | Works today; pin it explicitly if you want the brake to survive a TRL upgrade |
-| `configs/grpo.yaml`'s "108 steps" comment assumes floor-division (`dataloader_drop_last`) | `dataloader_drop_last` is absent from the entire GRPO config chain (SFT sets it; GRPO doesn't) — `TrainingArguments` defaults it to `False` | Untested whether this changes the real step count; worth confirming against a SLURM log's first few lines |
-| `base.yaml`'s `seed: 42` | Reaches `SFTConfig`; never passed to `GRPOConfig` at all | Currently harmless — `GRPOConfig`'s own default is also `42` — but a `base.yaml` seed change would silently not apply to GRPO |
-| `loss_type` for GRPO | Never set — TRL 0.23.0 defaults to **`"dapo"`** (global-token-count loss normalization), not the classical per-sequence `"grpo"` | Undeclared, unpinned; worth a deliberate choice since CLAUDE.md's LR-sizing reasoning never accounted for it |
-| `mask_truncated_completions` for GRPO | Never set — defaults `False`, so a rollout that hits `max_completion_length` still contributes full per-token loss despite having no real stopping decision | Worth a deliberate choice, given truncation already zeroes every reward component (see below) |
-
-**On the `repetition_penalty_factor` decision:** this is the one finding from the whole audit that is
-genuinely ambiguous rather than a defect with one right answer, so it was deliberately **not** auto-fixed.
-Either: (a) rename the code's lookup key to match what the YAMLs already say (`repetition_penalty`), which
-truly disables the penalty as the checked-in comment intends; or (b) leave the code as-is and add
-`repetition_penalty_factor: <value>` to each task YAML, keeping the penalty active at whatever value you
-choose (0.5 is the historical default). Either is a one-line change. Nothing else in the reward surface
-depends on which you pick, since `scripts/validate_rewards.py --probe` still passes either way (the penalty
-only fires on degenerate >5-repeat completions, which the probe doesn't construct).
+| `repetition_penalty: 1.0` in every task YAML, `unified.yaml`'s comment reads *"locked-in production default per ablation"* (i.e., someone concluded the reward-side penalty should be off) | Was read from a **different key**, `repetition_penalty_factor`, which no YAML set — always fell back to its Python default **`0.5` (ACTIVE)**. Every GRPO run before this fix had trained with the penalty on, contrary to the checked-in intent | **Fixed 2026-09-05, per explicit decision: OFF.** `_apply_repetition_penalty` now reads the same `repetition_penalty` key every task YAML already sets; dead `REPETITION_PENALTY_FACTOR` constant deleted |
+| `scale_rewards="group"`, treated by this doc as one of GRPO's three load-bearing safety brakes | Never explicitly set in `grpo_config_kwargs` — true only because it happens to be TRL 0.23.0's own default | Still open — works today; pin it explicitly if you want the brake to survive a TRL upgrade |
+| `configs/grpo.yaml`'s "108 steps" comment assumes floor-division (`dataloader_drop_last`) | Was absent from the entire GRPO config chain (SFT sets it; GRPO didn't) — `TrainingArguments` defaults it to `False` | **Fixed 2026-09-05.** `dataloader_drop_last: true` now explicit in `configs/grpo.yaml`, confirmed via the pinned `trl==0.23.0` source that `GRPOTrainer.get_train_dataloader` passes it straight to a standard `DataLoader` |
+| `base.yaml`'s `seed: 42` | Reaches `SFTConfig`; never passed to `GRPOConfig` at all | Still open — currently harmless (`GRPOConfig`'s own default is also `42`), but a `base.yaml` seed change would silently not apply to GRPO |
+| `loss_type` for GRPO | Was never set — TRL 0.23.0 defaults to `"dapo"` (global-token-count loss normalization) | **Fixed 2026-09-05, pinned at `"dapo"`** — already TRL's own recommended default and already what was running; declaring it explicitly just stops a future TRL upgrade from silently changing it. `"dapo"` specifically eliminates the length-bias problem this repo would otherwise have, since completions range from a handful of tokens (`object_only`'s box lists) to ~1000 (`unified`'s full JSON) |
+| `mask_truncated_completions` for GRPO | Was never set — defaulted `False`, so a rollout that hit `max_completion_length` still contributed full per-token loss despite having no real stopping decision | **Fixed 2026-09-05, turned ON** (a real behaviour change from the TRL default) — TRL's own docs cite the DAPO paper calling this "a good practice for training stability," and it directly addresses this repo's documented truncation risk (worst case 3328 tokens against `max_seq_length: 3600`, only 272 margin) |
 
 **Why SFT's learning rate is flat across tiers.** A 5× LR spread would confound the tier-scale comparison the
 three tiers exist to make. 512 steps cannot absorb it either — at 1e-4 eval loss was still improving to ~step
@@ -637,10 +627,10 @@ one (the images are still valid supervision for *when* to abstain, via SFT).
 6. **The true-negative constants are per-task configuration**, read via `rewards/reward_utils.py::reward_constant`
    (lru-cached): `grounding_tn_constant` (per-class, `reward_grounding.py`) and `violation_tn_constant` (all
    three violation reward sites move together by construction). See [Rewards](#rewards-and-the-output-contract)
-   for the derivation and current values. Related, less-documented sibling constants: `violation_fbeta`
-   (default `2.0`, recall-weighted F-beta, no task YAML currently overrides it) and `repetition_penalty_factor`
-   (see the ghost-variable table above — currently always `0.5` regardless of what any task YAML's
-   `repetition_penalty` key says).
+   for the derivation and current values. A related, less-documented sibling constant: `violation_fbeta`
+   (default `2.0`, recall-weighted F-beta, no task YAML currently overrides it). `repetition_penalty`
+   (`rewards/reward_utils.py::reward_constant(task, "repetition_penalty", 1.0)`) is the fourth — currently
+   `1.0` (disabled) for every task by explicit decision; see the ghost-variable table above.
 7. **`best/` and `final/` are different checkpoints for SFT.** `load_best_model_at_end: false`, so `final/` is
    the literal end-of-training state and `best/` is the lowest-`eval_loss` state, written eagerly. The merge →
    GRPO handoff consumes `best/`; post-SFT eval runs `--checkpoint best`. GRPO itself has no `best/` (no eval
