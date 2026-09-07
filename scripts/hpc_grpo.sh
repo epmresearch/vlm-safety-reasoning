@@ -5,22 +5,30 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=250G
-#SBATCH --gres=gpu:h200:1
-# GPU POLICY: GRPO is the ONE stage that requires the H200. configs/grpo.yaml is tuned
-# for its 141 GB -- per_device_train_batch_size 16, steps_per_generation 4.
-# CORRECTED: GRPO is NOT actually uncapped -- models/grpo_trainer.py::run_grpo passes
-# sft_cfg (which unconditionally carries configs/sft.yaml's image_max_pixels: 1204224)
-# into load_model_for_training, so the same 1.2MP cap SFT trains under already applies
-# here; grpo.yaml's own override block for this key is dead code (nothing sets it).
-# The historical 92.97/93.12 GiB OOM on a 93GB H100 was measured BEFORE the
-# pixel-bounds key-rename fix, i.e. under images that were silently uncapped at the
-# time -- that evidence predates the fix that makes the cap real, and nobody has
-# re-tested GRPO on an H100 since. Kept on H200 by deliberate decision (2026-09-05),
-# not because the OOM is confirmed to still happen under today's code.
+#SBATCH --gres=gpu:h100:1
+# GPU POLICY (decided 2026-09-06): GRPO now runs on H100, same as every other stage.
+# Moved off the H200 that it used from 2026-09-05 to 2026-09-06. Why the reversal:
+# the H200-only policy was originally justified by a 92.97/93.12 GiB OOM on a 93GB
+# H100 -- but that OOM was measured BEFORE the pixel-bounds key-rename fix, under
+# images that were silently uncapped (up to 14.6 MP). models/grpo_trainer.py::run_grpo
+# passes sft_cfg (which unconditionally carries configs/sft.yaml's
+# image_max_pixels: 1204224) into load_model_for_training, so the 1.2MP cap SFT trains
+# under is ALREADY applied to GRPO too -- confirmed live: the real vo-2b GRPO run
+# (job 47873931, on H200) peaked at ~37-38GB via repeated nvidia-smi checks, far below
+# even a single H100's ~80-93GB. H100 is also far more plentiful (10 cards across 4
+# nodes vs H200's 2 cards on 1 node), so this also cuts queue time substantially.
+# CAVEAT: only 2b has been measured. configs/grpo.yaml's per_device_train_batch_size: 16
+# was originally sized with the (now-corrected) H200 headroom in mind and has NOT been
+# re-tested at 4b/8b under the real 1.2MP cap. Watch nvidia-smi / the GPUMemoryLoggingCallback
+# W&B panel early in the first 4b/8b GRPO run; if it OOMs, the documented fallback is
+# dropping per_device_train_batch_size to 8 in configs/grpo.yaml (previously verified
+# safe, see tests/test_grpo/test_grpo_config.py).
 # NOTE: partition gpu-h100 contains BOTH H100 (mgh1,mgh3-5) and H200 (egh2) nodes.
 # The GRES type is what actually selects the card, NOT the partition -- and
 # --time is a PARTITION property, so it binds identically regardless of GRES type.
-# Only egh2 has H200s (2 of them) — expect queue waits.
+# Jobs submitted before this change keep whatever GRES was baked in at THEIR OWN
+# submission time -- sbatch reads #SBATCH directives once, at submit, not at run
+# time -- so any GRPO job already queued/running under the old script still uses H200.
 #SBATCH --time=24:00:00
 # Was 48:00:00 -- gpu-h100's real MaxTime is 1-00:00:00 (24h), confirmed via
 # `scontrol show partition gpu-h100`. A 48h ask is rejected at submission, not at

@@ -163,20 +163,21 @@ def test_grpo_lora_shape_is_explicit_not_inherited():
 # B2 — the GRES type must match each stage's memory profile
 # ---------------------------------------------------------------------------
 
-# GPU policy. The gpu-h100 partition holds BOTH card types -- four H100 nodes and one
-# H200 node (egh2, 2 GPUs) -- so the GRES *type* is what actually selects the hardware,
-# and the partition must never change.
+# GPU policy (revised 2026-09-06). The gpu-h100 partition holds BOTH card types -- four
+# H100 nodes and one H200 node (egh2, 2 GPUs) -- so the GRES *type* is what actually
+# selects the hardware, and the partition must never change.
 #
-# Only GRPO needs the H200: configs/grpo.yaml is tuned for its 141 GB
-# (per_device_train_batch_size 16, steps_per_generation 4, no image_max_pixels cap), and
-# its own comment records batch 16 OOM'ing at 92.97/93.12 GiB on a 93 GB H100. The other
-# three stages are indifferent to the card, so pinning them to the plentiful H100s keeps
-# them from queueing behind the single H200 node.
+# All four stages now request H100: GRPO was moved off the H200 it used from
+# 2026-09-05 to 2026-09-06 once the image_max_pixels cap fix was confirmed live (the
+# OOM that originally justified H200 was measured under a since-fixed bug where images
+# were silently uncapped) and a real vo-2b GRPO run measured only ~37-38GB peak. H100
+# is also far more plentiful (10 cards / 4 nodes vs H200's 2 cards / 1 node), cutting
+# queue time for every stage, GRPO included.
 STAGE_GRES = {
     "hpc_baseline.sh": "gpu:h100:1",
     "hpc_sft.sh": "gpu:h100:1",
     "hpc_merge_sft.sh": "gpu:h100:1",
-    "hpc_grpo.sh": "gpu:h200:1",
+    "hpc_grpo.sh": "gpu:h100:1",
 }
 
 
@@ -194,14 +195,15 @@ def test_b2_each_stage_requests_the_right_gpu(name):
     assert "--partition=gpu-h100" in text, f"{name} must stay on the gpu-h100 partition"
 
 
-def test_b2_only_grpo_asks_for_the_scarce_h200():
-    """Guards the policy itself, not one script: if a future edit moves SFT onto the H200,
-    the whole schedule serialises behind two GPUs again and nothing else would notice."""
+def test_b2_no_stage_requests_the_h200():
+    """Guards the policy itself, not one script: if a future edit moves any stage back onto
+    the single-node, 2-GPU H200, that stage would silently start queueing behind everyone
+    else's H200 debug/GRPO runs -- this test would catch the regression before a submit."""
     on_h200 = [n for n in PHASE_SCRIPTS
                if "#SBATCH --gres=gpu:h200:1" in (SCRIPTS / n).read_text(encoding="utf-8")]
-    assert on_h200 == ["hpc_grpo.sh"], (
-        f"exactly one stage should request the H200, got {on_h200}. Only GRPO's memory "
-        "profile requires 141 GB; every other stage should use the plentiful H100s."
+    assert on_h200 == [], (
+        f"expected no stage to request the H200, got {on_h200}. As of 2026-09-06 every "
+        "stage (GRPO included) runs on the plentiful H100s -- see hpc_grpo.sh for why."
     )
 
 
@@ -522,10 +524,9 @@ def test_census_derives_the_vision_ceiling_rather_than_sampling_one_image():
 
 def test_submitter_can_override_gres_for_every_stage():
     """--gres is an ESCAPE HATCH, not the normal mechanism. The per-stage policy lives in
-    the scripts (see STAGE_GRES): H100 for baseline/sft/merge, H200 for GRPO. This flag
-    exists to force every stage onto one card type for a debug run, so it deliberately
-    applies to all four and overrides both halves of that policy -- including pulling
-    GRPO off the H200, which only makes sense alongside an image_max_pixels cap.
+    the scripts (see STAGE_GRES): H100 for every stage as of 2026-09-06. This flag exists
+    to force every stage onto one card type for a debug run (e.g. testing on the H200),
+    so it deliberately applies to all four regardless of what the current default is.
 
     Default behaviour must stay untouched: no --gres on the sbatch line at all, so each
     script's own directive governs.

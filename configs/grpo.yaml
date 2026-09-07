@@ -53,9 +53,14 @@ learning_rate: 2.0e-6   # was 2.0e-7, which could not move the policy at all.
 per_device_train_batch_size: 16 # 2x num_generations, so every generation call handles exactly
                                  # 2 unique images (verified safe: scripts/test_processor_batch_collapse.py
                                  # --num_unique_images 2/4 both showed NO COLLAPSE on real dataset images).
-                                 # Was halved to 8 for H100's 93GB limit (16 OOM'd at 92.97/93.12 GiB once
-                                 # real images started reaching the model) — restored now that training
-                                 # runs on H200 (141GB).
+                                 # Was halved to 8 once, then restored to 16 when GRPO moved to the H200
+                                 # (141GB). GRPO is back on H100 as of 2026-09-06 (see scripts/hpc_grpo.sh) --
+                                 # kept at 16 because the historical 92.97/93.12 GiB OOM that originally
+                                 # justified halving it predates the image_max_pixels cap fix (images were
+                                 # silently uncapped at the time); the real, corrected vo-2b run peaked at
+                                 # only ~37-38GB (live nvidia-smi). UNTESTED at 4b/8b under this cap --
+                                 # if a larger tier OOMs on H100, drop this back to 8 (previously verified
+                                 # safe; see tests/test_grpo/test_grpo_config.py).
 steps_per_generation: 4         # generation_batch_size = 16x4 = 64 => K = 64/8 = 8 unique images
                                  # per generate() call, in 256/64 = 4 calls per optimizer step.
                                  # K=8/16/32 all verified NO COLLAPSE on real images

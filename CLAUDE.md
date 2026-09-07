@@ -153,13 +153,13 @@ GPUs) — so the GRES *type*, not the partition, selects the hardware.
 | `hpc_baseline.sh` | `gpu:h100:1` | indifferent to the card; H100s are plentiful |
 | `hpc_sft.sh` | `gpu:h100:1` | same |
 | `hpc_merge_sft.sh` | `gpu:h100:1` | same |
-| **`hpc_grpo.sh`** | **`gpu:h200:1`** | see below — kept deliberately, not re-tested |
+| `hpc_grpo.sh` | `gpu:h100:1` | **as of 2026-09-06** — moved off H200, see decision below |
 
 `submit_pipeline.py --gres gpu:h100:1` is an **escape hatch**: it forces *every* stage onto one card type for a
-debug run, GRPO included. Without it no `--gres` reaches the `sbatch` line and each script's own directive
-governs. `tests/test_core/test_blocker_fixes.py` pins the per-stage policy.
+debug run (e.g. onto the H200 for a comparison test). Without it no `--gres` reaches the `sbatch` line and each
+script's own directive governs. `tests/test_core/test_blocker_fixes.py` pins the per-stage policy.
 
-**Correction: GRPO already applies the same 1.2 MP image cap as SFT and inference — it is not uncapped.**
+**GRPO applies the same 1.2 MP image cap as SFT and inference — it is not uncapped.**
 `models/grpo_trainer.py::run_grpo` loads two configs (`cfg` from the grpo chain, `sft_cfg` from the sft chain)
 and passes **`sft_cfg`** — which unconditionally carries `image_min_pixels: 200704` /
 `image_max_pixels: 1204224` from `configs/sft.yaml` — into `load_model_for_training(sft_cfg=sft_cfg, ...)` →
@@ -168,17 +168,31 @@ and passes **`sft_cfg`** — which unconditionally carries `image_min_pixels: 20
 `sft_cfg`. Earlier versions of this doc and `scripts/hpc_grpo.sh`'s comment claimed GRPO runs uncapped up to
 14.6 MP; that was true only **before** the pixel-bounds key-rename fix, and `models/model_loader.py`'s own
 comment says as much: *"This previously wrote `{min_pixels, max_pixels}`... the cap was never applied — which
-is the most likely cause of the recorded 92.97/93.12 GiB OOM."* **That OOM figure — the evidence the H200-only
-policy originally rested on — was measured under the old, broken (uncapped) code**, and nobody has re-tested
-GRPO on an H100 under the corrected, capped code, so it's entirely possible the H100 would work fine now.
+is the most likely cause of the recorded 92.97/93.12 GiB OOM."*
 
-**Decision (2026-09-05): keep GRPO on H200, everything else on H100 — no re-test planned.** Raised as an open
-question during the audit; the call is to stick with the existing split rather than spend a smoke-test cycle
-chasing it. The reasoning above stays here as context for a future revisit, not as a pending action item.
+**Decision (2026-09-06): move GRPO off H200 onto H100, same as every other stage.** Supersedes the 2026-09-05
+decision to keep GRPO on H200. The 92.97/93.12 GiB OOM that originally justified H200 was measured **before**
+the pixel-bounds key-rename fix above, under images that were silently uncapped — evidence that predates the
+fix making the cap real. Once real GRPO jobs started running under the corrected, capped code, the real vo-2b
+run (job `47873931`) measured only **~37-38 GB peak** via repeated `nvidia-smi` checks — comfortably inside a
+single H100's ~80-93 GB, let alone the H200's 141 GB. Combined with H100 being far more plentiful (10 cards
+across 4 nodes vs H200's 2 cards on 1 node, so much shorter queue waits), the H200 pin no longer has a
+justification. `configs/grpo.yaml`'s `per_device_train_batch_size: 16` was originally sized assuming H200
+headroom and is kept at 16, not reverted to its old fallback of 8, on the strength of the 2b measurement above
+— **but 4b/8b have not been measured under this GRES on H100.** Watch memory (`nvidia-smi`, or the
+`GPUMemoryLoggingCallback` W&B panel) on the first 4b/8b GRPO run under this policy; if it OOMs, drop
+`per_device_train_batch_size` back to 8 in `configs/grpo.yaml` (previously verified safe).
+
+**Operational note: changing a phase script's `--gres` only affects jobs submitted *after* the change.**
+`sbatch` reads `#SBATCH` directives once, at submission time, and bakes the resulting resource request into
+the job's own record in the scheduler — it never re-reads the script file when the job actually starts
+running. A GRPO job already queued or running under the old `hpc_grpo.sh` keeps requesting H200 regardless of
+a later edit to the script; only a fresh `sbatch` (a fresh `submit_pipeline.py` call) picks up the new GRES.
+Verify a specific job's actual request with `scontrol show job <jobid> | grep -i gres`.
 
 **Walltime: `gpu-h100`'s real `MaxTime` is `1-00:00:00` (24h), confirmed via `scontrol show partition gpu-h100`
-on ARC 2026-09-06.** `--time` is a partition property, not a GRES-type one — it binds a `gpu:h200:1` request
-exactly as it would `gpu:h100:1`. GRPO's walltime was `48:00:00` and has been corrected to `24:00:00` in both
+on ARC 2026-09-06.** `--time` is a partition property, not a GRES-type one — it binds identically no matter
+which card GRES requests. GRPO's walltime was `48:00:00` and has been corrected to `24:00:00` in both
 `TIME_CONFIG` (`scripts/submit_pipeline.py`) and `hpc_grpo.sh`'s own `#SBATCH --time=` directive. The old value
 was silently unsubmittable: `sbatch` rejects an over-limit `--time` at submission, not at runtime, so baseline/
 sft/merge would have queued fine while every GRPO job — the last stage in the chain — simply never got

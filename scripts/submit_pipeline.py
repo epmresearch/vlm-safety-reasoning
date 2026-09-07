@@ -60,8 +60,8 @@ TIME_CONFIG = {
     "merge": "01:30:00",
     # Was 48:00:00. The gpu-h100 partition's real MaxTime is 1-00:00:00 (24h) --
     # confirmed via `scontrol show partition gpu-h100` -- and that cap is a
-    # PARTITION property, not a GRES-type one: it binds GRPO's H200 request
-    # exactly as it would an H100 request. A 48h ask was silently unsubmittable;
+    # PARTITION property, not a GRES-type one: it binds identically no matter which
+    # card GRES requests. A 48h ask was silently unsubmittable;
     # sbatch rejects an over-limit --time immediately, so every GRPO job (the
     # last stage in the chain) would fail at submission while baseline/sft/merge
     # queued fine, with nothing about it looking like a training failure.
@@ -100,11 +100,10 @@ def submit_job(script_path, args, dependencies=None, mem=None, time=None,
     if time:
         cmd.append(f"--time={time}")
 
-    # Every hpc_*.sh hardcodes --gres=gpu:h200:1 because grpo.yaml's memory profile
-    # (per_device_train_batch_size 16, no image_max_pixels cap) is tuned for the
-    # H200's 141 GB. But the partition holds one H200 node against four H100 nodes,
-    # so everything serialises behind two GPUs. Overriding here beats the in-file
-    # directive, exactly as --mem and --time already do.
+    # Every hpc_*.sh hardcodes --gres=gpu:h100:1 (decided 2026-09-06 -- GRPO used to
+    # be pinned to gpu:h200:1, see hpc_grpo.sh for why that was retired). This --gres
+    # is purely an ESCAPE HATCH for forcing a debug run onto a different card;
+    # overriding here beats the in-file directive, exactly as --mem and --time already do.
     if gres:
         cmd.append(f"--gres={gres}")
 
