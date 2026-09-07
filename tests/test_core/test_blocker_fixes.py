@@ -693,8 +693,6 @@ REQUIRED_TASK_TIER_FLAGS = [
     ("experiments/run_inference.py", "--task"),
     ("experiments/run_inference.py", "--tier"),
     ("experiments/run_evaluation.py", "--task"),
-    ("experiments/compare_results.py", "--task"),
-    ("experiments/compare_results.py", "--tier"),
     ("scripts/preflight_grpo.py", "--task"),
     ("scripts/preflight_grpo.py", "--tier"),
 ]
@@ -870,7 +868,6 @@ ENTRY_POINT_FILES = [
     "experiments/run_grpo.py",
     "experiments/run_inference.py",
     "experiments/run_evaluation.py",
-    "experiments/compare_results.py",
     "scripts/preflight_grpo.py",
     "scripts/merge_sft_adapter.py",
     "scripts/submit_pipeline.py",
@@ -878,6 +875,10 @@ ENTRY_POINT_FILES = [
     "models/grpo_trainer.py",
     "models/model_loader.py",
     "models/inference.py",
+    # Added 2026-09-07 alongside the two new entry points that replaced
+    # compare_results.py/plot_metrics.py/plot_metrics_vo.py/generate_comparison_csv.py.
+    "experiments/build_results_index.py",
+    "experiments/compare_all.py",
 ]
 
 

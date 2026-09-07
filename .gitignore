@@ -25,3 +25,6 @@ test_git.py
 usables/
 evaluation_results/
 evaluation_results_v2/
+evaluation_results_archive/
+evaluation_results_archive_v2/
+results_index/

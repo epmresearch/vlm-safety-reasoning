@@ -46,8 +46,8 @@ def baseline_run_name(task: str, tier: str, version: str) -> str:
 
     Uniform across all tasks. The unified pipeline used to emit a legacy
     unprefixed 'baseline_<tier>_<version>' here, which was the one writable path
-    in the repo not namespaced by task and forced compare_results.py and
-    plot_metrics.py to special-case task == "unified". Normalized.
+    in the repo not namespaced by task and forced the (now-retired) analysis
+    scripts to special-case task == "unified". Normalized.
     """
     return variant_name(task, "baseline", tier, version)
 
@@ -67,8 +67,9 @@ def merged_checkpoint_name(task: str, tier: str, version: str) -> str:
 def results_dir_names(task: str, tier: str, version: str) -> dict:
     """The results/inference/ folder name for each pipeline phase of one run.
 
-    Single source of truth for the analysis layer (compare_results.py,
-    plot_metrics.py, generate_comparison_csv.py, plot_metrics_vo.py), so those
+    Single source of truth for the analysis layer
+    (experiments/build_results_index.py, experiments/compare_all.py, and their
+    shared experiments/results_lib.py::parse_run_name, its reverse), so those
     scripts no longer each hand-build the strings.
 
     The `_best` / `_final` suffixes come from run_inference.py, which names a run

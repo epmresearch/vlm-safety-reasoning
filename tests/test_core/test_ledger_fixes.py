@@ -32,25 +32,19 @@ def test_bug08_eval_log_name_is_run_scoped():
 
 
 # ---------------------------------------------------------------------------
-# BUG-09 / BUG-10 — analysis outputs must be task+version namespaced
+# BUG-09 / BUG-10 / BUG-21 — RETIRED 2026-09-07.
+#
+# These pinned namespacing/repair-report-probing fixes in
+# experiments/compare_results.py and experiments/plot_metrics.py. Both files
+# (plus plot_metrics_vo.py and generate_comparison_csv.py) were deleted and
+# replaced by experiments/build_results_index.py + experiments/compare_all.py,
+# which supersede all four: namespacing is inherent to the new long-format
+# index (every row already carries task/tier/phase/version), and the
+# repair_applied/repair_report.json probe lives in
+# experiments/results_lib.py's WANTED-style candidate list. See
+# tests/test_core/test_results_tooling.py for the new tool's own regression
+# tests.
 # ---------------------------------------------------------------------------
-
-def test_bug09_comparison_table_is_namespaced():
-    src = (REPO / "experiments" / "compare_results.py").read_text(encoding="utf-8")
-    assert '"comparison_table.csv"' not in src, "the bare filename is back"
-    assert "comparison_table_" in src and "task_prefix" in src
-
-
-def test_bug10_plots_dir_is_namespaced():
-    src = (REPO / "experiments" / "plot_metrics.py").read_text(encoding="utf-8")
-    assert 'f"plots_{args.tier}"' not in src, "tier-only PLOTS_DIR is back"
-    assert "task_prefix(args.task)" in src
-    assert "args.version" in src
-
-
-def test_bug21_plot_metrics_probes_repair_applied():
-    src = (REPO / "experiments" / "plot_metrics.py").read_text(encoding="utf-8")
-    assert '"repair_applied" / "repair_report.json"' in src
 
 
 # ---------------------------------------------------------------------------
@@ -271,6 +265,12 @@ def test_bug20_unparseable_job_id_exits():
     "scripts/test_grpo.sh",
     "scripts/test_eval_grpo.sh",
     "analyze_metrics.py",
+    # Retired 2026-09-07, superseded by experiments/build_results_index.py +
+    # experiments/compare_all.py (see the BUG-09/10/21 note above).
+    "experiments/compare_results.py",
+    "experiments/plot_metrics.py",
+    "experiments/plot_metrics_vo.py",
+    "experiments/generate_comparison_csv.py",
 ])
 def test_bug22_27_stale_entrypoints_removed(path):
     assert not (REPO / path).exists(), f"{path} is back; it was task-blind/hardcoded"
