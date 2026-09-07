@@ -140,11 +140,26 @@ HEADLINE_KEYS = {
     "captioning": ["captioning_bertscore_f1", "captioning_meteor", "captioning_ciderd", "captioning_clipscore"],
     "grounding": ["grounding_mask_iou_all_macro_mean_tn0", "grounding_presence_f1_macro"],
     "violation": [
+        "violation_identification_precision_micro",
+        "violation_identification_recall_micro",
         "violation_identification_f1_micro",
+        "violation_identification_precision_macro",
+        "violation_identification_recall_macro",
         "violation_identification_f1_macro",
         "violation_identification_recall_rule_0",
+        # Bounding-box localisation quality for violations -- a fully separate
+        # metric family from object grounding, previously absent from every
+        # chart (phase progression, tier scaling, master heatmap all read this
+        # same list).
+        "violation_grounding_mask_iou_macro_tn0",
+        "violation_grounding_greedy_iou_macro_tn0",
     ],
-    "reasoning": ["reasoning_text_similarity_bertscore_f1_macro"],
+    "reasoning": [
+        "reasoning_text_similarity_bertscore_f1_macro",
+        "reasoning_text_similarity_meteor_macro",
+        "reasoning_text_similarity_ciderd_macro",
+        "reasoning_text_similarity_clipscore_macro",
+    ],
 }
 
 GROUNDING_CLASSES = ["excavator", "rebar", "worker_with_white_hard_hat"]

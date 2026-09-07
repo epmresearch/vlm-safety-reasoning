@@ -224,6 +224,142 @@ def chart_violation_heatmap(lut, columns, out_dir) -> list:
     return written
 
 
+def _grouped_bar_by_rule(rule_keys, series, title, ylabel, path):
+    """Shared renderer for the four per-run violation detail charts below:
+    x-axis = rules, one bar group per series (e.g. precision/recall/f1, or
+    mask/greedy IoU). `series` is [(label, [value_or_None per rule]), ...]."""
+    fig, ax = plt.subplots(figsize=(max(7, len(rule_keys) * 1.6), 6))
+    n = len(series)
+    width = 0.8 / max(n, 1)
+    x = range(len(rule_keys))
+    colors = cm.get_cmap("Set1", max(n, 3))
+    for i, (label, vals) in enumerate(series):
+        offsets = [xi + (i - (n - 1) / 2) * width for xi in x]
+        plot_vals = [v if v is not None else 0 for v in vals]
+        bars = ax.bar(offsets, plot_vals, width=width * 0.9, label=label, color=colors(i))
+        for b, v in zip(bars, vals):
+            if v is not None:
+                ax.annotate(f"{v:.2f}", (b.get_x() + b.get_width() / 2, b.get_height()),
+                            ha="center", va="bottom", fontsize=7)
+    ax.set_xticks(list(x))
+    ax.set_xticklabels(rule_keys)
+    ax.set_ylim(0, 1.05)
+    ax.set_ylabel(ylabel)
+    ax.set_title(title)
+    ax.legend()
+    ax.grid(axis="y", alpha=0.3)
+    _save(fig, path)
+    return path
+
+
+def _violation_capable_columns(columns):
+    return [c for c in columns if task_has(c[0], CAP_VIOLATIONS)]
+
+
+def chart_violation_identification_detail(lut, columns, out_dir) -> list:
+    """One chart per violation-capable run: precision/recall/F1 for every rule
+    (rule_0..4). The master F1-only heatmap shows F1 across runs; this shows
+    WHY precision is low for one specific run (e.g. a flood of false alarms
+    on rule_0/safe images drags precision down even when recall is high)."""
+    written = []
+    for task, tier, phase, version in _violation_capable_columns(columns):
+        series = []
+        for metric in ("precision", "recall", "f1"):
+            vals = [lut.get((task, tier, phase, version, f"violation_identification_{metric}_{rule}"))
+                    for rule in VIOLATION_RULES]
+            series.append((metric, vals))
+        if all(v is None for _, vals in series for v in vals):
+            continue
+        prefix = get_task_spec(task).prefix
+        path = out_dir / prefix / f"violation_id_detail_{prefix}_{tier}_{phase}_{version}.png"
+        _grouped_bar_by_rule(
+            VIOLATION_RULES, series,
+            f"{prefix} / {tier} / {phase} / {version} -- violation identification by rule",
+            "Score", path,
+        )
+        written.append(path)
+    return written
+
+
+def chart_violation_identification_strict_detail(lut, columns, out_dir) -> list:
+    """Same shape as above but for the IoU-conditioned ('strict') variant --
+    a prediction only counts as a hit if its box also clears the IoU
+    threshold, not just presence. This whole metric family was previously
+    absent from every chart (CSV-only)."""
+    written = []
+    for task, tier, phase, version in _violation_capable_columns(columns):
+        series = []
+        for metric in ("precision", "recall", "f1"):
+            vals = [lut.get((task, tier, phase, version, f"violation_identification_iou_conditioned_{metric}_{rule}"))
+                    for rule in VIOLATION_RULES]
+            series.append((metric, vals))
+        if all(v is None for _, vals in series for v in vals):
+            continue
+        prefix = get_task_spec(task).prefix
+        path = out_dir / prefix / f"violation_id_strict_detail_{prefix}_{tier}_{phase}_{version}.png"
+        _grouped_bar_by_rule(
+            VIOLATION_RULES, series,
+            f"{prefix} / {tier} / {phase} / {version} -- IoU-conditioned (strict) violation ID by rule",
+            "Score", path,
+        )
+        written.append(path)
+    return written
+
+
+def chart_violation_grounding_detail(lut, columns, out_dir) -> list:
+    """One chart per violation-capable run: mask IoU vs greedy IoU per rule
+    (rule_1..4 -- grounding is undefined for rule_0/safe) -- the bounding-box
+    localisation quality for violations. Fully separate metric family from
+    object grounding (grounding_*), and previously plotted nowhere at all."""
+    written = []
+    rules = VIOLATION_RULES[1:]  # skip rule_0 -- no box to ground on a safe image
+    for task, tier, phase, version in _violation_capable_columns(columns):
+        series = [
+            ("Mask IoU", [lut.get((task, tier, phase, version, f"violation_grounding_mask_iou_{r}_tn0")) for r in rules]),
+            ("Greedy IoU", [lut.get((task, tier, phase, version, f"violation_grounding_greedy_iou_{r}_tn0")) for r in rules]),
+        ]
+        if all(v is None for _, vals in series for v in vals):
+            continue
+        prefix = get_task_spec(task).prefix
+        path = out_dir / prefix / f"violation_grounding_detail_{prefix}_{tier}_{phase}_{version}.png"
+        _grouped_bar_by_rule(
+            rules, series,
+            f"{prefix} / {tier} / {phase} / {version} -- violation bounding-box IoU by rule",
+            "IoU", path,
+        )
+        written.append(path)
+    return written
+
+
+def chart_reasoning_detail(lut, columns, out_dir) -> list:
+    """One chart per violation-capable run: reasoning-text quality
+    (BERTScore F1 / METEOR / CIDEr-D / CLIPScore) per rule -- the master
+    headline only carried the macro aggregate; this shows which rule's
+    explanations are weak."""
+    written = []
+    metrics_ = [
+        ("BERTScore F1", "bertscore_f1"), ("METEOR", "meteor"),
+        ("CIDEr-D", "ciderd"), ("CLIPScore", "clipscore"),
+    ]
+    for task, tier, phase, version in _violation_capable_columns(columns):
+        series = []
+        for label, suffix in metrics_:
+            vals = [lut.get((task, tier, phase, version, f"reasoning_text_similarity_{suffix}_{rule}"))
+                    for rule in VIOLATION_RULES[1:]]  # rule_0 has no reasoning (nothing to explain)
+            series.append((label, vals))
+        if all(v is None for _, vals in series for v in vals):
+            continue
+        prefix = get_task_spec(task).prefix
+        path = out_dir / prefix / f"reasoning_detail_{prefix}_{tier}_{phase}_{version}.png"
+        _grouped_bar_by_rule(
+            VIOLATION_RULES[1:], series,
+            f"{prefix} / {tier} / {phase} / {version} -- reasoning-text quality by rule",
+            "Score", path,
+        )
+        written.append(path)
+    return written
+
+
 def chart_grounding_per_class(lut, columns, out_dir) -> list:
     """Per-class grounding IoU bar chart, grouped by run, for any object-
     capable task (unified AND object_only together -- a comparison no
@@ -358,6 +494,10 @@ def generate_all_charts(runs, metrics_rows, columns, out_dir: Path) -> list:
         ("tier scaling", lambda: chart_tier_scaling(lut, columns, out_dir)),
         ("repair status", lambda: chart_repair_status(runs, out_dir)),
         ("violation F1 heatmap", lambda: chart_violation_heatmap(lut, columns, out_dir)),
+        ("violation ID detail (precision/recall/F1)", lambda: chart_violation_identification_detail(lut, columns, out_dir)),
+        ("violation ID strict detail (IoU-conditioned)", lambda: chart_violation_identification_strict_detail(lut, columns, out_dir)),
+        ("violation grounding detail (bounding boxes)", lambda: chart_violation_grounding_detail(lut, columns, out_dir)),
+        ("reasoning detail (per rule)", lambda: chart_reasoning_detail(lut, columns, out_dir)),
         ("grounding per-class", lambda: chart_grounding_per_class(lut, columns, out_dir)),
         ("captioning quality", lambda: chart_captioning_quality(lut, columns, out_dir)),
         ("master heatmap", lambda: chart_master_heatmap(lut, columns, out_dir)),
