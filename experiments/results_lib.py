@@ -135,9 +135,18 @@ def metric_family(key: str) -> str:
 # (the full set always goes to CSV regardless). Picking a fixed short list
 # keeps the terminal output scannable across a task's whole family; not
 # exhaustive by design.
-HEADLINE_KEYS = {
+#
+# Split into BOUNDED (genuinely [0,1] -- precision/recall/F1/IoU/validity
+# rates) and UNBOUNDED (CIDEr-D commonly runs 0-3+; there is no natural
+# ceiling). This split matters for PLOTTING, not just documentation: sharing
+# a fixed 0-1 axis or a 0-1 heatmap color scale between the two is actively
+# misleading -- a mediocre 1.8 CIDEr-D score saturates a 0-1 heatmap
+# identically to a perfect 1.0, and a bar chart clipped to (0, 1.05) simply
+# cuts CIDEr-D bars off outside the frame. results_charts.py never mixes the
+# two groups on one axis; every unbounded metric gets its own auto-scaled chart.
+BOUNDED_HEADLINE_KEYS = {
     "structural": ["structural_json_validity_rate", "structural_schema_adherence_rate"],
-    "captioning": ["captioning_bertscore_f1", "captioning_meteor", "captioning_ciderd", "captioning_clipscore"],
+    "captioning": ["captioning_bertscore_f1", "captioning_meteor", "captioning_clipscore"],
     "grounding": ["grounding_mask_iou_all_macro_mean_tn0", "grounding_presence_f1_macro"],
     "violation": [
         "violation_identification_precision_micro",
@@ -148,18 +157,29 @@ HEADLINE_KEYS = {
         "violation_identification_f1_macro",
         "violation_identification_recall_rule_0",
         # Bounding-box localisation quality for violations -- a fully separate
-        # metric family from object grounding, previously absent from every
-        # chart (phase progression, tier scaling, master heatmap all read this
-        # same list).
+        # metric family from object grounding.
         "violation_grounding_mask_iou_macro_tn0",
         "violation_grounding_greedy_iou_macro_tn0",
+        "violation_identification_iou_conditioned_f1_micro",
+        "violation_identification_iou_conditioned_f1_macro",
     ],
     "reasoning": [
         "reasoning_text_similarity_bertscore_f1_macro",
         "reasoning_text_similarity_meteor_macro",
-        "reasoning_text_similarity_ciderd_macro",
         "reasoning_text_similarity_clipscore_macro",
     ],
+}
+
+UNBOUNDED_HEADLINE_KEYS = {
+    "captioning": ["captioning_ciderd"],
+    "reasoning": ["reasoning_text_similarity_ciderd_macro"],
+}
+
+# Terminal/CSV consumers don't have a scale problem (they print raw numbers),
+# so they read the union of both -- only the chart code needs the split above.
+HEADLINE_KEYS = {
+    fam: BOUNDED_HEADLINE_KEYS.get(fam, []) + UNBOUNDED_HEADLINE_KEYS.get(fam, [])
+    for fam in set(BOUNDED_HEADLINE_KEYS) | set(UNBOUNDED_HEADLINE_KEYS)
 }
 
 GROUNDING_CLASSES = ["excavator", "rebar", "worker_with_white_hard_hat"]
