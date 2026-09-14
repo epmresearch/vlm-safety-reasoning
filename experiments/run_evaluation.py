@@ -139,6 +139,14 @@ def main():
     parser.add_argument("--wandb_run_name", type=str, default=None,
                          help="Weights & Biases run name")
     parser.add_argument("--task", required=True, choices=VALID_TASKS, help="Task to run. Must be registered in core/tasks.py::TASK_REGISTRY.")
+    parser.add_argument(
+        "--use_llm_judge", action="store_true",
+        help="Also score true-positive violation reasoning with the dataset paper's LLM judge "
+             "(Llama 3 8B Instruct, 3-shot per rule, beam 5, seed 20; configs/base.yaml::llm_judge). "
+             "Adds reasoning_llm_judge_* keys plus llm_judge_details.json / llm_judge_status.json. "
+             "Needs a GPU and the model in the local HF cache. Ignored for tasks without "
+             "the violations capability. Omit for a fast evaluation.",
+    )
     args = parser.parse_args()
 
     predictions_path = Path(args.predictions_path)
@@ -192,6 +200,7 @@ def main():
     run_config = {
         "experiment": f"evaluation_{run_label}",
         "task": args.task,
+        "use_llm_judge": bool(args.use_llm_judge),
         "predictions_path": str(predictions_path),
         "output_dir": str(output_dir),
         "max_samples": args.max_samples,
@@ -248,7 +257,7 @@ def main():
     eval_results = run_full_evaluation(
         raw_predictions, references, images=images,
         skip_spice=args.skip_spice, spice_only=args.spice_only,
-        task=args.task
+        task=args.task, use_llm_judge=args.use_llm_judge,
     )
 
     metrics_path = output_dir / "metrics.json"
@@ -268,6 +277,25 @@ def main():
     with open(metrics_path, "w", encoding="utf-8") as f:
         json.dump(eval_results["metrics"], f, indent=2, ensure_ascii=False)
     logger.info(f"Metrics saved to: {metrics_path}")
+
+    # --- LLM judge artifacts (only when it ran) ---
+    # The status file is written even when the judge FAILED, so a metrics.json without
+    # reasoning_llm_judge_* keys can always be told apart from a run that never asked for
+    # them. The details file holds every judged item (reference, candidate, raw reply,
+    # parsed marks) -- the way to check the judge is sane rather than trusting a mean.
+    judge_status = eval_results.get("llm_judge_status")
+    if judge_status is not None:
+        status_path = output_dir / "llm_judge_status.json"
+        with open(status_path, "w", encoding="utf-8") as f:
+            json.dump(judge_status, f, indent=2, ensure_ascii=False)
+        details = eval_results.get("llm_judge_details") or []
+        details_path = output_dir / "llm_judge_details.json"
+        with open(details_path, "w", encoding="utf-8") as f:
+            json.dump(details, f, indent=2, ensure_ascii=False)
+        logger.info(
+            f"LLM judge {judge_status.get('status')}: {len(details)} item(s) -> {details_path}; "
+            f"status -> {status_path}"
+        )
 
     # Extract failure counts for W&B logging unconditionally
     parse_failures = [
@@ -342,8 +370,15 @@ def main():
                 config=run_config
             )
             
-            # The metrics in run_evaluation.py are already flat
-            metrics_to_log = dict(eval_results["metrics"])
+            # The metrics in run_evaluation.py are already flat. String-valued keys are
+            # provenance, not metrics -- the packed per-image outcome vector (~4 KB of
+            # base64) and the judge's model id. They are dropped here so W&B history only
+            # ever receives numbers: this call sits inside the SFT/GRPO phase jobs, AFTER
+            # metrics.json is written, and an exception from it would fail the job and
+            # block every afterok dependent (merge, GRPO) for a reason unrelated to the model.
+            metrics_to_log = {
+                k: v for k, v in eval_results["metrics"].items() if not isinstance(v, str)
+            }
             
             # Failures are always perfectly calculated during parsing, even on spice_only runs
             metrics_to_log["failures/json_parse"] = parse_count

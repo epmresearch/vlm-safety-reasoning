@@ -46,7 +46,12 @@ grounding_tn_constant:
   worker_with_white_hard_hat: 0.065
   default: 0.15
 
-violation_tn_constant: 0.85
+# 0.30, matching configs/tasks/violations_only.yaml (changed 2026-09-10). unified
+# and violations_only deliberately share their rule wording so the multi-task vs
+# single-task comparison is not confounded by the prompt; leaving their violation
+# operating points 0.85 vs 0.30 apart would reintroduce exactly that confound on
+# the reward side. See violations_only.yaml for the p* derivation.
+violation_tn_constant: 0.30
 
 max_new_tokens: 1024   # single response covers caption + objects + violations
 

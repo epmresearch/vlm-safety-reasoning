@@ -1,20 +1,21 @@
 """
 Entry point: runs batched inference (no evaluation) for a given model/checkpoint
 against the processed test set. Works for baseline (no adapter) or any saved
-SFT checkpoint (best / final / checkpoint-N).
+SFT checkpoint (final / best / checkpoint-N). `final` is the pipeline default and
+the checkpoint merge -> GRPO consumes; `best` is a diagnostic lowest-eval_loss snapshot.
 
 Usage:
     # Baseline (no fine-tuning)
     python -m experiments.run_inference --tier 2b
 
     # A specific fine-tuned checkpoint
-    python -m experiments.run_inference --tier 2b --variant unified-sft-v4 --checkpoint best
+    python -m experiments.run_inference --tier 2b --variant unified-sft-v4 --checkpoint final
 
     # A specific intermediate checkpoint
     python -m experiments.run_inference --tier 2b --variant unified-sft-v4 --checkpoint checkpoint-300
 
     # Limit samples for a quick smoke test
-    python -m experiments.run_inference --tier 2b --variant unified-sft-v4 --checkpoint best --max_samples 32
+    python -m experiments.run_inference --tier 2b --variant unified-sft-v4 --checkpoint final --max_samples 32
 """
 import unsloth
 import argparse
@@ -48,9 +49,11 @@ def main():
              "Omit for baseline (no-adapter) inference."
     )
     parser.add_argument(
-        "--checkpoint", default="best",
+        "--checkpoint", default="final",
         help="Subdirectory under checkpoints/<tier>/<variant>/ to load: "
-             "'best', 'final', or a specific 'checkpoint-N'. Ignored if --variant is omitted."
+             "'final' (default, and what merge -> GRPO consumes), 'best' (diagnostic "
+             "lowest-eval_loss snapshot), or a specific 'checkpoint-N'. Ignored if "
+             "--variant is omitted."
     )
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--max_samples", type=int, default=None, help="Cap test samples (debugging)")

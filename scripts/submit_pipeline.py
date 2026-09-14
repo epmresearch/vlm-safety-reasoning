@@ -173,7 +173,10 @@ def build_parser(task_default=None):
     parser.add_argument("--tiers", nargs="+", default=["2b", "4b", "8b"], help="Model tiers to run")
     parser.add_argument(
         "--gres", default=None,
-        help="Override the GPU request for every stage, e.g. gpu:h100:1. The scripts default to gpu:h200:1; on an H100 (93 GB) GRPO also needs image_max_pixels: 602112 in configs/grpo.yaml.")
+        help="ESCAPE HATCH: override the GPU request for every stage, e.g. gpu:h200:1 for a "
+             "deliberate comparison run. All four phase scripts already request gpu:h100:1 "
+             "(the H200-only GRPO pin was retired 2026-09-06 after real capped runs measured "
+             "~37-38 GB peak), so you normally do NOT need this.")
     parser.add_argument(
         "--version", required=True,
         help="Run version tag (e.g. v1, v2). Stamped into every variant name this "

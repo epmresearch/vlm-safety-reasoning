@@ -20,6 +20,7 @@ from preprocessing.structural_repair import (
     ChangeTracker,
     _canonical_keys_for_task,
     fix_prediction_structure,
+    normalize_violation_value,
     repair_and_validate,
 )
 
@@ -256,3 +257,113 @@ def test_process_jsonl_writes_prose_for_co_and_json_for_oo(tmp_path):
         else:
             payload = json.loads(rec["raw_output"])
             assert set(payload) == set(OBJECT_KEYS)
+
+
+# ---------------------------------------------------------------------------
+# A LIST of violations is merged, not dropped
+#
+# normalize_violation_value used to return None for any list value, i.e. "this
+# rule was NOT violated". That does not drop a repair, it INVERTS the model's
+# answer. On the real vo-baseline-2b run it fired on 1260 of 3004 records (42%)
+# and destroyed 182 true positives, dragging recall from 0.887 to 0.469 -- which
+# then read as a model difference against the 4b/8b baselines rather than as a
+# repair artifact. It fired on ~0% of the SFT/GRPO runs, so it also made one
+# column of the comparison table silently non-comparable with the rest.
+#
+# Two list shapes occur in real output and both must survive.
+# ---------------------------------------------------------------------------
+
+def test_violation_list_of_objects_is_merged_not_dropped():
+    """vo-baseline-2b's shape: one violation object per instance."""
+    out = normalize_violation_value(
+        [
+            {"bounding_box": [345, 27, 380, 234], "reason": "A worker on foot is missing a hard hat."},
+            {"bounding_box": [555, 50, 590, 270], "reason": "A worker on foot is missing a hard hat."},
+        ],
+        rule_key="rule_1",
+    )
+    assert out is not None, "a list of violation objects must not become 'no violation'"
+    assert len(out["bounding_box"]) == 2
+    # Identical reasons are de-duplicated: N instances of the SAME finding is the
+    # dominant real shape, and repeating it N times only depresses the
+    # length-calibrated reasoning score without adding information.
+    assert out["reason"] == "A worker on foot is missing a hard hat."
+
+
+def test_violation_list_joins_genuinely_different_reasons():
+    out = normalize_violation_value(
+        [
+            {"bounding_box": [10, 10, 20, 20], "reason": "The worker on the left has no hard hat."},
+            {"bounding_box": [30, 30, 40, 40], "reason": "The worker on the right has no vest."},
+        ],
+        rule_key="rule_1",
+    )
+    assert out["reason"] == (
+        "The worker on the left has no hard hat. The worker on the right has no vest."
+    )
+    assert len(out["bounding_box"]) == 2
+
+
+def test_violation_list_of_bare_boxes_is_merged():
+    """vo-baseline-8b's shape: the wrapping object omitted, boxes given alone.
+
+    No reason is invented -- an empty reason beside a real box is the same shape
+    this module already manufactures for a bare `true`, and it still counts as
+    substantive to the rewards because it IS localized.
+    """
+    out = normalize_violation_value([[0, 0, 1000, 999]], rule_key="rule_3")
+    assert out == {"bounding_box": [[0.0, 0.0, 1000.0, 999.0]], "reason": ""}
+
+    out = normalize_violation_value([[825, 352, 862, 408], [852, 588, 878, 640]], rule_key="rule_2")
+    assert len(out["bounding_box"]) == 2
+
+
+def test_violation_flat_box_inside_a_list_is_reshaped():
+    out = normalize_violation_value([0, 0, 1000, 999], rule_key="rule_3")
+    assert out == {"bounding_box": [[0.0, 0.0, 1000.0, 999.0]], "reason": ""}
+
+
+def test_violation_list_mixing_an_object_and_a_bare_box_keeps_both():
+    out = normalize_violation_value(
+        [{"bounding_box": [10, 10, 20, 20], "reason": "A finding."}, [50, 50, 60, 60]],
+        rule_key="rule_1",
+    )
+    assert len(out["bounding_box"]) == 2
+    assert out["reason"] == "A finding."
+
+
+@pytest.mark.parametrize("payload", [[], [{}, {}], ["garbage", "more garbage"]])
+def test_violation_list_with_nothing_usable_is_still_null(payload):
+    """The only case that may still collapse to 'no violation': nothing to keep."""
+    assert normalize_violation_value(payload, rule_key="rule_1") is None
+
+
+def test_violation_list_merge_is_logged_as_a_merge_not_a_drop():
+    tracker = ChangeTracker()
+    normalize_violation_value(
+        [{"bounding_box": [1, 1, 2, 2], "reason": "x"}], rule_key="rule_1", tracker=tracker
+    )
+    types = [c["type"] for c in tracker.changes]
+    assert "violation_list_merged" in types
+    assert "violation_list_dropped" not in types
+
+
+def test_vo_end_to_end_list_shape_survives_repair():
+    """Through the real repair entry point, not just the normalizer."""
+    raw = _fenced({
+        "rule_1_violation": [
+            {"bounding_box": [345, 27, 380, 234], "reason": "No hard hat."},
+            {"bounding_box": [555, 50, 590, 270], "reason": "No hard hat."},
+        ],
+        "rule_2_violation": None,
+        "rule_3_violation": [[0, 0, 1000, 999]],
+        "rule_4_violation": None,
+    })
+    res = repair_and_validate(raw, task="violations_only")
+    assert res["status"] == "fixed_valid"
+    fixed = res["fixed_parsed"]
+    assert fixed["rule_1_violation"] is not None, "the list must not become 'no violation'"
+    assert len(fixed["rule_1_violation"]["bounding_box"]) == 2
+    assert fixed["rule_1_violation"]["reason"] == "No hard hat."
+    assert fixed["rule_3_violation"] == {"bounding_box": [[0.0, 0.0, 1000.0, 999.0]], "reason": ""}
+    assert fixed["rule_2_violation"] is None and fixed["rule_4_violation"] is None

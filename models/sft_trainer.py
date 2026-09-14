@@ -144,10 +144,25 @@ def run_sft_unified(
         run_name: W&B run name. Defaults to "{short_name}-{variant}".
 
     Returns:
-        Path to the final ("best") adapter directory.
+        Path to the FINAL adapter directory (checkpoint_dir/final).
+
+        Deliberately not best/: eval_loss on this task is ~87% boilerplate and
+        plateaus into a noise band after ~step 125, so "lowest eval_loss" selects
+        essentially at random among late checkpoints. final/ is the full-budget
+        end-of-training state and is what merge -> GRPO consumes. best/ is still
+        written by SaveBestModelCallback as a diagnostic, but nothing reads it.
     """
     if sft_cfg is None:
-        sft_cfg = load_training_config("sft")
+        # FULL merge chain (base -> model_registry -> sft), not load_training_config("sft"),
+        # which reads configs/sft.yaml ALONE. That fallback silently dropped every key
+        # that lives outside sft.yaml -- including `lora_by_tier` from
+        # model_registry.yaml, so a caller that omitted sft_cfg would have trained at a
+        # flat r=16 at every tier while the registry said otherwise, with nothing in the
+        # logs to show it. run_sft.py always passes sft_cfg explicitly, so this is a
+        # latent trap rather than a live bug, but it is the same shape as the
+        # ghost-variable failures in CLAUDE.md and is closed here rather than documented.
+        from core.config import load_config as _load_config
+        sft_cfg = _load_config(training_kind="sft")
     base_cfg = load_base_config()
     model_info = get_model_info(tier)
     batch_cfg = get_batch_config(tier)
@@ -445,4 +460,8 @@ def run_sft_unified(
                 f"start against a missing adapter."
             ) from final_save_error
 
-    return str(best_dir) if best_dir.exists() else str(checkpoint_dir / "final")
+    # ALWAYS final/. This used to prefer best/ when it existed, which silently made
+    # the lowest-eval_loss checkpoint the pipeline's handoff -- see the docstring and
+    # configs/sft.yaml. final/ is written unconditionally in the finally: block above,
+    # including on a crash or interrupt, so it is always present here.
+    return str(final_dir)

@@ -176,11 +176,20 @@ def test_grounding_iou_separation():
     # Rule 4 IoU: One instance (0.5) -> Average 0.5
     assert res["violation_grounding_mask_iou_rule_4_tn0"] == 0.5
     
-    # Rule 2 IoU: No instances -> 0.0
+    # Rule 2 IoU: No instances -> the per-rule key still reports 0.0, because
+    # downstream CSV/chart code expects a value for every rule.
     assert res["violation_grounding_mask_iou_rule_2_tn0"] == 0.0
-    
-    # Global IoU Macro (True Macro): Average of (0.5, 0.0, 0.0, 0.5) = 0.25
-    assert res["violation_grounding_mask_iou_macro_tn0"] == 0.25
+    assert res["violation_grounding_scored_count_rule_2"] == 0
+
+    # ...but the MACRO averages only the rules that were actually measured.
+    # Rules 2 and 3 have no true positives, so there was no box to score:
+    #   correct : (0.5 + 0.5) / 2 = 0.5   over n_rules = 2
+    #   old bug : (0.5 + 0.0 + 0.0 + 0.5) / 4 = 0.25
+    assert res["violation_grounding_mask_iou_macro_tn0"] == 0.5
+    assert res["violation_grounding_mask_iou_macro_tn0_n_rules"] == 2
+    assert res["violation_grounding_greedy_iou_macro_tn0_n_rules"] == 2
+    assert res["violation_grounding_scored_count_rule_1"] == 2
+    assert res["violation_grounding_scored_count_rule_4"] == 1
 
 def test_flat_box_handling():
     """Test that flat boxes are correctly parsed to compute IoU (the bug we fixed)."""
@@ -275,3 +284,116 @@ def test_contentless_violation_object_counts_as_a_detection():
     )
     assert res["violation_identification_recall_rule_0"] == 1.0
 
+
+
+# ---------------------------------------------------------------------------
+# Image-level base rates and the packed per-image outcome vector
+#
+# violation_pred_positive_rate is the fraction of images the model flagged at
+# all. Against violation_gt_positive_rate it is the single most diagnostic
+# number for this task and it was absent from every metric file before: a
+# zero-shot baseline flagging 64% of images against a 13.7% base rate has a
+# recall that looks excellent and means nothing.
+# ---------------------------------------------------------------------------
+
+def test_image_level_positive_rates_and_counts():
+    refs = [
+        {"rule_1_violation": {"bounding_box": [[0, 0, 1, 1]], "reason": "r"}},   # violation
+        {"rule_2_violation": {"bounding_box": [[0, 0, 1, 1]], "reason": "r"}},   # violation
+        {"rule_1_violation": None},                                              # safe
+        {"rule_1_violation": None},                                              # safe
+    ]
+    preds = [
+        {"rule_1_violation": {"bounding_box": [[0, 0, 1000, 1000]], "reason": "p"}},  # TP
+        {"rule_1_violation": {"bounding_box": [[0, 0, 1000, 1000]], "reason": "p"}},  # wrong rule
+        {"rule_1_violation": {"bounding_box": [[0, 0, 1000, 1000]], "reason": "p"}},  # false alarm
+        {"rule_1_violation": None},                                                   # correct safe
+    ]
+    res = compute_violation_metrics(preds, refs)
+
+    assert res["violation_gt_positive_image_count"] == 2
+    assert res["violation_pred_positive_image_count"] == 3
+    assert res["violation_gt_positive_rate"] == 0.5
+    assert res["violation_pred_positive_rate"] == 0.75
+
+    # Absolute counts behind each per-rule ratio.
+    assert res["violation_gt_count_rule_1"] == 1
+    assert res["violation_pred_count_rule_1"] == 3
+    assert res["violation_tp_count_rule_1"] == 1
+    assert res["violation_gt_count_rule_2"] == 1
+    assert res["violation_pred_count_rule_2"] == 0
+    assert res["violation_tp_count_rule_2"] == 0
+
+
+def test_per_image_outcome_vector_round_trips_to_the_same_confusion_matrix():
+    """The packed vector must be a lossless record of the identification result.
+
+    compare_all.py runs its paired bootstrap off this string alone, so if it
+    ever disagreed with the aggregate metrics the confidence intervals would be
+    describing a different model than the table above them.
+    """
+    import base64
+    from core.constants import RULES
+
+    refs = [
+        {"rule_1_violation": {"bounding_box": [[0, 0, 1, 1]], "reason": "r"},
+         "rule_3_violation": {"bounding_box": [[0, 0, 1, 1]], "reason": "r"}},
+        {"rule_2_violation": {"bounding_box": [[0, 0, 1, 1]], "reason": "r"}},
+        {"rule_1_violation": None},
+        {"rule_4_violation": {"bounding_box": [[0, 0, 1, 1]], "reason": "r"}},
+    ]
+    preds = [
+        {"rule_1_violation": {"bounding_box": [[0, 0, 500, 500]], "reason": "p"}},
+        {"rule_2_violation": {"bounding_box": [[0, 0, 500, 500]], "reason": "p"},
+         "rule_4_violation": {"bounding_box": [[0, 0, 500, 500]], "reason": "p"}},
+        {"rule_3_violation": {"bounding_box": [[0, 0, 500, 500]], "reason": "p"}},
+        None,
+    ]
+    res = compute_violation_metrics(preds, refs)
+    raw = base64.b64decode(res["violation_per_image_outcomes_b64"])
+    assert len(raw) == len(preds)
+
+    tp = fp = fn = 0
+    pred_pos = 0
+    for byte in raw:
+        pred_mask, gt_mask = byte >> 4, byte & 0x0F
+        if pred_mask:
+            pred_pos += 1
+        for i in range(len(RULES)):
+            p, g = (pred_mask >> i) & 1, (gt_mask >> i) & 1
+            if p and g:
+                tp += 1
+            elif p:
+                fp += 1
+            elif g:
+                fn += 1
+
+    prec = tp / (tp + fp) if tp + fp else 0.0
+    rec = tp / (tp + fn) if tp + fn else 0.0
+    f1 = 2 * prec * rec / (prec + rec) if prec + rec else 0.0
+    assert abs(prec - res["violation_identification_precision_micro"]) < 1e-12
+    assert abs(rec - res["violation_identification_recall_micro"]) < 1e-12
+    assert abs(f1 - res["violation_identification_f1_micro"]) < 1e-12
+    assert pred_pos == res["violation_pred_positive_image_count"]
+
+
+def test_identification_macro_still_counts_a_real_zero():
+    """The macro fix applies to TP-CONDITIONED families only.
+
+    An identification metric has a well-defined denominator even at zero true
+    positives -- rule_3 has ground-truth positives whether or not the model
+    finds any -- so an F1 of 0.0 there is a real, earned zero and must keep its
+    full weight. Only reasoning and grounding, which have no denominator without
+    a true positive, skip unmeasured rules.
+    """
+    refs = [{"rule_1_violation": {"bounding_box": [[0, 0, 1, 1]], "reason": "r"},
+             "rule_3_violation": {"bounding_box": [[0, 0, 1, 1]], "reason": "r"}}]
+    preds = [{"rule_1_violation": {"bounding_box": [[0, 0, 1000, 1000]], "reason": "p"}}]
+    res = compute_violation_metrics(preds, refs)
+
+    assert res["violation_identification_f1_rule_1"] == 1.0
+    assert res["violation_identification_f1_rule_3"] == 0.0   # missed it entirely
+    # macro divides by 4, INCLUDING the earned zeros -- unchanged behaviour.
+    assert res["violation_identification_f1_macro"] == 1.0 / 4
+    # ...while grounding, which could only be measured for rule_1, divides by 1.
+    assert res["violation_grounding_mask_iou_macro_tn0_n_rules"] == 1

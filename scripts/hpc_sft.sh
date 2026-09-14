@@ -105,18 +105,21 @@ python -m experiments.run_sft \
     --task "$TASK"
 
 echo "======================================================================"
-echo "[STEP 2/4] Running Inference on Best SFT Checkpoint"
+echo "[STEP 2/4] Running Inference on the FINAL SFT Checkpoint"
 echo "======================================================================"
-# 'best' (lowest eval_loss), not 'final' (last step) — this is the checkpoint the merge
-# step feeds to GRPO, so the reported SFT numbers must describe that same checkpoint.
+# 'final' (last step), not 'best' (lowest eval_loss) — changed 2026-09-10. This is the
+# checkpoint hpc_merge_sft.sh feeds to GRPO, so the reported SFT numbers must describe
+# that same checkpoint. eval_loss cannot select a checkpoint on this task: 86.8% of the
+# target character mass is the fixed all-null skeleton, so the loss plateaus into a
+# 5-11% noise band after ~step 125 and "best" is a coin flip among late steps.
 python -m experiments.run_inference \
     --tier ${TIER} \
     --variant ${VARIANT} \
-    --checkpoint best \
+    --checkpoint final \
     --batch_size 32 \
     --task "$TASK"
 
-PREDS_DIR="$HPC_DRIVE_ROOT/results/inference/${VARIANT}_best"
+PREDS_DIR="$HPC_DRIVE_ROOT/results/inference/${VARIANT}_final"
 PREDS_FILE="$PREDS_DIR/predictions.jsonl"
 
 echo "======================================================================"
@@ -138,6 +141,7 @@ python -m experiments.run_evaluation \
     --output_dir "$EVAL_OUT_DIR" \
     --skip_spice \
     --skip_java_switch \
+    --use_llm_judge \
     --wandb_project "vlm-safety-evals" \
     --wandb_run_name "qwen3-${TIER}-${WANDB_TAG}-repaired" \
     --task "$TASK"

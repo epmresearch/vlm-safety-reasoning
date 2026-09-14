@@ -72,15 +72,19 @@ def results_dir_names(task: str, tier: str, version: str) -> dict:
     shared experiments/results_lib.py::parse_run_name, its reverse), so those
     scripts no longer each hand-build the strings.
 
-    The `_best` / `_final` suffixes come from run_inference.py, which names a run
-    ``<variant>_<checkpoint>``: SFT is evaluated from `best` (the checkpoint the
-    merge step hands to GRPO), while GRPO has no eval dataset and therefore no
-    best/, so it stays `final`. Baseline runs pass --run_name directly and carry
-    no suffix.
+    The `_final` suffix comes from run_inference.py, which names a run
+    ``<variant>_<checkpoint>``. BOTH phases are now `_final`: SFT is evaluated from
+    `final` (the checkpoint hpc_merge_sft.sh hands to GRPO, as of 2026-09-10 —
+    it used to be `best`), and GRPO has no eval dataset so it never had a best/.
+    Baseline runs pass --run_name directly and carry no suffix.
+
+    Historical `<variant>_best` SFT directories are still PARSEABLE by
+    experiments/results_lib.py::parse_run_name, so an index built over results
+    produced before the switch keeps working. Only newly generated names change.
     """
     return {
         "baseline": baseline_run_name(task, tier, version),
-        "sft": f"{variant_name(task, 'sft', tier, version)}_best",
+        "sft": f"{variant_name(task, 'sft', tier, version)}_final",
         "grpo": f"{variant_name(task, 'grpo', tier, version)}_final",
     }
 

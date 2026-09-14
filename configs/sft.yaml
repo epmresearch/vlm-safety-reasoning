@@ -1,5 +1,9 @@
 # SFT training hyperparameters.
-num_train_epochs: 2    # 8198 augmented rows / bs 32 = 256 steps/epoch -> 512 total
+num_train_epochs: 2    # 8198 augmented rows / bs 32 = 256 steps/epoch -> 512 total.
+                       # Early stopping is OFF as of 2026-09-10, so unlike v1 -- which
+                       # stopped at step 300 (2b) / 375 (4b, 8b) of this nominal 512 --
+                       # the full budget is now actually spent. No dataset rebuild is
+                       # needed: RULE_MULTIPLIERS are unchanged for v2.
 learning_rate: 1.0e-4
 warmup_ratio: 0.10
 weight_decay: 0.01
@@ -34,30 +38,42 @@ eval_steps: 25          # 20 eval points across 512 steps (~53s each on 8B)
 eval_strategy: "steps"
 save_total_limit: 3
 
-# Checkpoint separation: final/ = literal end-of-training weights (debugging),
-# best/ = lowest-eval_loss weights (what the merge -> GRPO handoff consumes).
-# With load_best_model_at_end: true these were identical on any clean run, because
-# the Trainer reloaded best weights before sft_trainer.py wrote final/.
+# CHECKPOINT SELECTION (changed 2026-09-10): final/ is the handoff, best/ is a diagnostic.
+#
+#   final/ = literal end-of-training weights. THIS is what hpc_merge_sft.sh merges,
+#            what GRPO trains on top of, and what SFT inference is run from.
+#   best/  = lowest-eval_loss weights. Still written on every eval improvement, but
+#            NOTHING downstream consumes it. Kept only so a run can be inspected for
+#            "what would eval_loss have chosen?" — which is exactly the comparison that
+#            showed the criterion was unusable here (see early_stopping_patience above).
+#
+# load_best_model_at_end stays false, so final/ really is the last step's weights and
+# not a silent copy of best/.
 load_best_model_at_end: false
-metric_for_best_model: "eval_loss"   # still required: EarlyStoppingCallback and
-                                     # Trainer._determine_best_metric both key off this,
-                                     # and neither depends on load_best_model_at_end.
+metric_for_best_model: "eval_loss"   # Only SaveBestModelCallback reads this now (best/ is
+                                     # diagnostic). EarlyStoppingCallback is no longer
+                                     # installed, and Trainer._determine_best_metric is
+                                     # inert with load_best_model_at_end: false.
 greater_is_better: false
 best_model_threshold: 0.0   # was 0.005 — an ABSOLUTE delta on a ~0.055 loss, i.e. a ~9%
                             # relative bar. It froze best/ at step 100 while the model kept
                             # improving to step 250. 0.0 tracks every real improvement.
 
-# Early stopping. Wiring already exists in sft_trainer.py; these keys activate it.
-# patience 4 x eval_steps 25 = tolerate a ~100-step plateau before stopping.
-early_stopping_patience: 4
-early_stopping_threshold: 0.0   # Any improvement, however small, counts as progress:
-                                # it saves best/ AND resets the patience counter.
-                                # Deliberately matched to best_model_threshold: 0.0 above so a
-                                # single rule governs both — "strictly better than the best so
-                                # far" — rather than best/ updating while patience still ticks.
-                                # Consequence: training stops only after 4 consecutive evals with
-                                # NO improvement at all, so expect most runs to go the full 512
-                                # steps. best/ still captures the true minimum either way.
+# Early stopping is OFF (2026-09-10). `null` disables it explicitly rather than by
+# omission — sft_trainer.py does `if patience:`, so None means "never stop early".
+#
+# WHY IT WAS TURNED OFF. The old note here predicted "expect most runs to go the full
+# 512 steps". Measured on the real vo v1 runs it stopped ALL THREE tiers early:
+# 2b at step 300 of 512 (epoch 1.17), 4b and 8b at 375 (epoch 1.47) — 27-41% of the
+# configured budget discarded. The cause is that eval_loss here is dominated by
+# boilerplate: 86.8% of the SFT target character mass is the fixed null skeleton
+# `{"rule_1_violation":null,...,"rule_4_violation":null}`, because 86.3% of images are
+# safe. After ~step 125 the loss sits in a 5-11% band that is pure noise — at 8b the
+# step-to-step jitter (0.05532 -> 0.06166, 11%) is LARGER than the total improvement
+# still available (1.9%). Patience was counting noise, not a plateau.
+early_stopping_patience: null
+early_stopping_threshold: 0.0   # Inert while patience is null. Kept so the knob stays
+                                # documented rather than silently absent.
 
 # LoRA configuration
 lora:
@@ -91,6 +107,7 @@ image_min_pixels: 200704              # ~448x448 floor (Qwen patch-aligned)
 image_max_pixels: 1204224             # ~1097x1097 cap -> neutralizes the 4K/14MP outliers you found
 
 # --- Crash-safety additions (new) ---
-best_model_subdir: "best"             # saved incrementally on every eval improvement, not just at the end
+best_model_subdir: "best"             # DIAGNOSTIC ONLY — saved on every eval improvement, but
+                                      # no downstream stage reads it (see the block above).
 log_gpu_memory_every_n_steps: 20
 dataloader_drop_last: true

@@ -30,19 +30,33 @@ def test_batch_score_reasoning_splitting(mock_metrics):
     assert res["reasoning_text_similarity_bertscore_f1_micro"] == 0.9
     assert res["reasoning_text_similarity_meteor_micro"] == 0.8
     
-    # Check that true macro correctly averages the 4 rules
-    # (0.9 + 0.9 + 0.0 + 0.0) / 4 = 0.45
-    assert res["reasoning_text_similarity_bertscore_f1_macro"] == 0.45
-    assert res["reasoning_text_similarity_meteor_macro"] == 0.40
+    # Macro averages only the rules that were actually MEASURED.
+    # Rules 3 and 4 have no true positives here, so there was no reasoning text
+    # to score for them -- that is missing data, not a score of zero.
+    #   correct : (0.9 + 0.9) / 2 = 0.9   over n_rules = 2
+    #   old bug : (0.9 + 0.9 + 0.0 + 0.0) / 4 = 0.45
+    # The old form is what reported vo-2b-sft's reasoning as 0.391 when the two
+    # rules it could be scored on averaged 0.782.
+    assert res["reasoning_text_similarity_bertscore_f1_macro"] == 0.9
+    assert res["reasoning_text_similarity_meteor_macro"] == 0.8
+    assert res["reasoning_text_similarity_bertscore_f1_macro_n_rules"] == 2
+    assert res["reasoning_text_similarity_meteor_macro_n_rules"] == 2
     
     # Check that rule 1 and 2 received the mocked scores
     assert res["reasoning_text_similarity_bertscore_f1_rule_1"] == 0.9
     assert res["reasoning_text_similarity_bertscore_f1_rule_2"] == 0.9
     
-    # Check that rule 3 and 4 correctly fell back to 0.0 since they had no data
+    # Check that rule 3 and 4 correctly fell back to 0.0 since they had no data.
+    # The PER-RULE fallback stays 0.0 (downstream CSV/chart code expects the key
+    # to exist for every rule); only the MACRO stops averaging it in.
     assert res["reasoning_text_similarity_bertscore_f1_rule_3"] == 0.0
     assert res["reasoning_text_similarity_meteor_rule_3"] == 0.0
     assert res["reasoning_text_similarity_bertscore_f1_rule_4"] == 0.0
+
+    # scored_count is now always emitted, including as 0, so the sample size a
+    # reasoning score rests on is never a blank cell in the comparison CSV.
+    assert res["reasoning_text_similarity_scored_count_rule_3"] == 0
+    assert res["reasoning_text_similarity_scored_count_rule_4"] == 0
 
 def test_batch_score_reasoning_empty():
     """Test fallback logic when there are completely empty lists or no common rules."""
@@ -55,6 +69,9 @@ def test_batch_score_reasoning_empty():
     refs = [{"rule_2_violation": {"reason": "b"}}]
     
     res_no_overlap = batch_score_reasoning(preds, refs, images=["img1"])
+    # Nothing measurable at all -> macro stays 0.0 (the key must still exist),
+    # and n_rules == 0 says explicitly that the 0.0 is "no data", not "scored 0".
     assert res_no_overlap["reasoning_text_similarity_bertscore_f1_macro"] == 0.0
+    assert res_no_overlap["reasoning_text_similarity_bertscore_f1_macro_n_rules"] == 0
     assert res_no_overlap["reasoning_text_similarity_bertscore_f1_rule_1"] == 0.0
     assert res_no_overlap["reasoning_text_similarity_bertscore_f1_rule_2"] == 0.0

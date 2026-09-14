@@ -377,19 +377,87 @@ def test_b5_substantive_assertion_still_earns_full_credit():
 
 
 @pytest.mark.parametrize("task", ["unified", "violations_only"])
-def test_b5_honest_abstention_beats_reflexive_flagging(task):
-    """Expected value over the 50/50 pool. At the historical c = 0.15,
-    always-assert-rule_1 scored ~0.391 against always-safe's 0.075 — a 5x edge for
-    a policy that never looks at the image."""
+def test_b5_honest_policy_beats_every_degenerate_policy(task):
+    """The reward-hacking guard, on the FULL weighted reward.
+
+    REPLACED 2026-09-10. This used to compare two DEGENERATE policies against each
+    other -- always-safe (EV = P(safe)*c) vs always-assert-rule_1 (EV = P(rule_1))
+    -- on the identification component ALONE, and require
+    c > P(rule_1)/P(safe) = 0.782. That criterion was wrong three ways:
+
+      1. Neither policy is one we want. Whether HONEST behaviour wins is the
+         question, and it is not answered by ranking two policies that never look
+         at the image against each other.
+      2. It scored always-assert-rule_1 at F-beta = 1.0 on the 0.40-weighted
+         identification term while ignoring grounding and reasoning, where that
+         policy's full-image box and canned reason score ~0 -- flattering the
+         degenerate policy, then forcing c up to beat the flattered number.
+      3. c IS the operating point (see the next test). Forcing it to 0.85 put the
+         assert/abstain threshold at p* = 0.546 and produced rule_1 recall 0.46
+         against a human upper bound of 0.666.
+
+    What is asserted now is the thing the old test was trying to protect: on both
+    a violation image and a safe image, the honest completion must score at least
+    as well as every degenerate one under the real weighted reward.
+    """
+    from rewards.unified_reward import get_reward_funcs_for_task
+
+    funcs, weights = get_reward_funcs_for_task(task)
+
+    gt_violation = _gt(rule_1={"bounding_box": [[0.1, 0.1, 0.2, 0.2]], "reason": "no hard hat"})
+    gt_safe = _gt()
+
+    honest_hit = {"bounding_box": [[100, 100, 200, 200]], "reason": "no hard hat"}
+    reflexive = {"bounding_box": [[0, 0, 1000, 1000]], "reason": "a person is missing basic PPE"}
+
+    def score(completion, gt):
+        total = 0.0
+        for fn, w in zip(funcs, weights):
+            out = fn([completion], [gt], task=task)
+            total += w * float(out[0])
+        return total
+
+    for label_gt, gt, honest, degenerates in (
+        ("violation image", gt_violation,
+         _vio_completion(rule_1=honest_hit),
+         {"always-assert-rule_1": _vio_completion(rule_1=reflexive),
+          "always-safe": _vio_completion()}),
+        ("safe image", gt_safe,
+         _vio_completion(),
+         {"always-assert-rule_1": _vio_completion(rule_1=reflexive)}),
+    ):
+        honest_score = score(honest, gt)
+        for name, comp in degenerates.items():
+            assert honest_score >= score(comp, gt) - 1e-9, (
+                f"{task}/{label_gt}: degenerate policy {name!r} "
+                f"({score(comp, gt):.4f}) beats honest ({honest_score:.4f})"
+            )
+
+
+@pytest.mark.parametrize("task", ["unified", "violations_only"])
+def test_b5_violation_operating_point_is_recall_oriented(task):
+    """violation_tn_constant sets WHERE the assert/abstain line sits, and that
+    line must stay inside a band appropriate for a recall-weighted safety task.
+
+    Mirrors scripts/validate_rewards.py so the pre-submit check and the test
+    suite cannot disagree about what a sane constant is. At the v1 value of 0.85
+    this test fails (p* = 0.546), which is the regression it exists to catch.
+    """
+    import sys, os as _os
+    sys.path.insert(0, _os.path.join(_os.path.dirname(__file__), "..", ".."))
+    from scripts.validate_rewards import (
+        VIOLATION_BREAKEVEN_BAND, _violation_breakeven_confidence,
+    )
     from rewards.reward_utils import reward_constant
+
     c = float(reward_constant(task, "violation_tn_constant", 0.15))
-    p_safe, p_rule1 = 0.50, 0.391
-    ev_honest_abstention = p_safe * c
-    ev_always_assert = p_rule1 * 1.0
-    assert ev_honest_abstention > ev_always_assert, (
-        f"{task}: unconditional rule_1 assertion (EV {ev_always_assert:.4f}) beats "
-        f"honest abstention (EV {ev_honest_abstention:.4f}); raise "
-        f"violation_tn_constant above {ev_always_assert / p_safe:.3f}"
+    p_star = _violation_breakeven_confidence(task, c)
+    lo, hi = VIOLATION_BREAKEVEN_BAND
+    assert p_star is not None, f"{task} declares violation weights but p* came back None"
+    assert lo <= p_star <= hi, (
+        f"{task}: violation_tn_constant={c} implies a break-even confidence of "
+        f"p*={p_star:.3f}, outside the band [{lo}, {hi}]. Above {hi} the reward "
+        f"suppresses recall; below {lo} shotgunning starts to pay."
     )
 
 
@@ -929,3 +997,202 @@ def test_b14_no_name_used_before_its_own_local_import_in_any_function(relpath):
                 f"WHOLE function because of that later import, so this is an "
                 f"UnboundLocalError on every call, not a maybe."
             )
+
+
+# ===========================================================================
+# v2 pipeline changes (2026-09-10). Each of these pins a change that is only
+# useful if it actually reaches the runtime -- a value that is "set in config
+# but ignored when the pipeline executes" is the exact failure this repo has
+# hit before (see the ghost-variable table in CLAUDE.md).
+# ===========================================================================
+
+def test_v2_sft_early_stopping_is_disabled():
+    """SFT must spend its full step budget.
+
+    eval_loss here is ~87% boilerplate (86.3% of images are safe, so the target is
+    the fixed all-null skeleton) and plateaus into a 5-11% noise band after ~step
+    125. Patience was counting noise: on v1 it stopped 2b at 300/512 and 4b/8b at
+    375/512.
+    """
+    import yaml
+    cfg = yaml.safe_load((REPO / "configs" / "sft.yaml").read_text(encoding="utf-8"))
+    assert not cfg.get("early_stopping_patience"), (
+        "early_stopping_patience must be falsy (null/0) — sft_trainer.py installs "
+        "EarlyStoppingCallback on `if patience:`"
+    )
+    # final/ must be the literal end-of-training state, not a copy of best/.
+    assert cfg.get("load_best_model_at_end") is False
+
+
+def test_v2_final_checkpoint_is_the_handoff_end_to_end():
+    """SFT writes final/ -> inference reads final/ -> merge reads final/ -> the
+    results directory the index looks for is `_final`. If any link in that chain
+    still says best/, the merge job runs against a directory the SFT job did not
+    produce, or the index looks for a directory the pipeline never created.
+    """
+    sft_sh = (SCRIPTS / "hpc_sft.sh").read_text(encoding="utf-8")
+    assert "--checkpoint final" in sft_sh
+    assert "--checkpoint best" not in sft_sh
+    assert "${VARIANT}_final" in sft_sh
+    assert "${VARIANT}_best" not in sft_sh
+
+    merge_sh = (SCRIPTS / "hpc_merge_sft.sh").read_text(encoding="utf-8")
+    assert "${SFT_VARIANT}/final" in merge_sh
+    assert "${SFT_VARIANT}/best" not in merge_sh
+
+    # naming.py is what the analysis layer resolves through; it must agree with
+    # the directory hpc_sft.sh actually writes.
+    from core.naming import results_dir_names, variant_name
+    for task in ("unified", "violations_only", "object_only", "caption_only"):
+        names = results_dir_names(task, "8b", "v1")
+        assert names["sft"] == f"{variant_name(task, 'sft', '8b', 'v1')}_final"
+
+    # run_sft_unified returns the path the log line advertises to the operator.
+    src = (REPO / "models" / "sft_trainer.py").read_text(encoding="utf-8")
+    assert 'return str(final_dir)' in src
+
+    # The --allow_unmerged_reference escape hatch in run_grpo.py resolves its own
+    # SFT adapter path. It is off the production path, but if it still pointed at
+    # best/ an ablation run there would silently compare against a different
+    # adapter than the one merge -> GRPO actually uses.
+    grpo_py = (REPO / "experiments" / "run_grpo.py").read_text(encoding="utf-8")
+    assert 'args.sft_variant, "final"' in grpo_py
+    assert 'args.sft_variant, "best"' not in grpo_py
+
+
+def test_v2_grpo_learning_mass_reaches_grpoconfig():
+    """LR and scheduler are only useful if GRPOConfig receives them.
+
+    Measured on v1: KL to the SFT reference averaged 0.0003-0.0005 and peaked at
+    0.001 with beta=0.04, i.e. the brake never engaged — the policy barely moved,
+    and SFT->GRPO was statistically null at 4b (p=0.08) and 8b (p=0.16).
+    """
+    import yaml
+    cfg = yaml.safe_load((REPO / "configs" / "grpo.yaml").read_text(encoding="utf-8"))
+    assert float(cfg["learning_rate"]) == 1.0e-5
+    assert cfg["lr_scheduler_type"] == "constant_with_warmup", (
+        "cosine decayed the LR below 1.7e-7 by step ~90 of 108 — the last fifth of "
+        "every GRPO run learned nothing"
+    )
+    assert int(cfg["num_train_epochs"]) == 2
+
+    src = (REPO / "models" / "grpo_trainer.py").read_text(encoding="utf-8")
+    assert 'learning_rate=cfg["learning_rate"]' in src
+    assert 'lr_scheduler_type=cfg.get("lr_scheduler_type"' in src
+
+
+@pytest.mark.parametrize("task", ["unified", "violations_only", "object_only", "caption_only"])
+def test_v2_reward_weights_sum_to_one(task):
+    """Total reward must stay in [0, 1] so the TN constant, the break-even
+    arithmetic and every logged reward mean remain comparable across tasks."""
+    from rewards.unified_reward import get_reward_funcs_for_task
+    _, weights = get_reward_funcs_for_task(task)
+    assert sum(weights) == pytest.approx(1.0), f"{task} weights sum to {sum(weights)}"
+
+
+def test_v2_reward_format_is_demoted_but_still_present():
+    """reward_format/std measured EXACTLY 0.0000 at every logged step of the 4b and
+    8b GRPO runs — post-SFT every rollout in a group is schema-valid, so it
+    contributes no advantage at any weight. Cut to 0.05 rather than removed: at 2b
+    it still varies (std 0.04-0.13), and a format regression during RL has to stay
+    visible in the logged component means.
+    """
+    from rewards.unified_reward import get_reward_funcs_for_task
+    funcs, weights = get_reward_funcs_for_task("violations_only")
+    w = {fn.__name__: wt for fn, wt in zip(funcs, weights)}
+    assert w["reward_format"] == 0.05
+    # The freed 0.05 went back proportionally, so each component keeps its share of
+    # the non-format mass to within a rounding step.
+    non_format = 1.0 - w["reward_format"]
+    for name, v1_weight in (("reward_violation_id", 0.40),
+                            ("reward_violation_grounding", 0.30),
+                            ("reward_reasoning", 0.20)):
+        assert w[name] / non_format == pytest.approx(v1_weight / 0.90, abs=0.005), name
+
+
+# ---------------------------------------------------------------------------
+# Per-tier LoRA capacity (v2 change D)
+#
+# The whole point is that the value is APPLIED, not merely declared. The registry
+# block lives under models.<tier>, which core/config.py::merge_configs never
+# flattens, so the obvious place to put this would have been silently inert --
+# exactly the ghost-variable class of bug CLAUDE.md tracks.
+# ---------------------------------------------------------------------------
+
+EXPECTED_TIER_RANKS = {"2b": 16, "4b": 20, "8b": 32}
+
+
+def test_v2_lora_by_tier_is_top_level_and_reaches_both_training_chains():
+    from core.config import load_config
+    for kind in ("sft", "grpo"):
+        cfg = load_config(task="violations_only", training_kind=kind)
+        assert "lora_by_tier" in cfg, (
+            f"lora_by_tier missing from the {kind} merge chain — if it were nested "
+            f"under models.<tier> it would never appear as a top-level key"
+        )
+        for tier, r in EXPECTED_TIER_RANKS.items():
+            assert cfg["lora_by_tier"][tier]["r"] == r
+
+
+@pytest.mark.parametrize("kind", ["sft", "grpo"])
+@pytest.mark.parametrize("tier", ["2b", "4b", "8b"])
+def test_v2_resolved_lora_rank_is_what_the_model_loader_will_apply(kind, tier):
+    """Resolve exactly as load_model_for_training does, for both phases."""
+    from core.config import load_config
+    from models.model_loader import resolve_lora_config
+
+    resolved = resolve_lora_config(load_config(task="violations_only", training_kind=kind), tier)
+    assert resolved["r"] == EXPECTED_TIER_RANKS[tier]
+    # alpha/r must stay 1.0 at every tier: LoRA scales its update by alpha/r, so a
+    # rank bump against a pinned alpha would shrink the effective update at the
+    # larger tiers — reintroducing the very confound this change removes.
+    assert resolved["alpha"] == resolved["r"], (
+        f"{kind}/{tier}: alpha={resolved['alpha']} r={resolved['r']} — alpha must track r"
+    )
+    # Keys not overridden per tier still come from the training config.
+    assert resolved["dropout"] == 0.05
+    assert resolved["target_modules"] == "all-linear"
+
+
+def test_v2_resolve_lora_config_degrades_safely():
+    from models.model_loader import resolve_lora_config
+    # No config at all, and an unregistered tier, must both fall back rather than raise.
+    assert resolve_lora_config(None, "8b")["r"] == 16
+    assert resolve_lora_config({}, None)["r"] == 16
+    assert resolve_lora_config({"lora_by_tier": {"2b": {"r": 8}}}, "zzz")["r"] == 16
+    # An explicit alpha in the per-tier block still wins over the alpha==r default.
+    assert resolve_lora_config({"lora_by_tier": {"2b": {"r": 24, "alpha": 48}}}, "2b")["alpha"] == 48
+
+
+def test_v2_model_loader_uses_the_resolved_block_for_target_modules():
+    """target_modules used to be read off the UNRESOLVED sft_cfg['lora'] at the
+    get_peft_model call site, so a per-tier override of it would have been
+    ignored — the same silent-inertness this change exists to prevent."""
+    src = (REPO / "models" / "model_loader.py").read_text(encoding="utf-8")
+    assert 'target_modules=lora_cfg.get("target_modules"' in src
+    assert '(sft_cfg or {}).get("lora", {}).get("target_modules"' not in src
+
+
+def test_v2_grpo_copies_lora_by_tier_alongside_lora():
+    """grpo_trainer replaces sft_cfg['lora'] wholesale; its per-tier sibling has to
+    survive that swap or GRPO would adapt at a different capacity than SFT."""
+    src = (REPO / "models" / "grpo_trainer.py").read_text(encoding="utf-8")
+    assert 'sft_cfg["lora_by_tier"] = cfg["lora_by_tier"]' in src
+
+
+def test_v2_augmentation_multipliers_unchanged():
+    """Held at v1 values on purpose (decision 2026-09-10): v2 changes the reward
+    operating point, GRPO learning rate, LoRA capacity and checkpoint selection, so
+    holding the DATA fixed keeps v2-vs-v1 a controlled comparison over those four.
+    Also means no datasets/augmented rebuild is required before submitting v2.
+
+    Read from SOURCE, not imported: data/augment_rare_classes.py hard-requires
+    albumentations, which is an ARC-only dependency and absent from the local dev
+    venv, so importing it would make this test unrunnable on the machine where the
+    suite is actually run before submitting.
+    """
+    src = (REPO / "data" / "augment_rare_classes.py").read_text(encoding="utf-8")
+    import ast
+    m = re.search(r"^RULE_MULTIPLIERS\s*=\s*(\{[^}]*\})", src, re.M)
+    assert m, "RULE_MULTIPLIERS assignment not found"
+    assert ast.literal_eval(m.group(1)) == {4: 16, 2: 12, 3: 6}

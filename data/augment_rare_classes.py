@@ -46,7 +46,34 @@ def get_pixel_augmentation_pipeline():
 # are EXTRA copies: an image with num_augs = 16 ends up as 17 rows (original + 16).
 # Values are derived from each rule's scarcity in the train split (rule_4 is the
 # rarest at 46 images). Precedence is rule_4 > rule_2 > rule_3, so an image tripping
-# several rules is counted once, under its rarest rule.
+# several rules is duplicated once, under its rarest rule.
+#
+# KNOWN TRADEOFF, DELIBERATELY LEFT AS-IS FOR v2 (decision 2026-09-10). Cutting these
+# to {4: 4, 2: 3, 3: 2} was proposed and rejected: v2 changes the reward operating
+# point, the GRPO learning rate, the LoRA capacity and the checkpoint selection, and
+# holding the DATA fixed keeps v2-vs-v1 a controlled comparison over those four
+# changes instead of five. Revisit only after v2 has been measured.
+#
+# What the current values cost, measured on v1 -- so this is not forgotten:
+# augmentation is pixel-only (brightness/contrast/JPEG/gamma), so 16 extra copies of
+# a rule_4 image is the same 42 UNIQUE images seen 17 times. That inflates the rare
+# rules' training PRIOR without adding information:
+#
+#     rule    unique train imgs   train prevalence   TEST prevalence   inflation
+#     rule_1        609                10.6%             10.75%          1.0x  <- fine
+#     rule_2         53                 8.4%              0.83%         10.1x
+#     rule_3         98                 8.5%              2.10%          4.0x
+#     rule_4         42                 8.7%              0.80%         10.9x
+#
+# and the consequence showed up exactly where that predicts. rule_1, the one rule
+# whose prior matches test, reached precision 0.79-0.85. The three inflated rules were
+# over-predicted 1.3-5.0x at precision 0.13-0.35 -- 4b/grpo predicted rule_4 on 121
+# images against 24 ground-truth positives. So the cost of keeping these values is
+# paid in rare-rule PRECISION, which is the deliberate trade for protecting recall.
+#
+# Whichever way this goes later: no augmentation scheme fixes rule_4. 42 unique
+# training images is a hard information ceiling, and the paper's own human upper
+# bound there is only precision 0.81 / recall 0.65.
 RULE_MULTIPLIERS = {4: 16, 2: 12, 3: 6}
 
 

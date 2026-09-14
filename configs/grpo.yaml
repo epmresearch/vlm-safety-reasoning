@@ -15,7 +15,21 @@ max_seq_length: 3600           # must cover max_prompt_length + max_completion_l
                                # (2304 + 1024 = 3328, leaving 272). A LOAD window, not an
                                # allocation, so raising it costs nothing.
                                # A LOAD window, not an allocation, so raising it costs nothing.
-learning_rate: 2.0e-6   # was 2.0e-7, which could not move the policy at all.
+learning_rate: 1.0e-5   # was 2.0e-6 (and 2.0e-7 before that).
+                        # MEASURED on the real vo v1 runs: KL to the SFT reference
+                        # averaged 0.0003-0.0005 and PEAKED at 0.001 across all three
+                        # tiers, with beta=0.04 -- i.e. the KL brake never engaged at
+                        # all, and grad_norm sat at 0.1-0.4 against max_grad_norm 0.3,
+                        # so clipping rarely bound either. Cumulative LR mass over the
+                        # run was ~1.1e-4 against SFT's ~2.1e-2: roughly 200x less, and
+                        # ~350x after discounting the 41-48% of groups that had zero
+                        # reward variance and therefore contributed no gradient.
+                        # Consequence: SFT->GRPO was statistically indistinguishable
+                        # from no change at 4b (+0.018 F1, p=0.08) and 8b (+0.012,
+                        # p=0.16). The policy was not mis-steered, it barely moved.
+                        # WATCH ON THE 2b SMOKE RUN: kl should rise into 0.01-0.10 and
+                        # reward/mean should climb steadily. If kl > 0.5 or completions
+                        # degenerate, drop to 5.0e-6.
                         #
                         # Sizing argument, not a guess. Over 108 steps with warmup 0.05 +
                         # cosine, cumulative LR ("mass") vs the 512-step SFT run at 1e-4
@@ -85,7 +99,13 @@ bf16: true
 optim: "adamw_8bit"
 warmup_ratio: 0.05
 weight_decay: 0.01
-lr_scheduler_type: "cosine"
+lr_scheduler_type: "constant_with_warmup"   # was "cosine". Over a 108-step run cosine
+                        # decays the LR to below 1.7e-7 by step ~90 -- the last fifth of
+                        # every GRPO run was learning nothing, and the schedule hit
+                        # exactly 0 at the final step. There is no overfitting pressure
+                        # to anneal against here (2 epochs over a 1732-image pool, KL
+                        # anchored to the SFT reference), so a flat LR after warmup keeps
+                        # the whole budget productive.
 max_grad_norm: 0.3
 
 # --- GRPOConfig fields that used to be undeclared -- reachable only through TRL's ---

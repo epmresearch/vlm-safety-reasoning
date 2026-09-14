@@ -113,9 +113,19 @@ def load_model_for_training(
         finetune_mlp_modules = sft_cfg.get(
             "finetune_mlp_modules", finetune_mlp_modules
         )
-        lora_cfg = sft_cfg.get("lora", {})
-        lora_r = lora_cfg.get("r", lora_r)
-        lora_alpha = lora_cfg.get("alpha", lora_alpha)
+        # See resolve_lora_config(): layers the per-tier override from
+        # configs/model_registry.yaml::lora_by_tier over the training config's own
+        # `lora:` block, and keeps alpha tracking r so the alpha/r scaling stays 1.0
+        # at every tier.
+        lora_cfg = resolve_lora_config(sft_cfg, tier)
+        tier_lora = (sft_cfg.get("lora_by_tier") or {}).get(tier)
+        if tier_lora:
+            logger.info(
+                f"LoRA capacity override for tier '{tier}': {dict(tier_lora)} "
+                f"(from model_registry.yaml::lora_by_tier)"
+            )
+        lora_r = lora_cfg["r"]
+        lora_alpha = lora_cfg["alpha"]
         lora_dropout = lora_cfg.get("dropout", lora_dropout)
 
     if adapter_path:
@@ -163,7 +173,9 @@ def load_model_for_training(
             bias="none",
             random_state=42,
             use_rslora=False,
-            target_modules=(sft_cfg or {}).get("lora", {}).get("target_modules", "all-linear"),
+            # From the RESOLVED lora_cfg, so a per-tier override of this key would
+            # actually take effect rather than being read off the unresolved block.
+            target_modules=lora_cfg.get("target_modules", "all-linear"),
         )
 
     # Cap image resolution fed to the vision encoder (training memory safety)
@@ -254,6 +266,42 @@ def load_model_for_inference(
     FastVisionModel.for_inference(model)
 
     return model, tokenizer, get_model_info(tier)
+
+
+def resolve_lora_config(sft_cfg: Optional[dict], tier: Optional[str]) -> Dict[str, Any]:
+    """Merges the per-tier LoRA override onto the training config's `lora:` block.
+
+    Returns a dict with at least r/alpha/dropout resolved. Pure and side-effect
+    free so it can be tested without importing unsloth.
+
+    Layering, last wins:
+        built-in defaults  ->  sft_cfg["lora"]  ->  sft_cfg["lora_by_tier"][tier]
+
+    WHY THE OVERRIDE CANNOT LIVE IN core/config.py. The registry's per-tier data
+    sits under models.<tier>, and merge_configs() descends only one level into
+    nested dicts, so nothing under there is ever visible as a top-level key. The
+    override is published as a TOP-LEVEL `lora_by_tier` mapping instead and
+    resolved here -- inside the one function every fresh-adapter path calls, so
+    SFT and GRPO cannot end up adapting at different capacities.
+
+    alpha DEFAULTS TO r rather than to a constant. LoRA scales its update by
+    alpha/r; pinning alpha while raising r would shrink the effective update at
+    the larger tiers, which is precisely the confound lora_by_tier removes. An
+    explicit alpha in either config still wins.
+    """
+    resolved: Dict[str, Any] = {"r": 16, "dropout": 0.05, "target_modules": "all-linear"}
+    cfg = sft_cfg or {}
+    resolved.update(cfg.get("lora") or {})
+    tier_lora = (cfg.get("lora_by_tier") or {}).get(tier) or {}
+    resolved.update(tier_lora)
+    resolved.setdefault("alpha", resolved["r"])
+    if "alpha" not in (cfg.get("lora") or {}) and "alpha" not in tier_lora:
+        resolved["alpha"] = resolved["r"]
+    elif tier_lora and "alpha" not in tier_lora and "r" in tier_lora:
+        # A per-tier rank with no matching alpha: track r so alpha/r stays 1.0
+        # instead of silently inheriting the base config's alpha.
+        resolved["alpha"] = resolved["r"]
+    return resolved
 
 
 def apply_pixel_bounds(

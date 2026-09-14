@@ -67,7 +67,11 @@ def main():
                     "--allow_unmerged_reference without --adapter_path needs --sft_variant "
                     "to locate the SFT adapter to continue from."
                 )
-            adapter_path = str(get_drive_path("checkpoints", f"qwen3vl-{args.tier}", args.sft_variant, "best"))
+            # final/, matching the rest of the pipeline as of 2026-09-10. This is the
+            # smoke-test escape hatch (no merged base), but it must still resolve to the
+            # same SFT checkpoint hpc_merge_sft.sh consumes, or an ablation run here
+            # would silently be comparing against a different adapter than production.
+            adapter_path = str(get_drive_path("checkpoints", f"qwen3vl-{args.tier}", args.sft_variant, "final"))
             logger.warning(f"--allow_unmerged_reference set: using SFT variant adapter path WITHOUT a merged base: {adapter_path}. KL reference will be the RAW base model, not your SFT policy.")
     else:
         raise SystemExit(

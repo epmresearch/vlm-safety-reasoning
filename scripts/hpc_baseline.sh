@@ -95,8 +95,9 @@ python -c "from core.tasks import validate_task; validate_task('$TASK')" \
     || { echo "FATAL: unknown --task '$TASK' (see core/tasks.py::TASK_REGISTRY)"; exit 1; }
 
 # Run name comes from core.naming so the results folder matches byte-for-byte what
-# scripts/submit_pipeline.py, experiments/compare_results.py and
-# experiments/plot_metrics.py expect: <prefix>-baseline-<tier>-<version>.
+# scripts/submit_pipeline.py and the analysis layer
+# (experiments/build_results_index.py -> results_lib.py::parse_run_name) expect:
+# <prefix>-baseline-<tier>-<version>.
 RUN_NAME=$(python -c "from core.naming import baseline_run_name; print(baseline_run_name('$TASK','$TIER','$VERSION'))")
 if [ -z "$RUN_NAME" ]; then
     echo "FATAL: could not derive the baseline run name for task '$TASK'"
@@ -138,6 +139,7 @@ python -m experiments.run_evaluation \
     --output_dir "$EVAL_OUT_DIR" \
     --skip_spice \
     --skip_java_switch \
+    --use_llm_judge \
     --wandb_project "vlm-safety-evals" \
     --wandb_run_name "qwen3-${TIER}-${WANDB_TAG}-repaired" \
     --task "$TASK"

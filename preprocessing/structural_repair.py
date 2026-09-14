@@ -1003,12 +1003,91 @@ def normalize_violation_value(
         return {"reason": s, "bounding_box": []}
 
     if isinstance(v, list):
+        # A LIST of violation objects is the model answering the prompt's own
+        # instruction -- "List more than one box if more than one instance
+        # violates the same rule" -- with one object per instance:
+        #     [{"bounding_box": [...], "reason": "..."}, {...}, {...}]
+        #
+        # This branch used to return None, i.e. "this rule was NOT violated".
+        # That is not a dropped repair, it INVERTS the model's answer. Measured
+        # on the real vo-baseline-2b run it fired on 1260 of 3004 records (42%)
+        # and destroyed 182 true positives, dragging that run's recall from
+        # 0.887 down to 0.469 -- which then read as a model difference against
+        # the 4b/8b baselines (0.86/0.84) when it was purely this rule. It fired
+        # on ~0% of the SFT/GRPO runs, so it also silently made one column of
+        # the comparison table non-comparable with the others.
+        #
+        # Merged instead: union every element's boxes, and join the reasons.
+        # Both primitives already exist here -- normalize_boxes() for the boxes,
+        # and the same ". "-join the dict branch below already applies to a
+        # reason LIST.
+        #
+        # Reasons are de-duplicated (order-preserving) before joining. The
+        # dominant real shape is N instances of the SAME finding ("A worker on
+        # foot is missing a hard hat." x3), where joining verbatim would triple
+        # the text and depress the length-calibrated reasoning score for no
+        # information gain. Genuinely different reasons are all kept and joined.
+        #
+        # TWO element shapes occur in real output and both must survive:
+        #   1. a violation OBJECT  -- {"bounding_box": [...], "reason": "..."}
+        #      (vo-baseline-2b writes N of these, one per instance)
+        #   2. a bare BOUNDING BOX -- [xmin, ymin, xmax, ymax]
+        #      (vo-baseline-8b writes "rule_3_violation": [[0, 0, 1000, 999]],
+        #      i.e. it dropped the wrapping object and gave the box list alone)
+        # Shape 2 carries no reason, and none is invented -- an empty reason
+        # beside a real box is exactly the shape this module already
+        # manufactures for a bare `true`, and _is_substantive_violation()
+        # correctly still counts it as substantive because it IS localized.
+        merged_boxes: List[Any] = []
+        merged_reasons: List[str] = []
+        bare_box_elements = []
+        for element in v:
+            if not isinstance(element, dict):
+                bare_box_elements.append(element)
+                continue
+            sub = normalize_violation_value(element, rule_key=rule_key, tracker=None)
+            if sub is None:
+                continue
+            merged_boxes.extend(sub.get("bounding_box") or [])
+            reason = str(sub.get("reason", "") or "").strip()
+            if reason and reason not in merged_reasons:
+                merged_reasons.append(reason)
+
+        # Everything that was not an object goes through the normal box
+        # normalizer in one pass, so a flat [x,y,x,y] reshapes correctly and
+        # genuine garbage is dropped with its usual tracker entry.
+        if bare_box_elements:
+            merged_boxes.extend(
+                normalize_boxes(
+                    bare_box_elements, field=f"{rule_key}.bounding_box", tracker=tracker
+                )
+            )
+        non_dict_elements = len(bare_box_elements)
+
+        if not merged_boxes and not merged_reasons:
+            if tracker:
+                tracker.log(
+                    "violation_list_dropped", field=rule_key,
+                    detail=(
+                        f"A list of {len(v)} element(s) carried no usable box or reason; "
+                        "interpreted as no violation."
+                    ),
+                )
+            return None
+
         if tracker:
             tracker.log(
-                "violation_list_dropped", field=rule_key,
-                detail="A list was given where an object/null was expected; too ambiguous to reconstruct, dropped.",
+                "violation_list_merged", field=rule_key,
+                detail=(
+                    f"A list of {len(v)} violation object(s) was merged into one: "
+                    f"{len(merged_boxes)} box(es), {len(merged_reasons)} distinct reason(s)"
+                    + (f", {non_dict_elements} unusable element(s) skipped" if non_dict_elements else "")
+                    + "."
+                ),
             )
-        return None
+        return {"bounding_box": merged_boxes, "reason": ". ".join(
+            r.rstrip(".") for r in merged_reasons
+        ) + ("." if merged_reasons else "")}
 
     if isinstance(v, dict):
         key_map = {}

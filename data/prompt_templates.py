@@ -83,18 +83,48 @@ SYSTEM_PROMPT = (
     "format requested."
 )
 
+# One entry per rule, as the EXACT prompt fragment the models are trained and
+# evaluated with. This is the single source of truth for rule wording:
+#
+#   * _SAFETY_RULES below is rebuilt by joining these fragments in rule order, and
+#     is byte-identical to the literal it replaced (pinned by
+#     tests/test_evaluation/test_llm_judge.py), so no training or inference prompt
+#     changed when this dict was introduced.
+#   * evaluation/metrics_llm_judge.py reads ONE rule's text from here for the
+#     judge's Relevance criterion ("whether the explanation adheres to the specific
+#     safety rule"). Judging an explanation against wording the model never saw
+#     would score the prompt, not the model.
+SAFETY_RULE_TEXTS = {
+    "rule_1": (
+        "   - Rule 1 - basic PPE: a person on foot is missing basic PPE, e.g. no hard hat, "
+        "or clothing that leaves the shoulders or legs uncovered.\n"
+    ),
+    "rule_2": (
+        "   - Rule 2 - safety harness: a person working at height (on a scaffold, roof, "
+        "beam, ladder or other elevated structure) is not wearing a safety harness.\n"
+    ),
+    "rule_3": (
+        "   - Rule 3 - edge protection: an open excavation, trench, pit or floor edge has no "
+        "guard rail, barrier or warning marking.\n"
+    ),
+    "rule_4": (
+        "   - Rule 4 - blind spot: a person is standing within the operating radius or "
+        "blind spot of an excavator or other heavy machine.\n"
+    ),
+}
+
+
+def safety_rule_description(rule: str) -> str:
+    """One rule as a plain sentence, without the prompt's list formatting.
+
+    ``"   - Rule 1 - basic PPE: a person ...\\n"`` -> ``"Rule 1 - basic PPE: a person ..."``
+    """
+    return SAFETY_RULE_TEXTS[rule].strip().lstrip("- ").strip()
+
+
 # Shared by unified and violations_only so the two can never drift apart -- a wording
 # difference between them would confound the multi-task vs single-task comparison.
-_SAFETY_RULES = (
-    "   - Rule 1 - basic PPE: a person on foot is missing basic PPE, e.g. no hard hat, "
-    "or clothing that leaves the shoulders or legs uncovered.\n"
-    "   - Rule 2 - safety harness: a person working at height (on a scaffold, roof, "
-    "beam, ladder or other elevated structure) is not wearing a safety harness.\n"
-    "   - Rule 3 - edge protection: an open excavation, trench, pit or floor edge has no "
-    "guard rail, barrier or warning marking.\n"
-    "   - Rule 4 - blind spot: a person is standing within the operating radius or "
-    "blind spot of an excavator or other heavy machine.\n"
-)
+_SAFETY_RULES = "".join(SAFETY_RULE_TEXTS[r] for r in ("rule_1", "rule_2", "rule_3", "rule_4"))
 
 _VIOLATION_INSTRUCTIONS = (
     "   Report a rule only when you can point to the specific person, edge or machine in "

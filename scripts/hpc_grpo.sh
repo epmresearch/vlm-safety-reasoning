@@ -177,6 +177,7 @@ python -m experiments.run_evaluation \
     --output_dir "$EVAL_OUT_DIR" \
     --skip_spice \
     --skip_java_switch \
+    --use_llm_judge \
     --wandb_project "vlm-safety-evals" \
     --wandb_run_name "qwen3-${TIER}-${WANDB_TAG}-repaired" \
     --task "$TASK"

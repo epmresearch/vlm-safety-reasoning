@@ -16,11 +16,27 @@ reward_components:
   - reward_violation_grounding
   - reward_reasoning
 
+# reward_format cut 0.10 -> 0.05 (2026-09-10), and the freed 0.05 redistributed
+# PROPORTIONALLY across the other three so their relative balance is untouched:
+#   violation_id      0.40 + 0.05*(0.40/0.90) = 0.4222 -> 0.422
+#   violation_grounding 0.30 + 0.05*(0.30/0.90) = 0.3167 -> 0.317
+#   reasoning         0.20 + 0.05*(0.20/0.90) = 0.2111 -> 0.211
+# Sum = 1.000, and each component's share of the non-format mass is preserved to
+# within 0.3% of its previous value.
+#
+# WHY. `rewards/reward_format/std` was measured at EXACTLY 0.0000 at every logged
+# step of both the 4b and 8b GRPO runs: post-SFT the policy emits schema-valid
+# fenced JSON on every rollout, so all 8 completions in a group score identically
+# and the component contributes zero advantage no matter what weight it carries.
+# It was spending 10% of the weight budget on a constant. Not removed, because at
+# 2b it still varies (std 0.04-0.13, format mean 0.974-0.993) and it is the only
+# thing pulling a small model back from malformed output -- and because a silent
+# format regression during RL must stay visible in the logged component means.
 reward_weights:
-  reward_format: 0.10
-  reward_violation_id: 0.40
-  reward_violation_grounding: 0.30
-  reward_reasoning: 0.20
+  reward_format: 0.05
+  reward_violation_id: 0.422
+  reward_violation_grounding: 0.317
+  reward_reasoning: 0.211
 
 # --- Reward tuning: closing the over-flagging exploits (B5) ----------------
 # 1) A PREDICTED violation must carry substance (a non-empty reason or at least
@@ -39,12 +55,37 @@ require_violation_substance: true
 #    so unconditional over-flagging beat honest abstention by ~5x, for a policy
 #    that never looks at the image. Honest abstention only wins at c > ~0.78.
 #
-#    0.85 makes a correct "safe" call worth almost as much as a correct violation
-#    call — which is what it is — while still leaving a strict gradient toward
-#    detecting real violations (a missed violation still scores 0.0, and a false
-#    alarm on a safe image still scores 0.0). Applied to all three violation TN
-#    sites together, per CLAUDE.md invariant #6.
-violation_tn_constant: 0.85
+#    0.85 was then set to satisfy a guard in scripts/validate_rewards.py that
+#    compared two DEGENERATE policies against each other (always-safe vs
+#    always-assert-rule_1) on the identification component ALONE, and required
+#    c > P(rule_1)/P(safe) = 0.391/0.50 = 0.782. That guard was wrong twice over:
+#    it ignored grounding (0.30) and reasoning (0.20), where always-assert-rule_1
+#    with a full-image box scores ~0, and it assumed F-beta = 1.0 for that policy.
+#    Under the FULL weighted reward the honest policy beats both degenerate ones
+#    at every c from 0.15 to 0.85, so the constraint was never needed. Fixed --
+#    see scripts/validate_rewards.py::_violation_breakeven_confidence.
+#
+# 3) WHAT c ACTUALLY CONTROLS: the operating point. c sets the posterior
+#    confidence p* at which asserting becomes worth more than abstaining:
+#
+#        p* = c*(w_id + w_gnd + w_rsn) / [ c*(w_id + w_gnd + w_rsn)
+#                                          + w_id + w_gnd*E[IoU] + w_rsn*E[reason] ]
+#
+#    At c = 0.85 and this task's weights, p* = 0.546 -- the model had to be MORE
+#    than 54.6% sure before it would flag anything. That is a precision-first
+#    detector, and it is exactly the measured vo v1 behaviour: rule_1 precision
+#    0.79-0.85 at recall 0.46, against a human upper bound of 0.956/0.666 and a
+#    published zero-shot average of 0.165/0.630 (dataset paper, Table 7). It also
+#    directly contradicts `violation_fbeta: 2.0` below, which is recall-weighted:
+#    the two knobs pulled in opposite directions and the TN constant won.
+#
+#    0.30 puts p* at 0.298 using this task's real measured E[IoU] ~ 0.45 and
+#    E[reason] ~ 0.50 -- a recall-favouring threshold, which is the intended
+#    posture for a safety inspection task and the stated goal for v2: recall at
+#    or above the dataset paper's, with precision far above it.
+#
+#    Applied to all three violation TN sites together, per CLAUDE.md invariant #6.
+violation_tn_constant: 0.30
 
 # Ultra-safe token lengths (matching unified task ceilings for VRAM safety)
 max_new_tokens: 1024

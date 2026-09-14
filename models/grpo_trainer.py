@@ -101,6 +101,14 @@ def run_grpo(
     # rank for a deliberate GRPO-side ablation would have changed nothing.
     if "lora" in cfg:
         sft_cfg["lora"] = cfg["lora"]
+    # Sibling of `lora`, carrying the per-tier rank/alpha overrides
+    # (configs/model_registry.yaml::lora_by_tier, resolved in
+    # models/model_loader.py). Both dicts are built from the same merge chain so
+    # this is already present, but the line above REPLACES sft_cfg["lora"]
+    # wholesale -- copying its sibling explicitly means a future edit to either
+    # config cannot leave GRPO adapting at a different capacity than SFT.
+    if "lora_by_tier" in cfg:
+        sft_cfg["lora_by_tier"] = cfg["lora_by_tier"]
     for _k in (
         "finetune_vision_layers",
         "finetune_language_layers",

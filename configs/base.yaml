@@ -13,6 +13,27 @@ dataset:
   raw_processed_subdir: "datasets/processed"
   grpo_pool_subdir: "datasets/grpo_pool"
 
+# LLM-as-a-judge for violation reasoning (evaluation/metrics_llm_judge.py). Replicates
+# the ConstructionSite-10k paper's Stage-3 evaluation. Only runs when run_evaluation.py
+# is given --use_llm_judge, and only for tasks with the violations capability.
+llm_judge:
+  # Gated repo: accept the Llama 3 license on huggingface.co with the account whose token
+  # you use, then cache it on the LOGIN node (compute nodes have no internet):
+  #   export HF_HOME=$HOME/scratch/hf_cache
+  #   hf download meta-llama/Meta-Llama-3-8B-Instruct --exclude "original/*"
+  # --exclude matters: the repo also ships original/consolidated.00.pth, a second ~16 GB copy
+  # of the weights in Meta's own format that transformers never reads.
+  # If access is refused, NousResearch/Meta-Llama-3-8B-Instruct is the same weights, ungated.
+  model_id: "meta-llama/Meta-Llama-3-8B-Instruct"
+  num_beams: 5          # paper: "set the number of beams to 5"
+  seed: 20              # paper: "a fixed random seed of 20"
+  max_new_tokens: 64    # the four-line reply is ~25 tokens
+  batch_size: 1         # >1 is faster, but padding in a batch can flip a close beam in bf16;
+                        # at 1 a (reference, candidate) pair scores identically in every run
+  dtype: "bfloat16"
+  fail_hard: false      # false: a judge that cannot load logs an ERROR and omits its keys,
+                        # every other metric is still written. true: the evaluation fails.
+
 paths:
   checkpoints_subdir: "checkpoints"
   results_subdir: "results"

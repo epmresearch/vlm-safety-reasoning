@@ -95,7 +95,11 @@ export VLM_DATA_ROOT="$HPC_DRIVE_ROOT"
 python -c "from core.tasks import validate_task; validate_task('$TASK')" \
     || { echo "FATAL: unknown --task '$TASK' (see core/tasks.py::TASK_REGISTRY)"; exit 1; }
 
-ADAPTER_PATH="$HPC_DRIVE_ROOT/checkpoints/qwen3vl-${TIER}/${SFT_VARIANT}/best"
+# final/, not best/ (changed 2026-09-10). SFT now trains its full budget with early
+# stopping off, and final/ is the end-of-training state. best/ still exists as a
+# diagnostic but is deliberately NOT the handoff — eval_loss on this task is ~87%
+# boilerplate and cannot rank late checkpoints. See configs/sft.yaml.
+ADAPTER_PATH="$HPC_DRIVE_ROOT/checkpoints/qwen3vl-${TIER}/${SFT_VARIANT}/final"
 MERGED_OUTPUT="$HPC_DRIVE_ROOT/checkpoints/qwen3vl-${TIER}/${MERGED_VARIANT_NAME}"
 
 echo "======================================================================"
@@ -106,7 +110,7 @@ echo "======================================================================"
 
 if [ ! -f "${ADAPTER_PATH}/adapter_config.json" ] && [ ! -f "${ADAPTER_PATH}/adapter_model.safetensors" ]; then
     echo "ERROR: no SFT adapter found at ${ADAPTER_PATH}."
-    echo "The SFT job must have written best/ before this stage runs."
+    echo "The SFT job must have written final/ before this stage runs."
     exit 1
 fi
 

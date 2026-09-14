@@ -70,6 +70,59 @@ DEFAULT_SAFE_RATE = 0.50
 # on that class.
 BREAKEVEN_CEILING = 0.75
 
+# --- Violation operating point -------------------------------------------------
+# violation_tn_constant does not decide WHETHER honest behaviour wins (the policy
+# probe above already tests that, under the full weighted reward). It decides WHERE
+# the model draws its assert/abstain line: the posterior confidence p* at which
+# flagging becomes worth more than staying quiet.
+#
+#     p* = TN / (TN + TP),   TN = c*(w_id + w_gnd + w_rsn)
+#                            TP = w_id + w_gnd*E[IoU] + w_rsn*E[reason]
+#
+# (the format weight cancels -- both branches emit valid JSON), so the band below
+# is a statement about detector posture, not about reward hacking.
+#
+# CEILING 0.50: a safety-inspection task must not require the model to be more
+# than half sure before it speaks. The vo v1 runs sat at p* = 0.546 (c = 0.85) and
+# produced rule_1 recall 0.46 against a human upper bound of 0.666 and a published
+# zero-shot average of 0.630 -- too conservative, and in direct contradiction of
+# violation_fbeta = 2.0, which is recall-weighted.
+# FLOOR 0.20: below this, flagging gets cheap enough that shotgunning starts to
+# pay, which is the failure mode the dataset paper documents across all seven of
+# its zero-shot VLMs (precision 3.3-16.5% at recall 47-63%).
+VIOLATION_BREAKEVEN_BAND = (0.20, 0.50)
+
+# Measured on the real vo v1 runs: mask-union IoU on true positives averaged
+# 0.40-0.49 across tiers, and reward_reasoning/mean converged to 0.49-0.57. These
+# are what a TP is actually WORTH here, and using 1.0 instead would understate p*
+# by pretending every detection is perfectly localized and perfectly explained.
+ACHIEVABLE_TP_GROUNDING = 0.45
+ACHIEVABLE_TP_REASONING = 0.50
+
+
+def _violation_breakeven_confidence(task, c):
+    """p* -- the posterior confidence at which asserting beats abstaining.
+
+    Reads the task's OWN active weights through get_reward_funcs_for_task, i.e.
+    the exact list GRPOTrainer is handed. Going through the assembler rather than
+    the raw YAML matters: `unified` declares no reward_weights at all and takes
+    the full-registry defaults, so reading configs/tasks/unified.yaml directly
+    would see an empty dict and conclude the task has no violation reward.
+    """
+    from rewards.unified_reward import get_reward_funcs_for_task
+
+    funcs, weights = get_reward_funcs_for_task(task)
+    w = {fn.__name__: wt for fn, wt in zip(funcs, weights)}
+    w_id = float(w.get("reward_violation_id", 0.0))
+    w_gnd = float(w.get("reward_violation_grounding", 0.0))
+    w_rsn = float(w.get("reward_reasoning", 0.0))
+
+    tn = c * (w_id + w_gnd + w_rsn)
+    tp = w_id + w_gnd * ACHIEVABLE_TP_GROUNDING + w_rsn * ACHIEVABLE_TP_REASONING
+    if tn + tp <= 0:
+        return None
+    return tn / (tn + tp)
+
 GREEN, RED, YELLOW, DIM, RESET = "\033[32m", "\033[31m", "\033[33m", "\033[2m", "\033[0m"
 
 
@@ -249,20 +302,63 @@ def probe(task, prevalence, rule_prevalence, safe_rate):
                     f"{task}: class '{cls}' break-even IoU {be:.3f} > {BREAKEVEN_CEILING} — "
                     "suppressing it is dominant; lower grounding_tn_constant for this class")
 
-    # Expected value over the pool for the two zero-vision policies, the B5 check.
+    # Violation operating point, the B5 check.
+    #
+    # REPLACED 2026-09-10. This used to compare two DEGENERATE policies against each
+    # other -- always-safe (EV = P(safe)*c) vs always-assert-rule_1 (EV = P(rule_1))
+    # -- on the identification component ALONE, and fail unless c > P(rule_1)/P(safe)
+    # = 0.782. Three things were wrong with it:
+    #
+    #   1. Neither policy is one we want; "which degenerate policy wins" is not the
+    #      question. Whether HONEST behaviour wins is, and the probe loop above
+    #      already answers it under the full weighted reward -- honest beat every
+    #      degenerate policy at every c from 0.15 to 0.85 when it was checked.
+    #   2. It scored always-assert-rule_1 at F-beta = 1.0 on the 0.40-weighted
+    #      identification term while ignoring grounding (0.30) and reasoning (0.20),
+    #      where that policy's full-image box and canned reason score ~0. It was
+    #      giving the degenerate policy an optimistic score and then forcing c up to
+    #      beat it.
+    #   3. Forcing c up is not free: c IS the operating point. c = 0.85 put the
+    #      assert/abstain threshold at p* = 0.546, and the resulting runs measured
+    #      rule_1 recall 0.46 against a human upper bound of 0.666.
+    #
+    # What is checked now: that the threshold c implies lands inside a band suitable
+    # for a recall-weighted safety task. Honest-beats-degenerate remains enforced by
+    # the probe loop above, which is the correct place for it.
     if task_has(task, CAP_VIOLATIONS):
         from rewards.reward_utils import reward_constant
         c = float(reward_constant(task, "violation_tn_constant", 0.15))
-        ev_safe = safe_rate * c
-        ev_assert = rule_prevalence["rule_1"] * 1.0
-        print(f"\n  {DIM}zero-vision policy EV on the pool (identification component only){RESET}")
-        print(f"      always-safe            {ev_safe:.4f}   (P(safe)={safe_rate:.2f} x c={c:.2f})")
-        print(f"      always-assert-rule_1   {ev_assert:.4f}   (P(rule_1)={rule_prevalence['rule_1']:.3f})")
-        if ev_assert > ev_safe:
-            failures.append(
-                f"{task}: unconditional rule_1 assertion (EV {ev_assert:.4f}) beats honest "
-                f"abstention (EV {ev_safe:.4f}) — raise violation_tn_constant above "
-                f"{ev_assert / safe_rate:.3f}")
+        lo, hi = VIOLATION_BREAKEVEN_BAND
+        p_star = _violation_breakeven_confidence(task, c)
+        print(f"\n  {DIM}violation operating point (assert iff confidence > p*){RESET}")
+        if p_star is None:
+            print(f"      {DIM}task declares no violation reward weights — skipped{RESET}")
+        else:
+            flag = "" if lo <= p_star <= hi else f"  {RED}<-- outside band [{lo}, {hi}]{RESET}"
+            print(f"      violation_tn_constant  c={c:.3f}")
+            print(f"      break-even confidence  p*={p_star:.3f}   "
+                  f"{DIM}(E[IoU]={ACHIEVABLE_TP_GROUNDING}, E[reason]={ACHIEVABLE_TP_REASONING})"
+                  f"{RESET}{flag}")
+            if p_star > hi:
+                failures.append(
+                    f"{task}: break-even confidence p*={p_star:.3f} > {hi} — the reward "
+                    f"demands more than {hi:.0%} certainty before the model will flag "
+                    f"anything, which suppresses recall on a recall-weighted task. "
+                    f"LOWER violation_tn_constant (currently {c:.3f}).")
+            elif p_star < lo:
+                failures.append(
+                    f"{task}: break-even confidence p*={p_star:.3f} < {lo} — flagging is "
+                    f"cheap enough that shotgunning pays, the failure mode the dataset "
+                    f"paper measures across every zero-shot VLM. RAISE "
+                    f"violation_tn_constant (currently {c:.3f}).")
+
+        # Kept as INFORMATION only, no longer a pass/fail gate (see above).
+        print(f"\n  {DIM}zero-vision policy EV, identification component only "
+              f"(informational — the pass/fail test is the probe table above){RESET}")
+        print(f"      always-safe            {safe_rate * c:.4f}   "
+              f"(P(safe)={safe_rate:.2f} x c={c:.2f})")
+        print(f"      always-assert-rule_1   {rule_prevalence['rule_1']:.4f}   "
+              f"(P(rule_1)={rule_prevalence['rule_1']:.3f}, F-beta assumed 1.0)")
 
     # Component variance: a component that never varies contributes no gradient.
     print(f"\n  {DIM}per-component spread across the probed policies{RESET}")

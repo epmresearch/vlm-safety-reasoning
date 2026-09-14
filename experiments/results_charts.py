@@ -37,7 +37,8 @@ from collections import defaultdict
 from pathlib import Path
 
 from experiments.results_lib import (
-    BOUNDED_HEADLINE_KEYS, FAMILY_ORDER, GROUNDING_CLASSES, PHASE_ORDER,
+    BOUNDED_HEADLINE_KEYS, CHARTABLE_BOUNDED_KEYS, FAMILY_ORDER, GROUNDING_CLASSES,
+    PHASE_ORDER,
     UNBOUNDED_HEADLINE_KEYS, VIOLATION_RULES, _tier_sort_key, column_label,
     sorted_columns,
 )
@@ -77,6 +78,9 @@ def _bar(x_labels, series, title, ylabel, path, y_bounded=True):
 
     y_bounded=True fixes the axis to (0, 1.05) -- ONLY correct for a metric
     that is genuinely capped at 1 (precision/recall/F1/IoU/validity rates).
+    y_bounded=<number> fixes the axis to (0, number*1.05) -- for a metric with a
+    known ceiling other than 1 (the LLM judge: 2 per criterion, 6 total). A fixed
+    ceiling keeps two runs' charts visually comparable, which auto-scaling does not.
     y_bounded=False leaves the axis auto-scaled with headroom for the value
     labels -- required for CIDEr-D and anything else without a natural
     ceiling; forcing those onto a 0-1 axis silently clips the bars off the
@@ -98,8 +102,11 @@ def _bar(x_labels, series, title, ylabel, path, y_bounded=True):
                             ha="center", va="bottom", fontsize=7)
     ax.set_xticks(list(x))
     ax.set_xticklabels(x_labels)
-    if y_bounded:
+    # bool is checked first: True is also an int in Python.
+    if y_bounded is True:
         ax.set_ylim(0, 1.05)
+    elif isinstance(y_bounded, (int, float)) and not isinstance(y_bounded, bool) and y_bounded > 0:
+        ax.set_ylim(0, float(y_bounded) * 1.05)
     else:
         ax.margins(y=0.15)  # headroom for value labels on an auto-scaled axis
     ax.set_ylabel(ylabel)
@@ -115,6 +122,17 @@ def _bar(x_labels, series, title, ylabel, path, y_bounded=True):
 #    multi-metric phase_progression/tier_scaling charts -- every tier x phase
 #    comparison now lives on its own correctly-scaled figure.
 # ---------------------------------------------------------------------------
+
+# Metrics with a known, fixed ceiling other than 1. Looked up per key so a metric
+# grouped with genuinely unbounded ones (CIDEr-D) still gets a fixed, comparable axis.
+METRIC_Y_CEILING = {
+    "reasoning_llm_judge_total_macro": 6,
+    "reasoning_llm_judge_total_micro": 6,
+    "reasoning_llm_judge_relevance_macro": 2,
+    "reasoning_llm_judge_equivalence_macro": 2,
+    "reasoning_llm_judge_specificity_macro": 2,
+}
+
 
 def _metric_scaling(lut, columns, out_dir, key_source, y_bounded, subdir) -> list:
     written = []
@@ -139,7 +157,8 @@ def _metric_scaling(lut, columns, out_dir, key_source, y_bounded, subdir) -> lis
             if not series:
                 continue
             path = out_dir / prefix / subdir / f"{key}_{prefix}_{version}.png"
-            _bar(tiers, series, f"{prefix} / {version} -- {key}", key, path, y_bounded=y_bounded)
+            _bar(tiers, series, f"{prefix} / {version} -- {key}", key, path,
+                 y_bounded=METRIC_Y_CEILING.get(key, y_bounded))
             written.append(path)
     return written
 
@@ -147,7 +166,10 @@ def _metric_scaling(lut, columns, out_dir, key_source, y_bounded, subdir) -> lis
 def chart_metric_scaling(lut, columns, out_dir) -> list:
     """One chart per bounded headline metric (structural/captioning/grounding/
     violation/reasoning): x=tier, bars=phase."""
-    return _metric_scaling(lut, columns, out_dir, BOUNDED_HEADLINE_KEYS, y_bounded=True, subdir="scaling")
+    # CHARTABLE_BOUNDED_KEYS, not BOUNDED_HEADLINE_KEYS: a metric demoted out of
+    # the terminal headline table (reasoning CLIPScore) keeps its chart. Demotion
+    # governs what competes for attention in a scannable table, not what is kept.
+    return _metric_scaling(lut, columns, out_dir, CHARTABLE_BOUNDED_KEYS, y_bounded=True, subdir="scaling")
 
 
 def chart_metric_scaling_unbounded(lut, columns, out_dir) -> list:
@@ -230,6 +252,13 @@ PER_RULE_METRIC_SPECS = [
     (CAP_VIOLATIONS, _VG_RULES, "reasoning_text_similarity_clipscore_{rule}", "clipscore", "CLIPScore", "reasoning", True),
     # Unbounded -- must never share a chart (or axis) with the bounded metrics above.
     (CAP_VIOLATIONS, _VG_RULES, "reasoning_text_similarity_ciderd_{rule}", "ciderd", "CIDEr-D", "reasoning", False),
+    # LLM judge (dataset paper, Table 8 units). Fixed ceilings: 6 for the total,
+    # 2 per criterion. Produced only for runs evaluated with --use_llm_judge; for any
+    # other run the keys are absent and these charts are simply skipped.
+    (CAP_VIOLATIONS, _VG_RULES, "reasoning_llm_judge_total_{rule}", "judge_total", "LLM judge total (0-6)", "reasoning_llm_judge", 6),
+    (CAP_VIOLATIONS, _VG_RULES, "reasoning_llm_judge_relevance_{rule}", "judge_relevance", "LLM judge relevance (0-2)", "reasoning_llm_judge", 2),
+    (CAP_VIOLATIONS, _VG_RULES, "reasoning_llm_judge_equivalence_{rule}", "judge_equivalence", "LLM judge equivalence (0-2)", "reasoning_llm_judge", 2),
+    (CAP_VIOLATIONS, _VG_RULES, "reasoning_llm_judge_specificity_{rule}", "judge_specificity", "LLM judge specificity (0-2)", "reasoning_llm_judge", 2),
 ]
 
 

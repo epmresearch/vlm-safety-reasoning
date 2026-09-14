@@ -41,9 +41,11 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 from core.constants import VALID_TASKS
 from core.tasks import get_task_spec, TASK_REGISTRY
 from experiments.results_lib import (
-    FAMILY_ORDER, HEADLINE_KEYS, PHASE_ORDER, PHASES, best_phase, column_label,
-    fmt_delta, fmt_pct, fmt_val, is_non_comparable_key, load_index, print_table,
-    sorted_columns, _tier_sort_key,
+    BOOTSTRAP_METRICS, FAMILY_ORDER, HEADLINE_KEYS, MACRO_N_RULES_KEY, PHASES,
+    PHASE_ORDER, SUPPORT_KEYS, best_phase, bootstrap_indices, bootstrap_series,
+    ci_from_series, column_label, decode_outcomes, fmt_delta, fmt_pct, fmt_val,
+    is_non_comparable_key, load_index, paired_delta, print_table,
+    significance_marker, sorted_columns, _tier_sort_key,
 )
 
 
@@ -98,9 +100,183 @@ def print_headline_tables(lut, columns):
                 vals = [lut.get((c[0], c[1], c[2], c[3], key)) for c in cols]
                 if all(v is None for v in vals):
                     continue
+                # Macro metrics carry their divisor inline: "0.7817 (n=2)".
+                # Reasoning and violation-grounding macros average only over the
+                # rules that had a true positive to be measured on, so a run that
+                # detected nothing for two rules produces a macro over 2, not 4.
+                # Rendering the value without n invites comparing those directly.
+                nkey = MACRO_N_RULES_KEY.get(key)
+                if nkey:
+                    ns = [lut.get((c[0], c[1], c[2], c[3], nkey)) for c in cols]
+                    if any(n is not None for n in ns):
+                        vals = [
+                            (f"{v:.4f}" + (f" (n={int(n)})" if n is not None else ""))
+                            if v is not None else None
+                            for v, n in zip(vals, ns)
+                        ]
                 rows.append([key] + vals)
         if rows:
             print_table(headers, rows, title=f"{get_task_spec(task).prefix} ({task}) -- headline metrics")
+
+
+def print_support_tables(lut, columns):
+    """Sample sizes behind the scores, printed as their own table.
+
+    Every reasoning metric is conditioned on the model's OWN true positives, so
+    two runs are scored on different image populations. On the real vo runs
+    4b-grpo's rule_3 reasoning averages over 22 images and 8b-grpo's over 8 --
+    8b scores higher partly because it only had to explain its 8 easiest cases.
+    The same conditioning applies to violation grounding IoU.
+
+    These numbers are shown, never used to suppress a comparison: the deltas are
+    always printed in full and judging them is the reader's call.
+    """
+    by_task = defaultdict(set)
+    for c in columns:
+        by_task[c[0]].add(c)
+    for task in TASK_REGISTRY:
+        if task not in by_task:
+            continue
+        cols = sorted_columns(by_task[task])
+        for fam in ("violation", "reasoning"):
+            rows = []
+            for key in SUPPORT_KEYS.get(fam, []):
+                vals = [lut.get((c[0], c[1], c[2], c[3], key)) for c in cols]
+                if all(v is None for v in vals):
+                    continue
+                rows.append([key] + [None if v is None else int(v) for v in vals])
+            if rows:
+                print_table(
+                    ["support / sample size"] + [column_label(*c) for c in cols],
+                    rows,
+                    title=f"{get_task_spec(task).prefix} ({task}) -- {fam} support counts "
+                          f"(the denominators behind the scores above)",
+                )
+
+
+def print_significance(runs, columns, n_boot, seed, out_dir):
+    """Bootstrap 95% CIs per run, and a paired test for every adjacent comparison.
+
+    Reads the packed per-image outcome vector carried on each run row, so this
+    needs nothing beyond index.json -- no predictions_repaired.jsonl, no second
+    download. Runs evaluated before that key existed are reported as
+    unavailable rather than silently skipped.
+
+    WHY IT MATTERS. rule_2/rule_3/rule_4 have 25/63/24 positives in the whole
+    3004-image test split, so their per-rule F1 carries a 95% interval up to
+    0.33 wide and f1_macro averages four such numbers. Point estimates alone
+    cannot separate "GRPO helped" from "GRPO did nothing", which is exactly why
+    phase and tier rankings appear to flip between runs.
+    """
+    outcomes, missing = {}, []
+    for r in runs:
+        c = col_of(r)
+        if c not in columns:
+            continue
+        dec = decode_outcomes(r.get("violation_per_image_outcomes_b64"))
+        if dec is None:
+            missing.append(column_label(*c))
+        else:
+            outcomes[c] = dec
+
+    if not outcomes:
+        print()
+        print("=== Significance ===")
+        print("  No run in this index carries violation_per_image_outcomes_b64, so no")
+        print("  bootstrap can run. That key is written by evaluation/metrics_violations.py;")
+        print("  re-run run_evaluation.py on these predictions to enable confidence intervals.")
+        return
+    if missing:
+        print()
+        print(f"[significance] no per-image outcomes for: {', '.join(missing)} "
+              f"(evaluated before that key existed) -- excluded from the tests below.")
+
+    lengths = {len(p) for p, _ in outcomes.values()}
+    if len(lengths) > 1:
+        print()
+        print(f"[significance] runs disagree on image count {sorted(lengths)}; "
+              "a paired test needs one common split -- skipping.")
+        return
+    n = lengths.pop()
+    boot_idx = bootstrap_indices(n, n_boot, seed)
+
+    # One pass per run. Every comparison below reuses these series, so a paired
+    # delta is an elementwise subtraction rather than a second bootstrap.
+    series = {c: bootstrap_series(pred, gt, boot_idx) for c, (pred, gt) in outcomes.items()}
+
+    cols = sorted_columns(outcomes)
+    rows = []
+    for c in cols:
+        row = [column_label(*c)]
+        for metric in BOOTSTRAP_METRICS:
+            point, ser = series[c][metric]
+            lo, hi = ci_from_series(ser)
+            row += [f"{point:.4f}",
+                    "" if lo is None else f"[{lo:.4f}, {hi:.4f}]"]
+        rows.append(row)
+    print_table(
+        ["run", "F1_micro", "95% CI", "F1_macro", "95% CI"], rows,
+        title=f"Violation identification with 95% bootstrap CI over {n} images "
+              f"(B={n_boot}, seed={seed})",
+    )
+
+    # Adjacent comparisons: phase progression within a tier, then tier scaling
+    # within a phase. Those are the two axes this pipeline exists to compare.
+    pairs = []
+    by_tier = defaultdict(dict)
+    for c in cols:
+        by_tier[(c[0], c[1], c[3])][c[2]] = c
+    for _, phases in sorted(by_tier.items()):
+        for a, b in (("baseline", "sft"), ("sft", "grpo"), ("baseline", "grpo")):
+            if a in phases and b in phases:
+                pairs.append((phases[a], phases[b]))
+    by_phase = defaultdict(dict)
+    for c in cols:
+        by_phase[(c[0], c[2], c[3])][c[1]] = c
+    for _, tiers in sorted(by_phase.items()):
+        ordered = sorted(tiers, key=_tier_sort_key)
+        for a, b in zip(ordered, ordered[1:]):
+            pairs.append((tiers[a], tiers[b]))
+
+    if not pairs:
+        return
+
+    def delta_row(ca, cb):
+        cells = []
+        for metric in BOOTSTRAP_METRICS:
+            pa, sa = series[ca][metric]
+            pb, sb = series[cb][metric]
+            lo, hi, p = paired_delta(sa, sb)
+            cells += [f"{pb - pa:+.4f}",
+                      "" if lo is None else f"[{lo:+.4f}, {hi:+.4f}]",
+                      "" if p is None else f"{p:.3f} {significance_marker(p)}"]
+        return cells
+
+    print_table(
+        ["comparison", "d F1_micro", "95% CI", "p", "d F1_macro", "95% CI", "p"],
+        [[f"{column_label(*ca)}  ->  {column_label(*cb)}"] + delta_row(ca, cb) for ca, cb in pairs],
+        title="Paired bootstrap -- does the right-hand run beat the left-hand one?",
+    )
+    print("  p is one-sided: the fraction of resamples where the improvement did NOT hold.")
+    print("  *** p<0.001   ** p<0.01   * p<0.05   ns = not significant (the CI contains 0).")
+
+    path = out_dir / "significance.csv"
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(["comparison", "metric", "value_a", "value_b", "delta", "ci_lo", "ci_hi",
+                    "p_one_sided", "marker"])
+        for ca, cb in pairs:
+            for metric in BOOTSTRAP_METRICS:
+                pa, sa = series[ca][metric]
+                pb, sb = series[cb][metric]
+                lo, hi, p = paired_delta(sa, sb)
+                w.writerow([f"{column_label(*ca)} -> {column_label(*cb)}", metric,
+                            f"{pa:.6f}", f"{pb:.6f}", f"{pb - pa:.6f}",
+                            "" if lo is None else f"{lo:.6f}",
+                            "" if hi is None else f"{hi:.6f}",
+                            "" if p is None else f"{p:.4f}", significance_marker(p)])
+    print()
+    print(f"Wrote {path}")
 
 
 def print_repair_summary(runs, columns):
@@ -232,6 +408,12 @@ def main():
     ap.add_argument("--phases", nargs="+", default=None, choices=list(PHASES))
     ap.add_argument("--versions", nargs="+", default=None)
     ap.add_argument("--no-charts", action="store_true", help="Skip PNG chart generation (tables/CSVs still run)")
+    ap.add_argument("--bootstrap", type=int, default=2000, metavar="B",
+                    help="Bootstrap resamples for the confidence intervals and paired "
+                         "significance tests (default: 2000; 0 disables).")
+    ap.add_argument("--seed", type=int, default=0,
+                    help="Bootstrap RNG seed (default: 0). Same index + same seed "
+                         "reproduces identical intervals.")
     args = ap.parse_args()
 
     index = load_index(Path(args.index))
@@ -254,7 +436,13 @@ def main():
           f"{len({c[2] for c in columns})} phase(s), {len({c[3] for c in columns})} version(s).\n")
 
     print_headline_tables(lut, columns)
+    print_support_tables(lut, columns)
     print_repair_summary(runs, columns)
+    if args.bootstrap > 0:
+        print_significance(runs, columns, args.bootstrap, args.seed, out_dir)
+    else:
+        print()
+        print("[significance] --bootstrap 0 passed, skipping confidence intervals.")
 
     wide_path = out_dir / "master_wide.csv"
     write_master_wide_csv(wide_path, lut, fam_of, columns)

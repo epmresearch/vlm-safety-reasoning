@@ -22,6 +22,7 @@ def run_full_evaluation(
     skip_spice: bool = False,
     spice_only: bool = False,
     task: str = "unified",
+    use_llm_judge: bool = False,
 ) -> Dict[str, Any]:
     """
     Runs the complete evaluation pipeline.
@@ -131,6 +132,7 @@ def run_full_evaluation(
     grounding_metrics = {}
     violation_metrics = {}
     reasoning_metrics = {}
+    judge_metrics, judge_details, judge_status = {}, None, None
     
     if not spice_only:
         # 3. Grounding metrics — tasks producing the object classes
@@ -147,6 +149,19 @@ def run_full_evaluation(
             #    gated on the same capability.
             logger.info("Computing reasoning metrics (Captioning Suite)...")
             reasoning_metrics = batch_score_reasoning(pred_violations, gt_violations, images=images)
+
+            # 6. LLM-as-a-judge reasoning scores (dataset paper, Stage 3) -- OPT-IN, and
+            #    added alongside the text-similarity suite above, never instead of it.
+            #    Gated on the same capability, so object_only/caption_only skip it
+            #    silently. When off, its keys are absent from metrics.json, never zeros.
+            #    run_llm_judge is fail-soft: a judge that cannot load logs an ERROR and
+            #    returns no keys rather than costing the rest of this evaluation.
+            if use_llm_judge:
+                from evaluation.metrics_llm_judge import run_llm_judge
+                logger.info("Computing LLM-as-a-judge reasoning scores...")
+                judge_metrics, judge_details, judge_status = run_llm_judge(
+                    pred_violations, gt_violations
+                )
     
     # Combine all results
     all_metrics = {}
@@ -155,11 +170,15 @@ def run_full_evaluation(
     all_metrics.update(grounding_metrics)
     all_metrics.update(violation_metrics)
     all_metrics.update(reasoning_metrics)
+    all_metrics.update(judge_metrics)
     
     logger.info(f"Evaluation complete. {len(failures)} schema failures logged.")
     
     return {
         "metrics": all_metrics,
         "parsed_predictions": parsed_preds,
-        "failures": failures
+        "failures": failures,
+        # None unless the LLM judge actually ran for this task (see step 6 above).
+        "llm_judge_details": judge_details,
+        "llm_judge_status": judge_status,
     }

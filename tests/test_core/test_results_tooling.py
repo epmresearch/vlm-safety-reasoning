@@ -38,10 +38,11 @@ def test_parse_run_name_round_trips_every_real_generated_name(task, tier):
     "baseline",              # pre-normalization legacy unified baseline
     "baseline_8b",           # legacy, no prefix/version
     "vo_baseline_2b",        # underscore convention, no version
-    "vo-sft-2b-v4",          # missing the required _best suffix
+    "vo-sft-2b-v4",          # missing the required suffix
     "vo-grpo-2b-v4",         # missing the required _final suffix
-    "vo-sft-2b-v4_final",    # wrong suffix for this phase
-    "vo-baseline-2b-v1_best",  # baseline must NOT carry a suffix
+    "vo-grpo-2b-v4_best",    # grpo has no eval set and therefore never a best/
+    "vo-baseline-2b-v1_best",   # baseline must NOT carry a suffix
+    "vo-baseline-2b-v1_final",  # ...of either kind
     "notatask-baseline-2b-v1",  # unregistered prefix
     "vo-training-2b-v1",     # unregistered phase
     "plots_vo_v4",           # not a run directory at all
@@ -49,6 +50,35 @@ def test_parse_run_name_round_trips_every_real_generated_name(task, tier):
 ])
 def test_parse_run_name_rejects_legacy_and_malformed_names(bad_name):
     assert parse_run_name(bad_name) is None
+
+
+def test_sft_run_names_accept_both_final_and_the_legacy_best_suffix():
+    """SFT results are named `_final` as of 2026-09-10 (the merge handoff moved
+    from best/ to final/). Every SFT run produced BEFORE that is on disk as
+    `<variant>_best`, and refusing those would silently drop a whole phase out of
+    an index built over existing results -- reported as "skipped as unparseable",
+    which reads like a naming bug rather than a convention change.
+
+    The suffix is not load-bearing downstream: the phase is already pinned by the
+    middle segment, so accepting both costs nothing.
+    """
+    for suffix in ("final", "best"):
+        key = parse_run_name(f"vo-sft-2b-v1_{suffix}")
+        assert key == RunKey(task="violations_only", phase="sft", tier="2b", version="v1"), suffix
+
+    # ...but the leniency is scoped to sft alone.
+    assert parse_run_name("vo-grpo-2b-v1_best") is None
+
+
+def test_results_dir_names_emit_final_for_both_trained_phases():
+    """core/naming.py is the single source of truth the shell scripts follow:
+    hpc_sft.sh runs inference with --checkpoint final and writes
+    ${VARIANT}_final, and hpc_merge_sft.sh merges from final/. If this drifts,
+    the index looks for directories the pipeline never created."""
+    names = results_dir_names("violations_only", "8b", "v1")
+    assert names["sft"] == "vo-sft-8b-v1_final"
+    assert names["grpo"] == "vo-grpo-8b-v1_final"
+    assert names["baseline"] == "vo-baseline-8b-v1"
 
 
 def test_parse_run_name_prefixes_are_unambiguous():
@@ -220,3 +250,170 @@ def test_write_and_load_index_round_trip(tmp_path):
     assert len(loaded["runs"]) == 1
     assert len(loaded["metrics"]) == len(SAMPLE_METRICS)
     assert loaded["runs"][0]["run_id"] == "violations_only:2b:baseline:v1"
+
+
+# ===========================================================================
+# Bootstrap / significance helpers
+#
+# These exist because three of the four safety rules have 25, 63 and 24
+# positives in the whole test split, so a per-rule F1 carries a 95% interval up
+# to 0.33 wide and f1_macro averages four such numbers. Point estimates alone
+# cannot separate "GRPO helped" from "GRPO did nothing", which is why phase and
+# tier rankings appear to flip between statistically indistinguishable runs.
+# ===========================================================================
+
+import base64
+
+from experiments.results_lib import (
+    BOOTSTRAP_METRICS, CHARTABLE_BOUNDED_KEYS, DEMOTED_HEADLINE_KEYS,
+    MACRO_N_RULES_KEY, SUPPORT_KEYS, bootstrap_indices, bootstrap_series,
+    ci_from_series, contribution_matrices, decode_outcomes, paired_delta,
+    significance_marker,
+)
+
+
+def _pack(pairs):
+    """pairs: list of (pred_mask, gt_mask) -> the base64 vector metrics_violations emits."""
+    return base64.b64encode(bytes((p << 4) | g for p, g in pairs)).decode("ascii")
+
+
+def test_decode_outcomes_round_trips():
+    pairs = [(0b0001, 0b0001), (0b0000, 0b0100), (0b1010, 0b0010), (0b0000, 0b0000)]
+    pred, gt = decode_outcomes(_pack(pairs))
+    assert pred == [p for p, _ in pairs]
+    assert gt == [g for _, g in pairs]
+
+
+def test_decode_outcomes_is_tolerant_of_absence_and_garbage():
+    # A run evaluated before the key existed must disable the bootstrap, never crash.
+    assert decode_outcomes(None) is None
+    assert decode_outcomes("") is None
+    assert decode_outcomes("!!!not base64!!!") is None
+
+
+def test_contribution_matrices_match_a_hand_confusion():
+    #            pred      gt
+    pred, gt = decode_outcomes(_pack([
+        (0b0001, 0b0001),   # rule_1 TP
+        (0b0010, 0b0000),   # rule_2 FP
+        (0b0000, 0b0100),   # rule_3 FN
+    ]))
+    tp, fp, fn = contribution_matrices(pred, gt)
+    assert tp[0] == [1, 0, 0, 0]
+    assert fp[1] == [0, 1, 0, 0]
+    assert fn[2] == [0, 0, 1, 0]
+
+
+def test_bootstrap_point_estimate_equals_the_direct_computation():
+    pairs = [(0b0001, 0b0001)] * 30 + [(0b0010, 0b0000)] * 10 + [(0b0000, 0b0100)] * 10
+    pred, gt = decode_outcomes(_pack(pairs))
+    series = bootstrap_series(pred, gt, bootstrap_indices(len(pred), 50, seed=1))
+    # 30 TP, 10 FP, 10 FN pooled -> P = R = 0.75, F1 = 0.75
+    assert abs(series["f1_micro"][0] - 0.75) < 1e-12
+    for m in BOOTSTRAP_METRICS:
+        point, vals = series[m]
+        assert len(vals) == 50
+        lo, hi = ci_from_series(vals)
+        assert lo <= point <= hi
+
+
+def test_bootstrap_is_deterministic_for_a_given_seed():
+    pairs = [(0b0001, 0b0001)] * 20 + [(0b0010, 0b0000)] * 20
+    pred, gt = decode_outcomes(_pack(pairs))
+    a = bootstrap_series(pred, gt, bootstrap_indices(len(pred), 40, seed=7))
+    b = bootstrap_series(pred, gt, bootstrap_indices(len(pred), 40, seed=7))
+    c = bootstrap_series(pred, gt, bootstrap_indices(len(pred), 40, seed=8))
+    assert a["f1_micro"][1] == b["f1_micro"][1]
+    assert a["f1_micro"][1] != c["f1_micro"][1]
+
+
+def test_paired_delta_detects_a_real_difference_and_a_null_one():
+    n = 200
+    gt_pairs = [(0b0001, 0b0001)] * 100 + [(0b0000, 0b0001)] * 100
+    weak, gt = decode_outcomes(_pack([(0b0000, g) for _, g in gt_pairs]))   # detects nothing
+    strong, _ = decode_outcomes(_pack([(0b0001, g) for _, g in gt_pairs]))  # detects everything
+    boot = bootstrap_indices(n, 400, seed=0)
+
+    sw = bootstrap_series(weak, gt, boot)
+    ss = bootstrap_series(strong, gt, boot)
+
+    lo, hi, p = paired_delta(sw["f1_micro"][1], ss["f1_micro"][1])
+    assert p < 0.001 and lo > 0, "a large real improvement must be significant"
+
+    # Identical runs: delta is exactly 0 everywhere, so p == 1.0 (never > 0).
+    lo, hi, p = paired_delta(ss["f1_micro"][1], ss["f1_micro"][1])
+    assert lo == hi == 0.0 and p == 1.0
+
+
+def test_paired_delta_handles_an_empty_series():
+    assert paired_delta([], [], ) == (None, None, None)
+
+
+def test_significance_marker_thresholds():
+    assert significance_marker(0.0005) == "***"
+    assert significance_marker(0.005) == "**"
+    assert significance_marker(0.02) == "*"
+    assert significance_marker(0.5) == "ns"
+    assert significance_marker(None) == ""
+
+
+def test_index_carries_the_per_image_outcome_vector(tmp_path):
+    """The vector is a STRING, so the numeric filter must keep it out of the
+    long-format metrics table while the run summary still carries it -- that is
+    what lets compare_all.py bootstrap from index.json alone."""
+    from experiments.results_lib import RunKey, index_one_run
+
+    vec = _pack([(0b0001, 0b0001), (0b0000, 0b0000)])
+    run_dir = tmp_path / "vo-sft-2b-v1_best" / "evaluation_results"
+    run_dir.mkdir(parents=True)
+    (run_dir / "metrics.json").write_text(json.dumps({
+        "violation_identification_f1_micro": 0.5,
+        "violation_per_image_outcomes_b64": vec,
+    }), encoding="utf-8")
+
+    key = RunKey(task="violations_only", phase="sft", tier="2b", version="v1")
+    result = index_one_run(tmp_path / "vo-sft-2b-v1_best", key, "auto")
+
+    assert result["run"]["violation_per_image_outcomes_b64"] == vec
+    keys = {m["metric_key"] for m in result["metrics"]}
+    assert "violation_identification_f1_micro" in keys
+    assert "violation_per_image_outcomes_b64" not in keys, "a string must not become a metric row"
+
+
+def test_demoted_keys_stay_out_of_the_headline_but_keep_their_charts():
+    """Demotion governs what competes for attention in a scannable table, never
+    what is kept: master_wide.csv dumps every key, and charts read the chartable
+    set. Reasoning CLIPScore spans 0.627-0.666 across the nine real vo runs
+    while f1_micro spans 0.129-0.487 -- no discriminative power, but still data."""
+    from experiments.results_lib import BOUNDED_HEADLINE_KEYS
+
+    demoted = DEMOTED_HEADLINE_KEYS["reasoning"]
+    assert "reasoning_text_similarity_clipscore_macro" in demoted
+    for k in demoted:
+        assert k not in BOUNDED_HEADLINE_KEYS["reasoning"]
+        assert k in CHARTABLE_BOUNDED_KEYS["reasoning"]
+    # captioning CLIPScore is the benchmark's own metric for the caption tasks
+    # and is deliberately NOT demoted.
+    assert "captioning_clipscore" in BOUNDED_HEADLINE_KEYS["captioning"]
+
+
+def test_flag_rate_leads_the_violation_headline():
+    from experiments.results_lib import BOUNDED_HEADLINE_KEYS
+
+    head = BOUNDED_HEADLINE_KEYS["violation"][:2]
+    assert head == ["violation_gt_positive_rate", "violation_pred_positive_rate"], (
+        "the predicted-vs-true flag rate is the first thing to read; a model "
+        "flagging 64% of images against a 13.7% base rate has a meaningless recall"
+    )
+
+
+def test_every_annotated_macro_names_an_n_rules_key():
+    for metric, nkey in MACRO_N_RULES_KEY.items():
+        assert nkey.endswith("_n_rules")
+        assert nkey.startswith(metric.rsplit("_macro", 1)[0]), (metric, nkey)
+
+
+def test_support_keys_cover_both_conditioned_families():
+    assert any("scored_count" in k for k in SUPPORT_KEYS["reasoning"])
+    assert "violation_gt_positive_image_count" in SUPPORT_KEYS["violation"]
+    assert any("grounding_scored_count" in k for k in SUPPORT_KEYS["violation"])

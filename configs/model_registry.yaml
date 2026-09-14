@@ -1,5 +1,40 @@
 active_tier: "2b"
 
+# --- Per-tier LoRA capacity ----------------------------------------------------
+# TOP-LEVEL on purpose. core/config.py::load_config merges
+# base -> model_registry -> {sft,grpo} -> tasks/<task>, and merge_configs only
+# descends ONE level into nested dicts. Anything placed under models.<tier> is
+# therefore never visible as a top-level key at runtime -- it is reachable only
+# through get_model_info(tier), which returns hf_path/short_name/batch sizes.
+# A `lora:` block nested there would be silently inert.
+#
+# Resolved by models/model_loader.py::load_model_for_training, which is the one
+# function every FRESH-adapter path funnels through (SFT and GRPO alike) and which
+# already takes `tier`. Overrides the top-level `lora:` block in sft.yaml/grpo.yaml
+# key-by-key, so rank/alpha come from here while dropout and target_modules keep
+# coming from the training config.
+#
+# WHY. LoRA parameters grow ~linearly with hidden size; base parameters grow
+# quadratically. At a fixed r=16 the ADAPTED FRACTION therefore shrinks as the tier
+# grows, measured from the real v1 SFT logs:
+#     2b   23,724,032 / 2,151,256,064 = 1.10%
+#     4b   39,321,600 / 4,477,137,408 = 0.88%
+#     8b   51,346,944 / 8,818,470,640 = 0.58%
+# The 8B model was being adapted at HALF the relative capacity of the 2B one, so
+# "does model scale help?" and "does adapter capacity help?" moved in opposite
+# directions and could not be separated. Measured outcome: 4b -> 8b was negative
+# and non-significant in both phases (SFT -0.001 p=0.53, GRPO -0.007 p=0.64).
+# The ranks below re-level the adapted fraction to ~1.1% at every tier.
+#
+# alpha TRACKS r deliberately. LoRA scales its update by alpha/r, so holding alpha
+# at 16 while raising r would shrink the effective update to 0.8x at 4b and 0.5x at
+# 8b -- reintroducing exactly the confound this is meant to remove. alpha == r keeps
+# the scaling factor at 1.0 everywhere, which is what 2b already had.
+lora_by_tier:
+  2b: {r: 16, alpha: 16}   # ~1.10% trained (unchanged from v1)
+  4b: {r: 20, alpha: 20}   # ~1.10%
+  8b: {r: 32, alpha: 32}   # ~1.16%
+
 models:
   2b:
     hf_path: "unsloth/Qwen3-VL-2B-Instruct"
