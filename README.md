@@ -40,34 +40,51 @@ All four can be trained **concurrently on the same cluster, same version tag, sa
 
 ---
 
-## Results (violations_only, 8B, full baseline → SFT → GRPO chain)
+## Results (violations_only, v2, all three tiers, full baseline → SFT → GRPO chain)
 
-The most complete measured chain in the repo — all three phases, real GRPO training (not the pre-fix prompt-only runs), 3,004 test images:
+> **📊 The full v2 results report — with bootstrap confidence intervals, paired significance tests, per-rule
+> breakdowns, LLM-judge scores, a direct comparison against every model in the dataset paper's Tables 7 and 8,
+> a root-cause analysis and a costed v3 plan — is [`README_v2.md`](README_v2.md).** The summary below is the
+> short version. Any older numbers elsewhere in this repo (including `baseline_vs_sft_report.md` and the
+> `evaluation_results_archive*` folders) predate v2 and are superseded.
 
-| Metric | Baseline | SFT | GRPO |
+Nine runs, 3,004 test images (411 unsafe = 13.68%, 435 ground-truth rule-instances), commit `4acb833`:
+
+| Violation identification, micro | 2B | 4B | 8B |
 |---|---:|---:|---:|
-| JSON / schema validity | 99.8% | 100% | 100% |
-| Violation identification F1 (micro) | 0.244 | 0.354 | **0.371** |
-| Violation identification precision (micro) | 0.144 | 0.407 | **0.408** |
-| Violation identification recall (micro) | 0.793 | 0.313 | 0.340 |
-| False-alarm-free rate on safe images (rule₀ recall) | 30.3% | 93.4% | 92.9% |
-| IoU-conditioned violation F1 (micro) | 0.138 | 0.239 | **0.246** |
-| Violation-grounding mask IoU, mean | 0.311 | 0.388 | **0.397** |
-| Reasoning-text BERTScore F1 (micro) | 0.444 | **0.741** | 0.737 |
+| baseline — flag rate | 93.5% | 64.2% | 59.0% |
+| baseline — precision / recall | 0.084 / 0.890 | 0.131 / 0.862 | 0.169 / 0.848 |
+| baseline — **F1** | 0.153 | 0.228 | 0.282 |
+| SFT — flag rate | 13.3% | 13.9% | 14.8% |
+| SFT — precision / recall | 0.463 / 0.444 | 0.526 / 0.529 | 0.478 / 0.513 |
+| SFT — **F1** | 0.453 | 0.528 | 0.495 |
+| GRPO — flag rate | 20.2% | 18.8% | 21.9% |
+| GRPO — precision / recall | 0.464 / 0.658 | 0.524 / 0.699 | 0.466 / 0.731 |
+| GRPO — **F1** | **0.544** | **0.599** | **0.569** |
 
-![Overall metrics heatmap — baseline vs SFT vs GRPO, 8B](evaluation_results_archive_v2/plots/18_overall_heatmap.png)
+![rule_1 operating points vs every model in the dataset paper](figures_v2/rule1_precision_recall_vs_paper.png)
 
-**Reading it honestly:** SFT does the heavy lifting — it converts a model that free-associates prose into one that reliably emits valid, schema-correct JSON and trades the baseline's reflexive over-flagging (79% recall, 14% precision — asserting violations almost everywhere) for usable precision. GRPO then improves F1 and recall further on top of the merged SFT checkpoint (0.354→0.371, 0.313→0.340) while holding precision and JSON validity steady; the rule₀ false-alarm-free rate and reasoning BERTScore move a fraction of a point in the other direction, so it's a further precision/recall refinement, not a uniform win on every metric. The bigger trade-off is visible in the recall column throughout: precision-for-recall is a real cost, not a free lunch — a model tuned this way still misses roughly two-thirds of true violations. A similarly detailed baseline→SFT breakdown (captioning, grounding, and per-rule metrics) exists for the `unified` task at the 2B tier in [`baseline_vs_sft_report.md`](baseline_vs_sft_report.md) — a different task/tier than the table above, not a continuation of it.
+**Reading it honestly.** Zero-shot VLMs fail here by flagging almost everything — 59–94% of images against a
+13.7% true rate — so their 85–89% recall is not a detection result. **SFT fixes the calibration** (flag rate
+drops to ~14%, precision rises 3–6×, raw JSON validity at 2B goes from 20.1% to 99.9%) and is worth +0.21 to
++0.30 F1 at every tier, *p* < 0.001. **GRPO then buys recall almost for free**: +17 to +22 points of recall for
+−1.2 to +0.2 points of precision, *p* < 0.001 at every tier — and at the image-screening level (*"should an
+inspector look at this photo?"*) it lifts balanced accuracy from 0.72/0.76/0.75 to 0.80/0.83/0.83.
 
-**The same pattern replicates at smaller tiers.** Full `violations_only` chains at 2B and 4B (measured via the results toolset below, same test set) show the identical two-stage shape — SFT converts the format and buys most of the precision gain, GRPO adds a further F1 improvement on top:
+Three honest caveats, each quantified in [`README_v2.md`](README_v2.md): **macro-F1 is flat** from SFT to GRPO
+(*p* = 0.33–0.52) because GRPO reallocates its prediction budget onto rule_1 and suppresses the three rare
+rules — a consequence of the reward specifying one global confidence threshold (p\* = 0.298) for four rules
+with very different achievable precision; **8B is worse than 4B after fine-tuning** (−0.033 F1, and the LoRA
+capacity confound is now ruled out — it is overfitting: 8B's best validation loss arrives at step 125 of 512);
+and the **2B baseline row is largely a measurement of the structural-repair script** (79.9% of its raw outputs
+are unparseable).
 
-| Violation F1 (micro) | Baseline | SFT | GRPO |
-|---|---:|---:|---:|
-| 2B | 0.129 | 0.246 | **0.373** |
-| 4B | 0.227 | 0.469 | **0.487** |
-| 8B | 0.244 | 0.354 | **0.371** |
-
-Interestingly, GRPO's *relative* lift is largest at 2B — consistent with a smaller model having more low-hanging fruit left after SFT alone.
+**Versus the literature on the same test split.** Rule 1 precision: our 4B SFT **82.3%** against the best
+published VLM's 25.6% and a human upper bound of 95.6%. Rule 1 recall: our 8B GRPO **81.7%**, above the human
+upper bound of 66.6%. Violation-grounding IoU beats the best published number on **all four rules**
+(45.6 vs 23.1, 41.7 vs 40.1, 43.7 vs 32.6, 48.4 vs 25.8). No published model on this dataset holds high
+safe-site accuracy and useful violation recall simultaneously; our 4B SFT does (93.3% rule₀ recall at 51.7%
+rule_1 recall).
 
 ---
 

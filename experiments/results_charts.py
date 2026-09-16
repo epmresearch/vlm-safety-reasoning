@@ -56,6 +56,22 @@ except ImportError:
 DPI = 150
 
 
+def _cmap(name: str, n: int):
+    """Resampled discrete colormap, across matplotlib versions.
+
+    `matplotlib.cm.get_cmap(name, lut)` was deprecated in 3.7 and REMOVED in
+    3.9 -- which is what ARC's env and any recent local env have, so the three
+    call sites below raised AttributeError and killed chart generation (the
+    tables/CSVs were never affected; they need no plotting). `plt.get_cmap`
+    still exists but its 2-arg form is also deprecated, so prefer the modern
+    registry and fall back only for matplotlib < 3.5.
+    """
+    try:
+        return matplotlib.colormaps[name].resampled(max(n, 1))
+    except AttributeError:  # matplotlib < 3.5 has no `colormaps` registry
+        return cm.get_cmap(name, max(n, 1))
+
+
 def _save(fig, path: Path):
     path.parent.mkdir(parents=True, exist_ok=True)
     fig.tight_layout()
@@ -91,7 +107,7 @@ def _bar(x_labels, series, title, ylabel, path, y_bounded=True):
     n = len(series)
     width = 0.8 / max(n, 1)
     x = range(len(x_labels))
-    colors = cm.get_cmap("Set1", max(n, 3))
+    colors = _cmap("Set1", max(n, 3))
     for i, (label, vals) in enumerate(series):
         offsets = [xi + (i - (n - 1) / 2) * width for xi in x]
         plot_vals = [v if v is not None else 0 for v in vals]
@@ -372,7 +388,7 @@ def chart_grounding_per_class(lut, columns, out_dir) -> list:
         n_classes = len(GROUNDING_CLASSES)
         width = 0.8 / n_classes
         x = range(len(cols))
-        colors = cm.get_cmap("Set2", n_classes)
+        colors = _cmap("Set2", n_classes)
         for i, cls in enumerate(GROUNDING_CLASSES):
             key = f"grounding_mask_iou_all_macro_{cls}_tn0"
             vals = [lut.get((c[0], c[1], c[2], c[3], key)) for c in cols]
@@ -412,7 +428,7 @@ def chart_captioning_quality(lut, columns, out_dir) -> list:
         n = len(metrics_)
         width = 0.8 / n
         x = range(len(cols))
-        colors = cm.get_cmap("Dark2", n)
+        colors = _cmap("Dark2", n)
         for i, key in enumerate(metrics_):
             vals = [lut.get((c[0], c[1], c[2], c[3], key)) for c in cols]
             offsets = [xi + (i - (n - 1) / 2) * width for xi in x]
