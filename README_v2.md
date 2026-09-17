@@ -19,7 +19,8 @@ published in the dataset paper's Tables 7 and 8.
 | GPU cost | ≈ 37 H100-hours end to end |
 | Statistics | paired bootstrap, B = 2,000–4,000, resampling images |
 
-> Setup, architecture and engineering reference: [`README.md`](README.md) and [`CLAUDE.md`](CLAUDE.md).
+> Project overview: [`README.md`](README.md). Architecture, invariants and settled decisions:
+> [`CLAUDE.md`](CLAUDE.md). How to run any of this on ARC: [`OPERATIONS.md`](OPERATIONS.md).
 > v1 results are superseded by this document — see [§9](#9-v1--v2-every-fix-paid-off).
 
 ---
@@ -160,7 +161,7 @@ for out of precision — the precision change is statistically indistinguishable
    for the baseline (+0.054) and *negative* for both trained phases. v1 raised the hypothesis that this was a
    LoRA-capacity artifact (8B was adapted at 0.58% of parameters vs 2B's 1.10%); v2 re-levelled the ranks to
    16/20/32, verified at runtime as **1.10% / 1.10% / 1.16% trained**, and the 4B→8B deficit survived. That
-   hypothesis is dead; see [§12.4](#124-why-8b--4b-after-fine-tuning).
+   hypothesis is dead; see [§12.4](#124-why-8b--4b-after-fine-tuning--overfitting-not-adapter-capacity).
 
 ![F1 micro across tiers and phases](figures_v2/f1_micro_scaling.png)
 ![F1 macro across tiers and phases](figures_v2/f1_macro_scaling.png)
@@ -745,7 +746,7 @@ correct, the labels are misleading. Items 2–5 are design choices with measurab
 
 | # | experiment | why | cost |
 |---|---|---|---|
-| **P0-1** | Evaluate `checkpoints/qwen3vl-<tier>/vo-sft-<tier>-v2/**best**` at all three tiers | `best/` is already on disk (step 275 / 375 / **125**). Directly tests the overfitting hypothesis for 8B (§12.4). If 8B `best` beats 8B `final`, the fix is a shorter 8B budget, and that is a one-line config change. | 3 × (inference + eval) ≈ 4 h |
+| **P0-1** | Evaluate `checkpoints/qwen3vl-<tier>/vo-sft-<tier>-v2/**best**` at all three tiers | `best/` is already on disk (step 275 / 375 / **125**). Directly tests the overfitting hypothesis for 8B (§12.4). If 8B `best` beats 8B `final`, the fix is a shorter 8B budget, and that is a one-line config change. **A fuller sweep is also free:** `PersistentCheckpointCallback(persistent_freq=100)` is wired into both trainers, so `persistent-checkpoint-{100,200,300,400,500}` survive `save_total_limit` rotation and a whole SFT-budget curve can be measured with no retraining. Note the results-dir naming trap first — see `CLAUDE.md` invariant 7. | 3 × (inference + eval) ≈ 4 h; a 5-point 8B sweep ≈ 7 h |
 | **P0-2** | Evaluate `merged-vo-sft-<tier>-v2` with **no adapter** | Isolates RL from the merge/re-quantisation round trip (§11.6), and tells us whether the merge itself costs accuracy. Needs a check that `run_inference.py` accepts `--base_model_override` with no checkpoint. | 3 × ≈ 4 h |
 | **P0-3** | Emit raw (pre-repair) structural metrics | Removes reporting issue #1 permanently. One extra call to `compute_structural_metrics` on the pre-repair file, keys suffixed `_raw`. | ~20 lines, no GPU |
 | **P0-4** | Commit the tree and re-run `validate_rewards.py`, `pytest -k "not submitter_can_override_gres"` | `git_is_dirty: true` in all nine v2 manifests. | minutes |

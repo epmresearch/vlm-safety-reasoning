@@ -6,7 +6,14 @@ This repository trains and evaluates Vision-Language Models that look at a const
 
 Training is two-phase per model size: **LoRA supervised fine-tuning (SFT) → adapter merge → GRPO** (reinforcement learning with verifiable, code-based rewards — no reward model, no human preference data). Everything runs on the [`LouisChen15/ConstructionSite`](https://huggingface.co/datasets/LouisChen15/ConstructionSite) dataset (6,308 train / 701 val / 3,004 test images) across three model scales — 2B, 4B, and 8B parameter [Qwen3-VL](https://huggingface.co/collections/unsloth/qwen3-vl) checkpoints via [Unsloth](https://github.com/unslothai/unsloth) — on the University of Calgary's ARC HPC cluster (SLURM).
 
-> **For anyone extending this code** (including a future Claude Code session): [`CLAUDE.md`](CLAUDE.md) is the authoritative, exhaustively-detailed engineering reference — config layering, every fixed bug, every safety brake, every invariant. This README is the map; CLAUDE.md is the territory.
+> **For anyone extending this code** (including a future Claude Code session): [`CLAUDE.md`](CLAUDE.md) is the authoritative, exhaustively-detailed engineering reference — project status, config layering, every fixed bug, every safety brake, every invariant, and the decisions that shouldn't be re-litigated. This README is the map; CLAUDE.md is the territory.
+>
+> | File | Owns |
+> |---|---|
+> | `README.md` (this file) | what the project is, why four pipelines, a short results summary, getting started |
+> | [`README_v2.md`](README_v2.md) | **all results** — v2 tables, confidence intervals, significance tests, the dataset-paper comparison, root-cause analysis, and the costed v3 plan |
+> | [`CLAUDE.md`](CLAUDE.md) | architecture, invariants, settled decisions, traps |
+> | [`OPERATIONS.md`](OPERATIONS.md) | the ARC/SLURM runbook — setup, submitting, monitoring, failure recovery, artifact cleanup, getting results back |
 
 ---
 

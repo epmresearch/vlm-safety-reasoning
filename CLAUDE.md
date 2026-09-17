@@ -1,6 +1,87 @@
 # CLAUDE.md
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+It is the **engineering reference**: why the code is shaped the way it is, what is already decided, and what
+will silently break if you change it. For anything else, see the documentation map below.
+
+---
+
+## Read this first — project status (2026-09-17)
+
+**Nothing is running on the cluster.** The last SLURM job finished 2026-09-15T20:37 (`48521188`, the 8B GRPO
+job of the v2 `violations_only` run). Nothing needs babysitting; `squeue -u $USER` is empty.
+
+The last pushed commit is `5ba9455` ("update reports for v2"). Run `git status --short && git log --oneline -3`
+before assuming anything about the tree — documentation is edited more often than code here.
+
+| Task | v1 | v2 | notes |
+|---|---|---|---|
+| `violations_only` (`vo`) | 9/9 runs, **superseded** | **9/9 runs — the current result** | the only task with evaluated results |
+| `unified` | SFT started at all three tiers (`datasets/stats/oversample_manifest_*_unified-sft-*-v1.json` exist); **no indexed inference/eval results** | not started | |
+| `object_only` (`oo`) | never run | never run | code complete, tested, never submitted |
+| `caption_only` (`co`) | never run | never run | code complete, tested. Two 4-job `co-*-v1` chains were submitted **by accident** on 2026-09-14 (`48501131`–`48501137`) — see [the pytest-on-ARC hazard](#tests); all cancelled, every artifact deleted and verified gone |
+
+**The v2 `violations_only` run is complete, analysed, and reported.** All numbers, confidence intervals,
+paired significance tests, per-rule breakdowns, the comparison against the dataset paper's Tables 7 and 8, the
+root-cause analysis and the costed v3 plan live in **[`README_v2.md`](README_v2.md)** — that file is the single
+source of truth for results. Do not re-derive results here; link to it.
+
+**The six load-bearing v2 findings** an agent needs before touching anything (full evidence in `README_v2.md`):
+
+1. **SFT is the big win and it is significant everywhere** (+0.21 to +0.30 F1 micro, *p* < 0.001 at all tiers).
+   GRPO then adds +0.07 to +0.09 F1 micro, *p* < 0.001 at all tiers — recall +17 to +22 points with **no
+   significant precision change**. In v1 the same GRPO comparison was *p* = 0.08 / 0.16 (noise).
+2. **Macro-F1 is flat from SFT to GRPO (*p* = 0.33–0.52), and that is the reward working as specified, not a
+   bug.** `violation_tn_constant: 0.30` implies a break-even confidence `p* = 0.298`, and GRPO's measured
+   marginal precision — 0.370/0.370/0.388 on the flags it added, 0.077–0.250 on the flags it removed — sits
+   either side of that line at every tier. One global threshold is ~2.5× too high for the rare rules.
+   **Do not "fix" this by changing the LR, the step count, or the model size.**
+3. **The GRPO pool is 14.7 : 1 rule_1 : rule_4** (677 vs 46 images) while SFT's augmented set is 1.26 : 1. GRPO
+   both devalues *and* barely sees the rare rules.
+4. **8B is worse than 4B after fine-tuning** (−0.033 F1, ns) although the 8B *baseline* is the best baseline.
+   The v1 LoRA-capacity hypothesis is **dead** — v2 re-levelled ranks to 1.10/1.10/1.16% trained and the
+   deficit survived. It is overfitting: 8B's best `eval_loss` is at step **125 of 512** and drifts +11.2%.
+5. **`structural_json_validity_rate` is measured after structural repair.** It reads 0.981 for `vo-baseline-2b`
+   whose real raw compliance is **20.11%**. Quote `repair_stats.csv::status:valid_raw:pct` instead. Repair is
+   load-bearing for exactly that one run (F1 0.0155 → 0.1529); for the other eight it moves F1 by ≤ 0.008.
+6. **The remaining error is ranking, not perception.** An oracle keeping only the correct flags from SFT ∪ GRPO
+   scores F1 0.83–0.86 against the 0.60 realised, and no cheap post-hoc confidence proxy works (box count, box
+   area, reason length, rules-per-image, template frequency — every AUC 0.44–0.59). The model exposes no
+   confidence. Creating one is the highest-value v3 change.
+
+**What comes next.** The prioritised, costed plan is [`README_v2.md` §13](README_v2.md#13-v3-plan-costed-and-prioritised).
+In order, and none of it is started:
+
+- **P0-1** evaluate the SFT `best/` and `persistent-checkpoint-{100..500}/` checkpoints (already on disk — see
+  [invariant 7](#invariants-and-known-traps)) to test the 8B overfit hypothesis. No retraining.
+- **P0-2** evaluate `merged-vo-sft-<tier>-v2` with no adapter, to separate RL from the 4-bit merge round trip.
+- **P0-3** emit `structural_*_raw` from the pre-repair file.
+- **P0-4** re-run `validate_rewards.py` and the test suite, then commit (all nine v2 manifests say
+  `git_is_dirty: true`).
+- **P1/P2** config changes (`max_grad_norm`, `num_generations`, pool rebalance, per-rule reward weighting) and
+  then the confidence work. Rationale for each is in §13 — read it before proposing an alternative.
+
+---
+
+## Documentation map
+
+Four documents, four jobs, no overlap, plus the figures one of them embeds. Update the right one — if you find
+yourself copying a paragraph between two of these, it is in the wrong file.
+
+| File | Owns | In git? |
+|---|---|---|
+| [`README.md`](README.md) | what the project is, why four pipelines, a short results summary, getting started | yes |
+| [`README_v2.md`](README_v2.md) | **all results**: v2 tables, CIs, significance, paper comparison, root-cause analysis, the v3 plan | yes |
+| **`CLAUDE.md`** (this file) | architecture, config layering, invariants, decisions already made, traps | yes |
+| [`OPERATIONS.md`](OPERATIONS.md) | the ARC/SLURM runbook: setup, submitting, monitoring, failure recovery, artifact cleanup, result extraction | yes |
+| `figures_v2/` | the 15 figures `README_v2.md` embeds | yes |
+
+**`docs/` is git-ignored in its entirety** (`.gitignore:23`). It holds a large local-only working archive —
+`docs/audit/`, `docs/Diagnosis/`, `docs/Jobs/` (including the full v1→v2 conversation transcripts),
+`docs/logs/`. Nothing there is authoritative and none of it reaches a clone. **Never put a doc a future agent
+needs in `docs/`** — it will not exist for them. Root-level `*.md` and `figures_v2/` are tracked.
+
+---
 
 ## Overview
 
@@ -62,16 +143,81 @@ the ARC-pinned `0.23.0`, not whatever is on Windows.
 There is no linter, formatter, Makefile, or CI. `.gitattributes` forces LF on `*.sh`/`*.py`/`*.yaml` to prevent
 SLURM CRLF errors — don't defeat it from Windows.
 
+## Where things live
+
+### In the repo (all paths relative to the repo root)
+
+| Path | What |
+|---|---|
+| `core/` | `tasks.py` (the task registry — the single place a task is registered), `naming.py` (every generated name), `config.py` (the merge chain), `constants.py` (`RULES`), `callbacks.py`, `run_manifest.py`, `logging.py`, `io.py`, `wandb_utils.py` |
+| `configs/` | `base.yaml` → `model_registry.yaml` → `{sft,grpo}.yaml` → `tasks/<task>.yaml`, merged last-wins |
+| `data/` | `preprocessor.py` (SFT targets + GT dicts + GRPO prompts), `prompt_templates.py`, `schemas.py`, `loader.py`, `samplers.py`, `oversampling.py`, `box_utils.py`, `augment_rare_classes.py`, `build_grpo_pool.py` |
+| `models/` | `model_loader.py` (loading + LoRA resolution + pixel bounds), `sft_trainer.py`, `grpo_trainer.py`, `inference.py` |
+| `rewards/` | `unified_reward.py` (the registry + assembler), `reward_{format,caption,grounding,violation_id,violation_grounding,reasoning}.py`, `reward_utils.py` (predicates + `reward_constant`) |
+| `evaluation/` | `evaluator.py` (orchestrator), `metrics_{structural,violations,reasoning,grounding,captioning,llm_judge}.py`, `output_parser.py` |
+| `preprocessing/structural_repair.py` | the repair stage between inference and evaluation |
+| `experiments/` | entry points `run_{sft,grpo,inference,evaluation}.py`; the analysis toolset `build_results_index.py` + `compare_all.py` + `results_lib.py` + `results_charts.py`; `extract_qualitative.py` |
+| `scripts/` | `submit_pipeline.py` + four `submit_*_pipeline.py` shims; four `hpc_{baseline,sft,merge_sft,grpo}.sh` phase scripts; `merge_sft_adapter.py`, `validate_rewards.py`, `preflight_grpo.py`, `fetch_results.py`, `dataset_report.py`, `setup_arc.sh`, `augment_data.sh` |
+| `tests/` | 686 tests. `test_core/test_blocker_fixes.py` is the pre-flight/regression suite (B1–B14 plus the `test_v2_*` block that pins every v2 decision) |
+| `results_index/` | **git-ignored.** Local analysis workspace: `v2_dump/` (the downloaded v2 run dump), `analysis_v2/` (the local `compare_all` output: CSVs + `significance.csv` + 120 charts), `results_folder_vo/` + `logs_folder_err_out_vo/` + `all_vo/` (v1 archive), `index.json` |
+| `figures_v2/` | the 15 report figures, tracked so `README_v2.md` renders on GitHub |
+| `docs/` | **git-ignored** local working archive — see the documentation map above |
+| `vlm_data_root/` | the local mirror of the HPC data root; git-ignored |
+
+### On ARC (`VLM_DATA_ROOT=$HOME/vlm-finetuning-project1`)
+
+```
+$VLM_DATA_ROOT/
+├── datasets/
+│   ├── raw/ raw_cleaned/ processed/        # 6308 / 701 / 3004 train/val/test
+│   ├── augmented/                          # 8198 rows + augment_manifest.json   (SFT: unified, vo)
+│   ├── grpo_pool/                          # 1732 rows + build_manifest.json     (GRPO: all four tasks)
+│   └── stats/                              # dataset_report.json, oversample_manifest_<tier>_<variant>.json
+├── checkpoints/qwen3vl-<tier>/
+│   ├── <variant>/{final,best,checkpoint-N,persistent-checkpoint-N}
+│   │                                       # + run_config.json, run_manifest.json, training_state.json
+│   └── merged-<task>-sft-<tier>-<ver>/     # the 16-bit merge; GRPO's KL reference
+├── results/inference/<run_name>/
+│   ├── predictions.jsonl                   # RAW model output
+│   ├── run_manifest.json                   # inference settings + prompts
+│   ├── repair_applied/                     # predictions_repaired.jsonl, repair_report.json,
+│   │                                       # change_manifest.json, still_broken.json
+│   └── evaluation_results/                 # metrics.json, eval_manifest.json, predictions_with_eval.json,
+│                                           # parsed_predictions.json, json_parse_failures.json,
+│                                           # schema_validation_failures.json,
+│                                           # llm_judge_status.json, llm_judge_details.json
+├── logs/                                   # <log_stem>_<jobid>.{out,err} + the Python-side run_*.txt
+└── (HF cache is separate: $HOME/scratch/hf_cache, set by every phase script)
+```
+
+`<run_name>` comes from `core/naming.py::results_dir_names`: `<prefix>-baseline-<tier>-<ver>` for the baseline,
+`<prefix>-{sft,grpo}-<tier>-<ver>_final` for the two trained phases. `results_lib.py::parse_run_name` is the
+exact inverse and still accepts the legacy `_best` suffix for `sft` only.
+
+**Getting results off ARC** is an operational procedure — see [`OPERATIONS.md`](OPERATIONS.md).
+
 ## Commands
 
 ### Tests
 
 ```powershell
-python -m pytest tests/ -v                                       # all (~507 tests, no GPU needed)
+python -m pytest tests/ -v                                       # all 686, no GPU needed (~80 s)
 python -m pytest tests/test_core -v                               # task registry + name-isolation proof
-python -m pytest tests/test_core/test_blocker_fixes.py -v         # the pre-flight blockers, B1-B8
+python -m pytest tests/test_core/test_blocker_fixes.py -v         # blockers B1-B14 + the test_v2_* decisions
 python -m pytest tests/ -k "_oo or _co" -v                        # just the two newer pipelines
 ```
+
+> ### ⛔ NEVER run the full test suite on ARC
+>
+> `tests/test_core/test_blocker_fixes.py::test_submitter_can_override_gres_for_every_stage` runs the **real**
+> submitter twice through `subprocess`, with `--task caption_only --tiers 2b --version v1 --skip-preload`.
+> `submit_pipeline.py::submit_job` shells out to `sbatch` and only falls back to `DUMMY_JOB_ID` on
+> `FileNotFoundError` — so on a login node, where `sbatch` exists, **the test submits 8 real GPU jobs**. This
+> happened on 2026-09-14 (`48501131`–`48501137`, cancelled and cleaned; see [`OPERATIONS.md`](OPERATIONS.md)).
+>
+> On ARC, always: `pytest tests/ -k "not submitter_can_override_gres"`. Locally it is harmless — Windows has no
+> `sbatch`. The proper fix (make the test unable to reach a real `sbatch`, e.g. by pointing `PATH` at a stub or
+> asserting on a dry-run flag) is **not done yet**.
 
 **Reward-surface validator (no GPU, run before every submit).**
 
@@ -92,6 +238,11 @@ insertion, so first-party imports only resolve when CWD is on the path. On HPC t
 `PYTHONPATH`, so bare `pytest` works there.
 
 ### Full pipeline (HPC, from repo root on the login node)
+
+> This section describes **what the submitter does**. The step-by-step procedure for actually running a version
+> on ARC — environment setup, caching the judge, pre-flight checks, monitoring, holding/releasing queued jobs,
+> recovering from `NODE_FAIL` / `DependencyNeverSatisfied` / walltime kills, deleting the artifacts of a failed
+> run, and packing results for download — is [`OPERATIONS.md`](OPERATIONS.md).
 
 ```bash
 python scripts/submit_pipeline.py --task violations_only --tiers 2b 4b 8b --version v1
@@ -178,10 +329,10 @@ run (job `47873931`) measured only **~37-38 GB peak** via repeated `nvidia-smi` 
 single H100's ~80-93 GB, let alone the H200's 141 GB. Combined with H100 being far more plentiful (10 cards
 across 4 nodes vs H200's 2 cards on 1 node, so much shorter queue waits), the H200 pin no longer has a
 justification. `configs/grpo.yaml`'s `per_device_train_batch_size: 16` was originally sized assuming H200
-headroom and is kept at 16, not reverted to its old fallback of 8, on the strength of the 2b measurement above
-— **but 4b/8b have not been measured under this GRES on H100.** Watch memory (`nvidia-smi`, or the
-`GPUMemoryLoggingCallback` W&B panel) on the first 4b/8b GRPO run under this policy; if it OOMs, drop
-`per_device_train_batch_size` back to 8 in `configs/grpo.yaml` (previously verified safe).
+headroom and is kept at 16, not reverted to its old fallback of 8, on the strength of the 2b measurement above.
+**Settled by v2: all three tiers ran GRPO to completion on a single H100 with no OOM** (`48501343`,
+`48521188`, `48501351`; zero `CUDA out of memory` in any log). The `per_device_train_batch_size: 16` question
+is closed — leave it at 16.
 
 **Operational note: changing a phase script's `--gres` only affects jobs submitted *after* the change.**
 `sbatch` reads `#SBATCH` directives once, at submission time, and bakes the resulting resource request into
@@ -199,12 +350,20 @@ sft/merge would have queued fine while every GRPO job — the last stage in the 
 scheduled, looking nothing like a training failure. Pinned by
 `tests/test_core/test_blocker_fixes.py::test_b13_grpo_walltime_does_not_exceed_partition_max_time`.
 
-**24h has no confirmed headroom for the larger tiers.** The only recorded GRPO walltime (5h12m/epoch) is from a
-prompt-only run — images never reached the model — so it says nothing about what real image-conditioned
-generation costs at 4b/8b. If a GRPO job is killed by the wall, it is not lost: `models/grpo_trainer.py`
-auto-resumes from the last checkpoint (`save_steps: 20`, so at most ~20 steps of progress at risk) — the
-response to a timeout is to **re-submit the identical GRPO job** (same variant name), which continues rather
-than restarts. Watch the 2b run's actual `train_runtime` before assuming 4b/8b fit.
+**24h is now confirmed sufficient, measured on the real v2 runs** (each figure is the whole job: training +
+inference over 3004 images + repair + evaluation + LLM judge):
+
+| tier | baseline | SFT | merge | GRPO |
+|---|---|---|---|---|
+| 2b | 1:19:02 | 1:09:08 | 0:01:02 | **5:23:31** |
+| 4b | 1:18:36 | 1:45:55 | 0:03:30 | **9:21:57** |
+| 8b | 0:47:37 | 2:01:50 | 0:01:48 | **11:26:53** |
+
+8B GRPO is the binding case at ~11.5 h against the 24 h wall — comfortable, but a change that raises
+`num_generations` or `max_completion_length` eats that margin directly. If a GRPO job *is* killed by the wall
+it is not lost: `models/grpo_trainer.py` auto-resumes from the last checkpoint (`save_steps: 20`, so at most
+~20 steps at risk) — the response to a timeout is to **re-submit the identical GRPO job** (same variant name),
+which continues rather than restarts.
 
 ### Individual stages
 
@@ -359,10 +518,19 @@ treat `unparsed_rate_micro` above ~0.02 as a prompt/parser problem to investigat
 candidate reasoning scores 0/0/0 without calling the model. A mark outside 0-2 is clamped and counted. The
 total is always the sum of the three criteria, never the reply's own `Overall` line.
 
-**Cost (estimated, not yet measured on ARC):** ~16 GB bf16 + beam KV cache, on top of BERTScore/CLIP, well
-inside an 80 GB H100; roughly 5-15 min per evaluation for the 200-500 TPs a run typically has. **Red flags:**
-`unparsed_rate_micro > 0.02`; nearly every item at 6/6 (anchors too lenient, or the judge agreeing by default);
-`total_rule_1` far outside 2-6 (check the few-shot blocks first).
+**Cost — measured on the nine v2 runs, not estimated.** `147–288 s per evaluation` (193–387 judged items),
+`status: ok` and **0 unparsed replies in all nine**, identical `rubric_sha256 28297153fe9d`. It fits inside an
+80 GB H100 alongside BERTScore + CLIP with no memory trouble. The earlier "5–15 min" estimate was ~4× too
+pessimistic.
+
+**Red flags, and what v2 actually tripped:** `unparsed_rate_micro > 0.02` — **not tripped** (0 everywhere);
+`total_rule_1` far outside 2–6 — **not tripped** (3.23–4.64); *nearly every item at 6/6* — **tripped, and it
+is real.** 60% of 4B-SFT's judged items score a perfect 6/6, and `total_rule_4 = 6.00` on four of the nine runs
+because the model emits essentially one templated sentence (82 distinct sentences serve 230 judged items) on
+n = 4–12 items. **`reasoning_llm_judge_total_rule_4 = 6.0` is a template artifact, not a perfect reasoning
+score** — see [`README_v2.md` §11.3](README_v2.md#113-the-reasoning-scores-reward-style-not-only-substance).
+`relevance` is additionally near-saturated by construction (1.68–1.95 of 2), because our JSON format tells the
+judge which rule the sentence belongs to; the paper's free-form models had to select the rule in prose.
 
 ### Local analysis
 
@@ -395,10 +563,28 @@ failing. Uses numpy when importable, pure Python otherwise.
 
 This is not decoration. **rule_2/rule_3/rule_4 have 25/63/24 positives in the entire 3004-image test split**,
 so a per-rule F1 there carries a 95% interval up to 0.33 wide and `violation_identification_f1_macro` averages
-four such numbers. On the real vo v1 runs, baseline to SFT is +0.24 (p<0.001) while SFT to GRPO is +0.018
-(p~0.08) at 4b and +0.012 (p~0.16) at 8b, and 4b to 8b is *negative* and non-significant in both phases.
-Reading point estimates alone makes phase and tier rankings look like they flip run to run; they do not, they
-are inside the noise.
+four such numbers. On the v1 runs, baseline→SFT was +0.24 (p<0.001) while SFT→GRPO was +0.018 (p≈0.08) at 4b
+and +0.012 (p≈0.16) at 8b. **On v2, SFT→GRPO is +0.091/+0.072/+0.074 at p<0.001 for all three tiers** — the
+same point-estimate direction, now out of the noise. 4b→8b remains negative and non-significant in both trained
+phases at both versions. Reading point estimates alone makes phase and tier rankings look like they flip run to
+run; they do not, they are inside the noise until a paired test says otherwise.
+
+**Two things the toolset does *not* do**, both worked around by hand for the v2 report:
+
+- **It never pairs across `--version`.** `compare_all.py::print_significance` only compares runs inside one
+  `(task, tier, version)`. A v1↔v2 comparison has to be built separately, and v1's `metrics.json` predates
+  `violation_per_image_outcomes_b64`, so v1's outcome vectors must be **reconstructed** from
+  `repair_applied/predictions_repaired.jsonl` with `parse_output_for_task` + `validate_output_for_task` +
+  `build_gt_dict` + `_is_violation_present` (verified by reproducing all nine v2 numbers exactly by the same
+  route). Adding a `--baseline-version` flag would be a genuine improvement.
+- **It only bootstraps `f1_micro` and `f1_macro`** (`results_lib.py::BOOTSTRAP_METRICS`). Precision, recall,
+  F2, per-rule and image-level intervals were computed outside the toolset for `README_v2.md`.
+
+**`experiments/results_charts.py` used `cm.get_cmap(name, lut)` at three call sites** — deprecated in
+matplotlib 3.7 and **removed in 3.9**, which is what ARC and any recent local env have, so chart generation
+raised `AttributeError` and the corresponding test failed. Fixed 2026-09-16 with a version-safe `_cmap()`
+helper (`matplotlib.colormaps[name].resampled(n)`, falling back to `cm.get_cmap` below 3.5). 120 charts now
+generate; keep new chart code off the removed API.
 
 The delta CSV's **win tally** (`SUMMARY … _wins`) skips keys that are not "higher is better":
 `results_lib.py::is_non_comparable_key` excludes counts, thresholds, word lengths, and — since the Tier-0 keys
@@ -480,26 +666,49 @@ effect: SFT→GRPO was **statistically indistinguishable from no change** at 4b 
 | peak LR | mass | vs SFT | gradient-weighted | outcome |
 |---|---|---|---|---|
 | `2.0e-7` (v0) | 1.10e-5 | 1/2336 | 1/4970 | inert |
-| `2.0e-6` (v1) | 1.10e-4 | 1/234 | 1/497 | **measured: KL ≤ 0.001, effect not significant** |
-| **`1.0e-5` (v2)** | **5.50e-4** | **1/47** | **1/99** | to be measured |
+| `2.0e-6` (v1) | 1.10e-4 | 1/234 | 1/497 | **measured: KL ≤ 0.001, effect not significant** (*p* = 0.08 / 0.16) |
+| **`1.0e-5` (v2)** | **5.50e-4** | **1/47** | **1/99** | **measured: works.** KL 0.003–0.005, reward +0.06, F1 micro +0.07 to +0.09 at *p* < 0.001, every tier |
 
 `lr_scheduler_type` also moved `cosine` → **`constant_with_warmup`**: there is no overfitting pressure to
 anneal against over 2 epochs of a 1732-image pool with a KL anchor, so a flat LR after warmup keeps the whole
 budget productive instead of spending its tail at ~0.
 
-**Go/no-go on the 2b smoke run:** `kl` should rise into **0.01-0.10** and `reward/mean` should climb steadily.
-If `kl > 0.5`, or reward rises while completions degenerate, drop to `5.0e-6`.
+Still safe because the brakes are tight: `max_grad_norm: 0.3`, `beta: 0.04` (KL to the merged reference), and
+`scale_rewards="group"` (normalises advantage so reward magnitude can't inflate step size). **One structural
+fact:** with `num_iterations=1` and `steps_per_generation(4) ≤ gradient_accumulation_steps(16)`, TRL's own
+PPO-style clipping is **inert** here — the importance ratio is identically 1.0, so the realized per-token loss
+is plain `-A_i + β·KL_i` (group-relative-advantage REINFORCE with a KL anchor), not clipped-ratio PPO.
 
-Still safe because three brakes are tight: `max_grad_norm: 0.3`, `beta: 0.04` (KL to the merged reference), and
-`scale_rewards="group"` (normalises advantage so reward magnitude can't inflate step size). **A fourth fact,
-newly confirmed:** with `num_iterations=1` and `steps_per_generation(4) ≤ gradient_accumulation_steps(16)`,
-TRL's own PPO-style clipping is **structurally inert** here — the importance ratio is identically 1.0, so the
-realized per-token loss is plain `-A_i + β·KL_i` (group-relative-advantage REINFORCE with a KL anchor), not
-clipped-ratio PPO. This doesn't change the LR sizing argument, but it means `max_grad_norm`/`beta` really are
-the *only* two brakes doing the clipping job, not one of three.
+**What v2 actually measured, and what it means for the next change.** The old go/no-go rule here ("`kl` should
+rise into 0.01–0.10; if flat, try 5e-6") is **superseded** — it would have fired a false alarm. Across all
+three v2 GRPO runs:
 
-Verify on the 2b smoke run: `reward/mean` rising and `objective/kl` off zero → proceed; both flat across all
-108 steps → try 5e-6; reward rising while output degenerates → drop to 1e-6.
+| | 2b | 4b | 8b |
+|---|---|---|---|
+| `kl` mean / max | 0.0039 / 0.0064 | 0.0029 / 0.0047 | 0.0167 / 0.2078 |
+| `reward` first → last (max) | 0.382 → 0.445 (0.490 @ 40) | 0.426 → 0.469 (0.499 @ 70) | 0.381 → 0.482 (0.523 @ 40) |
+| `grad_norm` mean (logged steps **above** the 0.3 clip) | 0.408 (**17/21**) | 0.375 (**19/21**) | 0.423 (**14/21**) |
+| `frac_reward_zero_std` mean | 0.405 | 0.455 | 0.466 |
+| `reward_std` first → last | 0.110 → 0.081 | 0.116 → 0.053 | 0.134 → 0.056 |
+
+Read that table in this order:
+
+1. **KL stayed an order of magnitude below the predicted band and the run still worked.** KL is not the
+   go/no-go signal on this task; `reward/mean` climbing and the downstream paired F1 test are.
+2. **`beta` is not a brake at all.** At KL ≈ 0.004 and `beta: 0.04` the penalty contributes 1.6e-4 to the loss.
+3. **`max_grad_norm: 0.3` is the only brake still doing anything, and it binds on 67–90% of steps.** It is set
+   3.3× tighter than SFT's `max_grad_norm: 1.0` for no measured reason. **This — not the LR — is the next
+   knob** (`README_v2.md` §13, P1-1). Raising the LR again while the clip binds mostly buys a flatter,
+   more-normalised step, not a bigger one.
+4. **The run stalls at roughly step 40–70 of 108.** `reward_std` halves while 41–47% of groups already have
+   zero reward variance (and therefore zero gradient). The last third of every GRPO job buys almost nothing;
+   the lever is `num_generations` or pool curation, not more steps.
+5. **8B shows two transients nobody else does:** `kl = 0.2078` at the first logged step (then 0.0006), and
+   `grad_norm = 2.34` at step 90 followed by `kl = 0.041` at step 95. Both recover; no lasting damage.
+6. **Cosmetic NaN.** The 8B run logs `"kl": NaN` at exactly the two steps where `completions/clipped_ratio > 0`:
+   with `mask_truncated_completions: true`, a fully-masked truncated sequence makes the logged per-token KL
+   mean a 0/0. The loss stayed finite and training was unaffected — but if an entire generation batch were ever
+   truncated, the loss itself would go NaN. A guard is on the v3 list (P1-7).
 
 ### Three length keys, three different jobs
 
@@ -645,9 +854,11 @@ Everything the pipelines *share* (`datasets/{processed,augmented,grpo_pool}`, th
 during training, so concurrent readers are safe.
 
 All four `hpc_*.sh` start with `set -eo pipefail` and a guarded `cd` (confirmed correct in every phase script —
-**except `scripts/augment_data.sh`**, which has neither). `hpc_merge_sft.sh` refuses to run if no adapter
-exists at `<sft_variant>/best`; `hpc_grpo.sh` refuses if the merged KL base is missing. Both guards confirmed
-to actually fire.
+**except `scripts/augment_data.sh`**, which has neither). `hpc_merge_sft.sh` refuses to run unless
+`<sft_variant>/final/` contains an `adapter_config.json` or `adapter_model.safetensors`
+(`scripts/hpc_merge_sft.sh:102-115` — **`final/`, not `best/`**; changed with the 2026-09-10 handoff switch,
+and earlier text in this file saying `best/` was stale). `hpc_grpo.sh` refuses if the merged KL base is missing
+(`:132-141`). Both guards confirmed to actually fire.
 
 ### Adding a new task pipeline
 
@@ -750,7 +961,31 @@ one (the images are still valid supervision for *when* to abstain, via SFT).
 
 - **Reflexive rule_1 flagging vs honest abstention** (`unified`, `violations_only`): closed. At the historical
   flat `violation_tn_constant: 0.15`, always-asserting rule_1 beat honest abstention (~0.391 vs 0.075 EV) by
-  5×. Now `0.85`; `scripts/validate_rewards.py --probe` passes.
+  5×. Raised to `0.85` for v1, then lowered to **`0.30`** for v2 in both task YAMLs;
+  `scripts/validate_rewards.py --probe` passes at 0.30. **`0.30` is the current value — earlier text saying
+  "now 0.85" was stale.**
+
+  **What that constant actually sets is the model's operating point, and v2 measured it exactly.** The
+  constant does not decide *whether* honest behaviour wins (the policy probe tests that separately, under the
+  full weighted reward); it decides *where* the assert/abstain line sits:
+
+  ```
+  p* = c·(w_id + w_gnd + w_rsn) / [ c·(w_id + w_gnd + w_rsn) + w_id + w_gnd·E[IoU] + w_rsn·E[reason] ]
+     = 0.30·0.95 / (0.30·0.95 + 0.422 + 0.317·0.45 + 0.211·0.50)  =  0.285 / 0.955  =  0.298
+  ```
+
+  (`ACHIEVABLE_TP_GROUNDING = 0.45`, `ACHIEVABLE_TP_REASONING = 0.50` in `scripts/validate_rewards.py`, both
+  measured off real runs; the format weight cancels since both branches emit valid JSON.) v1 sat at `c = 0.85`
+  → `p* = 0.546`, i.e. the model had to be more than half sure before speaking, which contradicts
+  `violation_fbeta = 2.0`. The validator now asserts `p*` stays inside `VIOLATION_BREAKEVEN_BAND = (0.20, 0.50)`.
+
+  **GRPO then converged to `p*` to within 0.07 at all three tiers** — marginal precision 0.370/0.370/0.388 on
+  the flags it added, 0.077–0.250 on the flags it removed. That is the single most useful thing v2 established:
+  the RL machinery is sound and the reward's *specification* is what sets behaviour. It is also why macro-F1 is
+  flat — one global `p*` is ~2.5× too high for rules whose achievable precision is 0.15–0.19. **Changing
+  `violation_tn_constant` alone cannot fix macro**, because a single constant cannot give four rules four
+  thresholds; the per-rule options are in [`README_v2.md` §13](README_v2.md#13-v3-plan-costed-and-prioritised)
+  (P1-4). Re-run `scripts/validate_rewards.py --probe` after touching any of this.
 - **Suppressing the two rare object classes** (`object_only`, `unified`): closed. At flat `c=0.15` the
   break-even IoUs for rebar/hard-hat were 1.55/1.15 — above 1.0, i.e. unreachable, making suppression strictly
   dominant. Per-class retuned constants (excavator 0.283, rebar 0.048, hard-hat 0.065) put all three
@@ -767,6 +1002,41 @@ one (the images are still valid supervision for *when* to abstain, via SFT).
   read the real `frac_reward_zero_std` off the 2b smoke run before concluding anything needs to change; the
   lever, if it becomes worth pulling, is GRPO pool composition (currently balanced on violations only, not
   object presence).
+
+## Settled decisions — do not re-litigate
+
+Each of these was argued, measured, and closed. Reopening one needs new evidence, not a fresh opinion. The
+"why" is elsewhere in this file or in `README_v2.md`; this table exists so an agent does not spend a session
+re-deriving a settled choice.
+
+| Decision | Settled | Where the argument is |
+|---|---|---|
+| **Four independent task pipelines**, not one multi-task model | — | [Overview](#overview) |
+| **One shared, task-blind GRPO pool.** Do not add a per-task pool | — | [Tasks](#tasks--what---task-actually-controls) |
+| SFT learning rate **flat `1.0e-4` across tiers** (a per-tier LR is allowed only as declared config in `model_registry.yaml`) | — | [Why SFT's LR is flat](#config-layering) |
+| **`final/` is the SFT handoff; early stopping OFF; `best/` is diagnostic only** | 2026-09-10 | invariant 7 |
+| **`violation_tn_constant: 0.30`** (both violation tasks) and **`violation_fbeta: 2.0`** | 2026-09-10 | [Rewards](#rewards-and-the-output-contract) — includes the `p*` derivation |
+| **GRPO LR `1.0e-5` + `constant_with_warmup`** | 2026-09-10 | [Config layering](#config-layering); v2 confirmed it works |
+| **Per-tier LoRA `r/α = 16/20/32`, α tracking r** | 2026-09-10 | invariant 8; re-levels the adapted fraction to ~1.1% |
+| **GRPO on `gpu:h100:1`, not H200**; `per_device_train_batch_size: 16` | 2026-09-06 / confirmed by v2 | [GPU policy](#gpu-policy) |
+| **`repetition_penalty: 1.0` — the reward-side penalty is OFF** | 2026-09-05 | ghost-variable table |
+| **`scale_rewards="group"`, `loss_type="dapo"`, `mask_truncated_completions=true`, `dataloader_drop_last=true`, `seed` threaded** — all pinned explicitly rather than inherited from TRL defaults | 2026-09-05 | ghost-variable table |
+| **`RULE_MULTIPLIERS = {4: 16, 2: 12, 3: 6}` stays as-is**; `oversample_*_multiplier` stays at 1 | explicitly kept for v2 | [Data flow](#data-flow); pinned by `test_v2_augmentation_multipliers_unchanged` |
+| **`reward_format` demoted to 0.05 for `violations_only`, not removed** (it saturates post-SFT but must stay visible) | 2026-09-10 | [Rewards](#rewards-and-the-output-contract) |
+| **LLM judge is inline-only (`--use_llm_judge`), `batch_size: 1`, 3 few-shot per rule with the paper's 5 anchors first** | 2026-09-10 | [LLM-as-a-judge](#llm-as-a-judge-reasoning-evaluation) |
+| **TP-conditioned macros skip unmeasured rules and publish `_macro_n_rules`; identification macros do NOT** | — | [Macro averaging](#invariants-and-known-traps) |
+| **Per-rule CIDEr-D is never gated** (read it against `scored_count`); **CLIPScore stays out of the headline** but remains in the CSVs | — | this file + `README_v2.md` §11.7 |
+| **W&B runs fully offline**; read curves from the SLURM `.out` or `wandb sync` afterwards | — | [Commands](#commands) |
+| **The comparison toolset is terminal-first**: tables + CSVs + PNG charts, no web dashboard. Charts are on by default with `--no-charts` as the opt-out | — | [Local analysis](#local-analysis) |
+
+**Working conventions with the maintainer** (these are process, not code):
+
+- **Never commit or push unless explicitly asked.** Report what changed and let them run git.
+- **Never edit the training or inference pipeline to make a tooling/analysis job easier.** Analysis reads the
+  results tree; it does not reshape it.
+- **Never run the full test suite on ARC** — see [the hazard](#tests).
+- Prefer adding to the results toolset over writing another one-off plotting script; four of those were deleted
+  in `07592de` for exactly that reason.
 
 ## Invariants and known traps
 
@@ -826,6 +1096,26 @@ one (the images are still valid supervision for *when* to abstain, via SFT).
    `persistent-checkpoint-N` are distinct names it cannot touch — confirmed by directory-name disjointness,
    not merely by absence of deleting code.
 
+   **Mid-training checkpoints exist and are not rotated away.** `core/callbacks.py::PersistentCheckpointCallback`
+   is wired into **both** trainers at `persistent_freq=100` (`models/sft_trainer.py:334`,
+   `models/grpo_trainer.py:323`); it `copytree`s `checkpoint-N` to `persistent-checkpoint-N` whenever
+   `N % 100 == 0`. With SFT's `save_steps: 50` over 512 steps that yields
+   `persistent-checkpoint-{100,200,300,400,500}` per SFT variant, plus `best/` (2b step 275, 4b 375, **8b 125**)
+   and `final/`. So the whole SFT budget sweep that would settle the 8B overfitting question
+   ([`README_v2.md` §13](README_v2.md#13-v3-plan-costed-and-prioritised), P0-1) needs **no retraining at all** —
+   only `run_inference --checkpoint <name>` + repair + eval against checkpoints already on disk. Confirm they
+   are there before planning around them; nothing has verified this on the v2 tree yet.
+
+   **One trap if you do that sweep.** `run_inference.py` names its results directory `<variant>_<checkpoint>`,
+   so evaluating `persistent-checkpoint-300` writes `vo-sft-4b-v2_persistent-checkpoint-300` — and
+   `results_lib.py::_PHASE_SUFFIXES` only accepts `{"final", "best"}` for `sft`, so
+   `build_results_index.py` treats that directory as **not ours** and silently drops it into `skipped_names`.
+   The naming scheme has no slot for a checkpoint id, and `--run_name` cannot invent one without breaking the
+   `v<digits>` version parse. Either read those runs' `metrics.json` directly (fine for a 3–5 point sweep,
+   which only needs `violation_identification_f1_{micro,macro}`), or extend `_PHASE_SUFFIXES` to accept
+   `checkpoint-N` / `persistent-checkpoint-N` for `sft` first. Do not discover this after burning five
+   inference jobs.
+
 8. **LoRA rank is per-tier, and it is resolved in `models/model_loader.py`, not in `core/config.py`.**
    `configs/model_registry.yaml::lora_by_tier` is a **top-level** mapping (`2b: r=16, 4b: r=20, 8b: r=32`,
    with `alpha` tracking `r`). It cannot live under `models.<tier>`: `merge_configs` descends only one level
@@ -879,6 +1169,27 @@ runs it also made one column of the comparison table silently non-comparable wit
 a real violation. `violation_identification_recall_rule_0` = 1 − false-alarm rate. Parse/schema failures are
 never credited rule_0 TP; they surface as `violation_prediction_failure_{count,rate}`.
 
+**Every metric in `metrics.json` is measured on the REPAIRED file, including the structural family.** The chain
+is fixed (inference → repair → evaluation) and `run_evaluation.py` is pointed at
+`repair_applied/predictions_repaired.jsonl`, so `structural_json_validity_rate` and
+`structural_schema_adherence_rate` describe *post-repair* output, not what the model emitted. For
+`vo-baseline-2b-v2` that is the difference between a reported **0.981** and a real raw compliance of
+**20.11%**: 2,400 of 3,004 raw outputs fail to parse (degenerate repetition loops that hit the 1,024-token
+cap), and the repair rescues 78.0% of records, manufacturing 378 TPs and 3,519 FPs and moving F1 micro from
+0.0155 to 0.1529. For the other eight v2 runs the repair moves F1 by ≤ 0.008, and at the 8B baseline it
+*hurts* (−0.0078).
+
+Consequences, all of them load-bearing when writing anything up:
+
+- **The honest raw number is `repair_stats.csv::status:valid_raw:pct`** (equivalently
+  `repair_applied/repair_report.json`). Raw validity 20.11% → 99.93% is the single biggest thing SFT does, and
+  the post-repair metric hides it. Emitting `structural_*_raw` keys from the pre-repair file is v3 P0-3.
+- **Report `vo-baseline-2b` as "20.1% valid raw; 0.153 after repair"**, never as a detection result.
+- A run's raw-vs-repaired gap is recoverable at any time by scoring `predictions.jsonl` and
+  `repair_applied/predictions_repaired.jsonl` with the same parser — both files are kept.
+- Measured across all nine v2 runs: **zero contentless assertions** (`{"reason":"","bounding_box":[]}`), so the
+  presence-vs-substance asymmetry below has no effect on any current number.
+
 **Macro averaging: TP-conditioned families skip unmeasured rules; identification families do not.** Reasoning
 (`evaluation/metrics_reasoning.py`) and violation grounding (`metrics_violations.py`) can only be scored on a
 rule the model *correctly identified* at least once -- with zero true positives there is no reasoning text and
@@ -918,7 +1229,9 @@ references carries no information.
 
 **Stale things — don't trust them:**
 
-- `setup_project_structure.py` — dead one-time bootstrap. Gitignored yet tracked. Don't run it.
+*Dead code (present on disk, nothing calls it):*
+
+- `setup_project_structure.py` — dead one-time bootstrap. On disk, git-ignored, **no longer tracked**. Don't run it.
 - `rewards/{json_validity,caption_quality,rule_violation_accuracy,grounding_iou}.py` — legacy, unwired.
 - `rewards/reward_utils.py::_strict_parse`/`_strict_parse_cached` and
   `evaluation/output_parser.py::validate_unified_output` — pre-task legacy path hardcoded to `UnifiedOutput`.
@@ -927,9 +1240,29 @@ references carries no information.
   `to_grpo_prompt`, `build_grpo_dataset` — superseded by the `_for_task` versions the pipeline actually uses.
 - `data/dataset_cache.py` — unreferenced dead code.
 - `experiments/run_dual_evaluation.py` — returns a nested metrics shape nothing reads any more; semi-stale.
+- `experiments/plot_8b_v2_comparison.py` — a one-off seaborn script that reads a git-ignored
+  `evaluation_results_v2/` directory. Superseded by `compare_all.py` + `results_charts.py`. Note its "v2" means
+  an old archive, **not** the current `--version v2`.
 - `evaluation/report_generator.py`, `evaluation/error_analyzer.py` — not called from any live pipeline path.
-- `docs/Metrics.md` — documents a metric namespace that no longer exists (live families are
-  `grounding_{mask,greedy}_iou_{all,exist}_*`).
-- **All pre-existing GRPO metrics (from before this repo's `b8f2470`) are void** — those runs trained
-  prompt-only, images never reached the model. Baseline and SFT numbers from that era are usable; draw no GRPO
-  conclusion from them.
+- `scripts/{test_sampling,test_processor_batch_collapse}.py`, `scripts/push_adapter_to_hub.py`,
+  `scripts/setup_drive_structure.py` — one-off utilities, not part of any pipeline.
+
+*Stale documents (tracked, but superseded — do not quote numbers from them):*
+
+- `baseline_vs_sft_report.md` — a `unified`/2B baseline→SFT report from before v1. Different task and tier from
+  anything current.
+- `evaluation_results_archive/`, `evaluation_results_archive_v2/` — pre-v1 metrics + plots. The `_v2` in that
+  folder name is **not** `--version v2`; it is an old archive generation. `README.md` used to embed a plot from
+  it; that section now points at `README_v2.md`.
+- `ab.md` — the one-off prompt used to commission the `object_only`/`caption_only` pipelines. Historical.
+- `docs/Metrics.md` — **no longer exists**; earlier text here referenced it. Nothing in `docs/` is tracked.
+
+*Void measurements:*
+
+- **All GRPO metrics from before this repo's `b8f2470` are void** — those runs trained prompt-only, images
+  never reached the model. Baseline and SFT numbers from that era are usable; draw no GRPO conclusion from them.
+- **All v1 `violations_only` numbers are superseded by v2** and several are artifacts rather than model
+  behaviour: the v1 2B baseline was wrecked by the repair list-drop bug (recall 0.469 vs a real 0.890), every
+  v1 SFT stopped early and handed off `best/`, and v1's TP-conditioned macros divided by 4 instead of by the
+  measured rules. `README_v2.md` §9 attributes each v2 fix to its measured effect. Keep v1 only as the
+  before-picture.
