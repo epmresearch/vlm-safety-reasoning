@@ -54,8 +54,8 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 from core.logging import get_logger
 from mocs_annotation.prompts import (
-    ANNOTATOR_SYSTEM_PROMPT,
-    build_annotation_prompt,
+    build_messages,
+    build_system_prompt,
     prompt_fingerprint,
 )
 from mocs_annotation.schema import (
@@ -202,31 +202,69 @@ def load_annotator(
 # Generation
 # ---------------------------------------------------------------------------
 
-def _build_messages(image, prompt: str) -> List[Dict[str, Any]]:
-    return [
-        {"role": "system", "content": [{"type": "text", "text": ANNOTATOR_SYSTEM_PROMPT}]},
-        {"role": "user", "content": [
-            {"type": "image", "image": image},
-            {"type": "text", "text": prompt},
-        ]},
-    ]
+def load_fewshot_images(fewshot: List[Dict[str, Any]], fewshot_path: str) -> Tuple[List[Dict[str, Any]], List[Any]]:
+    """Loads the five example images ONCE, next to fewshot.json.
+
+    Loaded up front and reused for every request -- decoding them per image would be
+    2,000 x 5 redundant decodes. A block whose image will not load is DROPPED from the
+    example set rather than sent text-only: an unanchored box list in front of the
+    model is worse than one fewer example, because those coordinates then refer to
+    nothing.
+    """
+    from PIL import Image
+
+    base = Path(fewshot_path).parent
+    kept: List[Dict[str, Any]] = []
+    images: List[Any] = []
+    for ex in fewshot:
+        rel = ex.get("image_file")
+        if not rel:
+            logger.warning(
+                f"few-shot block {ex.get('source')} has no 'image_file' -- dropping it. "
+                "Re-run mocs_annotation.build_fewshot to regenerate the images."
+            )
+            continue
+        path = base / rel
+        try:
+            images.append(Image.open(path).convert("RGB"))
+            kept.append(ex)
+        except Exception as e:
+            logger.warning(f"could not load few-shot image {path}: {e} -- dropping that block")
+    return kept, images
 
 
 def generate_batch(
     model,
     processor,
-    images: List[Any],
-    prompts: List[str],
+    records: List[Dict[str, Any]],
+    query_images: List[Any],
+    fewshot: List[Dict[str, Any]],
+    fewshot_images: List[Any],
+    include_box_hints: bool,
     max_new_tokens: int,
     repetition_penalty: float,
     do_sample: bool,
     temperature: float,
 ) -> List[str]:
-    """Greedy (by default) batched generation. Returns one completion per input."""
+    """Greedy (by default) batched generation. Returns one completion per input.
+
+    Each conversation carries the five example images plus the query image, so the
+    per-request vision cost is 6 x ~1,176 tokens. That is the term that sets the batch
+    size -- see --batch-size.
+    """
     import torch
     from qwen_vl_utils import process_vision_info
 
-    conversations = [_build_messages(img, p) for img, p in zip(images, prompts)]
+    conversations = [
+        build_messages(
+            query_image=img,
+            record=rec,
+            fewshot=fewshot,
+            fewshot_images=fewshot_images,
+            include_box_hints=include_box_hints,
+        )
+        for rec, img in zip(records, query_images)
+    ]
     texts = [
         processor.apply_chat_template(c, add_generation_prompt=True, tokenize=False)
         for c in conversations
@@ -286,10 +324,22 @@ def run(args: argparse.Namespace) -> None:
         raise SystemExit(f"images root does not exist: {images_root}")
 
     fewshot: List[Dict[str, Any]] = []
+    fewshot_images: List[Any] = []
     if args.fewshot:
         with open(args.fewshot, "r", encoding="utf-8") as f:
             fewshot = json.load(f)
-        logger.info(f"Loaded {len(fewshot)} few-shot block(s) from {args.fewshot}")
+        fewshot, fewshot_images = load_fewshot_images(fewshot, args.fewshot)
+        logger.info(
+            f"Loaded {len(fewshot)} few-shot block(s) with images from {args.fewshot}: "
+            f"{[e.get('label') for e in fewshot]}"
+        )
+        vis_per_image = args.max_pixels // 1024
+        logger.info(
+            f"Vision budget: {len(fewshot)} example image(s) + 1 query = "
+            f"{(len(fewshot) + 1) * vis_per_image} tokens/request at batch 1, "
+            f"{(len(fewshot) + 1) * vis_per_image * args.batch_size} at batch "
+            f"{args.batch_size}"
+        )
     else:
         logger.warning(
             "No --fewshot given. The teacher will not be format- or register-"
@@ -317,7 +367,6 @@ def run(args: argparse.Namespace) -> None:
     # Provenance. Same role as the LLM judge's llm_judge_status.json: a later yield
     # comparison between two batches is meaningless unless you can prove they ran
     # under the same instructions and the same decoding settings.
-    sample_prompt = build_annotation_prompt(fewshot, todo[0], include_box_hints=not args.no_box_hints)
     _write_json_atomic({
         "model_id": args.model,
         "load_4bit": args.load_4bit,
@@ -332,13 +381,18 @@ def run(args: argparse.Namespace) -> None:
         "box_hints": not args.no_box_hints,
         "fewshot_path": args.fewshot,
         "fewshot_count": len(fewshot),
-        "fewshot_sources": [e.get("source") for e in fewshot],
+        "fewshot_blocks": [
+            {"label": e.get("label"), "source": e.get("source"), "image_file": e.get("image_file")}
+            for e in fewshot
+        ],
         "selection_path": str(args.selection),
         "selection_manifest": selection.get("manifest", {}),
         "images_root": str(images_root),
-        "system_prompt": ANNOTATOR_SYSTEM_PROMPT,
-        "example_user_prompt": sample_prompt,
-        "prompt_sha256": prompt_fingerprint(sample_prompt),
+        "system_prompt": build_system_prompt(),
+        # Fingerprints the CONTRACT -- system prompt + the five example answers --
+        # not one request, so two batches can be compared for having run under
+        # identical instructions even though their box hints differ per image.
+        "prompt_sha256": prompt_fingerprint(fewshot),
         "n_selected": len(records),
         "n_this_run": len(todo),
     }, manifest_path)
@@ -357,7 +411,6 @@ def run(args: argparse.Namespace) -> None:
             chunk = todo[start : start + args.batch_size]
 
             images: List[Any] = []
-            prompts: List[str] = []
             usable: List[Dict[str, Any]] = []
             for rec in chunk:
                 path = images_root / rec["file_name"]
@@ -369,9 +422,6 @@ def run(args: argparse.Namespace) -> None:
                     status_counts[STATUS_GENERATION_ERROR] += 1
                     continue
                 images.append(img)
-                prompts.append(
-                    build_annotation_prompt(fewshot, rec, include_box_hints=not args.no_box_hints)
-                )
                 usable.append(rec)
 
             if not usable:
@@ -384,7 +434,8 @@ def run(args: argparse.Namespace) -> None:
             # written out as an empty success.
             try:
                 completions = generate_batch(
-                    model, processor, images, prompts,
+                    model, processor, usable, images, fewshot, fewshot_images,
+                    not args.no_box_hints,
                     args.max_new_tokens, args.repetition_penalty,
                     args.do_sample, args.temperature,
                 )
@@ -393,10 +444,11 @@ def run(args: argparse.Namespace) -> None:
                     f"Batch of {len(usable)} failed ({type(e).__name__}: {e}); retrying one by one"
                 )
                 completions = []
-                for img, prompt in zip(images, prompts):
+                for rec, img in zip(usable, images):
                     try:
                         completions.append(generate_batch(
-                            model, processor, [img], [prompt],
+                            model, processor, [rec], [img], fewshot, fewshot_images,
+                            not args.no_box_hints,
                             args.max_new_tokens, args.repetition_penalty,
                             args.do_sample, args.temperature,
                         )[0])
@@ -469,10 +521,18 @@ def main() -> None:
     ap.add_argument("--images-root", default=None,
                      help="Override the images root recorded in selection.json")
     ap.add_argument("--model", default=DEFAULT_MODEL)
-    ap.add_argument("--batch-size", type=int, default=2,
-                     help="2 is the safe default: 33B in bf16 is ~66 GB of an 80 GB H100, "
-                          "leaving ~14 GB for the vision encoder, KV cache and generation. "
-                          "Try 4 after a --limit 8 smoke test; drop to 1 if it OOMs")
+    ap.add_argument("--batch-size", type=int, default=1,
+                     help="1 is the safe default now that the few-shot carries five "
+                          "IMAGES: six images per request is ~7,000 vision tokens, so a "
+                          "sequence is ~9,000 tokens and its KV cache alone is ~2.3 GB. "
+                          "On an 80 GB H100 (66 GB of bf16 weights, ~14 GB free) batch 2 "
+                          "sits right at the edge and batch 4 will OOM. On a 141 GB H200, "
+                          "4 is comfortable and 8 fits. Prove it with --limit 8 first")
+    ap.add_argument("--no-box-hints", action="store_true",
+                     help="Do not show the teacher MOCS's human-annotated worker/machine "
+                          "boxes for the query image. On by default because they ground "
+                          "the judgement and supply rule_4's exact geometry; turn them off "
+                          "to measure how much of the yield they are responsible for")
     ap.add_argument("--max-new-tokens", type=int, default=512,
                      help="A ~50-word caption plus up to four violation objects is ~250 "
                           "tokens; 512 leaves room without inviting a runaway")

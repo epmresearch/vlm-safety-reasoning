@@ -50,10 +50,6 @@ class AnnotationProposal(BaseModel):
     rule_2_violation: Optional[RuleViolation] = None
     rule_3_violation: Optional[RuleViolation] = None
     rule_4_violation: Optional[RuleViolation] = None
-    # Self-reported per-rule probability. Used only to order the human review queue,
-    # never written into a training row. Optional so a model that omits it still
-    # validates -- the caption and the rules are the load-bearing fields.
-    confidence: Optional[Dict[str, float]] = Field(default=None)
 
     @field_validator("caption")
     @classmethod
@@ -61,22 +57,6 @@ class AnnotationProposal(BaseModel):
         if not isinstance(v, str) or not v.strip():
             raise ValueError("caption must be a non-empty, non-whitespace string")
         return v
-
-    @field_validator("confidence")
-    @classmethod
-    def _clamp_confidence(cls, v: Optional[Dict[str, float]]) -> Optional[Dict[str, float]]:
-        if not v:
-            return None
-        out: Dict[str, float] = {}
-        for k, raw in v.items():
-            key = str(k).strip().lower().replace(" ", "_")
-            if key not in RULES:
-                continue
-            try:
-                out[key] = min(1.0, max(0.0, float(raw)))
-            except (TypeError, ValueError):
-                continue
-        return out or None
 
 
 def parse_proposal(raw_text: str) -> Tuple[Optional[AnnotationProposal], Optional[str], Optional[str]]:
@@ -195,7 +175,6 @@ def proposal_to_record(
         "image_caption": proposal.caption.strip(),
         **rules,
         "flagged_rules": flagged,
-        "confidence": proposal.confidence or {},
         # Kept so the reviewer and any later audit can see what the model was told.
         "mocs_categories": selection.get("mocs_categories", []),
         "worker_machine_pairs": selection.get("worker_machine_pairs", []),

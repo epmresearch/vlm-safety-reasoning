@@ -1,11 +1,25 @@
 """
-Prompts for the MOCS auto-annotation pass.
+Prompts for the MOCS auto-annotation pass -- multimodal few-shot.
 
 The rule wording is IMPORTED from data/prompt_templates.py::SAFETY_RULE_TEXTS, never
 copied. That dict is the repo's single source of truth for rule text -- the training
 prompts, the LLM judge and now the annotator all read the same strings, so a teacher
 can never be annotating against a different definition of rule_2 than the student is
 trained on. tests/test_evaluation/test_llm_judge.py pins those strings by sha256.
+
+MESSAGE LAYOUT (locked 2026-09-18: five image-bearing examples)
+
+    system     role + posture + the four rules + field requirements + output contract
+    user       [example image 1] "Annotate this construction site image."
+    assistant  ```json {...} ```
+    ...        five times: rule_1, rule_2, no-violation, rule_3, rule_4
+    user       [query image] <MOCS box hints> "Annotate this construction site image."
+
+The task-invariant instructions live in the SYSTEM turn, stated once, so the five
+demonstration turns stay compact -- repeating the rule block six times would triple
+the text budget for no gain. Real image/answer pairs then demonstrate the judgement,
+which is the thing text alone cannot teach: whether a worker is genuinely inside a
+slewing radius is a visual call.
 
 WHY THIS PROMPT IS CALIBRATED TOWARD RECALL, NOT PRECISION
 ----------------------------------------------------------
@@ -21,17 +35,10 @@ confirm" -- the opposite of the training prompt's posture, which is deliberately
 built to suppress over-flagging (see data/prompt_templates.py's note on the paper's
 Table 7: zero-shot VLMs average 3.3-16.5% violation precision). Do not copy this
 prompt back into the training path; it is tuned for the wrong objective there.
-
-WHAT IS DELIBERATELY NOT HERE
------------------------------
-No images in the few-shot blocks. Their job is format and register conditioning, and
-the paper does exactly this for LLaVA ("we input five captions without corresponding
-images for in-context learning"). Each example image would also cost ~1,200 vision
-tokens, which on an 80 GB H100 holding 66 GB of bf16 weights is memory you do not
-have. Text-only few-shot is ~700 tokens total.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 from typing import Any, Dict, List, Optional, Sequence
 
@@ -42,14 +49,19 @@ _RULE_KEYS = ("rule_1", "rule_2", "rule_3", "rule_4")
 
 SAFETY_RULES_BLOCK = "".join(SAFETY_RULE_TEXTS[r] for r in _RULE_KEYS)
 
+# The identical trigger sentence on every demonstration turn AND on the query turn,
+# so the model sees one consistent cue rather than inferring that a differently-worded
+# final turn wants something different.
+TURN_INSTRUCTION = "Annotate this construction site image."
 
-ANNOTATOR_SYSTEM_PROMPT = (
+
+_ROLE_AND_POSTURE = (
     "You are a construction safety expert preparing annotations for a research "
     "dataset. You are shown one photograph taken on a construction site. You "
     "produce a factual description of the scene and a record of which safety rules "
     "it violates, in exactly the format requested.\n\n"
     "Two standards govern everything you write. First, describe and report only what "
-    "is visible in this photograph -- never what a construction site of this kind "
+    "is visible in the photograph -- never what a construction site of this kind "
     "usually contains. Second, every violation you report must be one you can point "
     "at: a specific person, edge or machine you could draw a box around. If you "
     "cannot point at it, report null for that rule.\n\n"
@@ -57,18 +69,7 @@ ANNOTATOR_SYSTEM_PROMPT = (
     "incorrect ones. So when you can see a plausible violation and point to who or "
     "what is at fault, report it rather than leaving it out -- an over-report is "
     "corrected in review, an omission is lost. This does not license invention: a "
-    "rule you cannot locate in the image is still null."
-)
-
-
-_OUTPUT_CONTRACT = (
-    "Respond with a single JSON code block and nothing else, in exactly this shape:\n"
-    "```json\n"
-    '{"caption":"...","rule_1_violation":{"bounding_box":[[xmin, ymin, xmax, ymax]],'
-    '"reason":"..."},"rule_2_violation":null,"rule_3_violation":null,'
-    '"rule_4_violation":null,"confidence":{"rule_1":0.0,"rule_2":0.0,"rule_3":0.0,'
-    '"rule_4":0.0}}'
-    "\n```\n"
+    "rule you cannot locate in the image is still null.\n"
 )
 
 _FIELD_RULES = (
@@ -87,29 +88,51 @@ _FIELD_RULES = (
     "4. 'reason': ONE sentence naming who or what is at fault, identified by "
     "position or appearance, and what the breach is. Around twelve to sixteen "
     "words. Do not hedge and do not mention the photograph.\n"
-    "5. 'confidence': your own probability from 0.0 to 1.0 that each rule really is "
-    "violated in this image, including rules you reported as null. This is used to "
-    "order the human review queue, so report what you actually believe rather than "
-    "rounding to 0 or 1.\n"
+)
+
+_OUTPUT_CONTRACT = (
+    "Respond with a single JSON code block and nothing else, in exactly this shape:\n"
+    "```json\n"
+    '{"caption":"...","rule_1_violation":{"bounding_box":[[xmin, ymin, xmax, ymax]],'
+    '"reason":"..."},"rule_2_violation":null,"rule_3_violation":null,'
+    '"rule_4_violation":null}'
+    "\n```\n"
 )
 
 
-def render_fewshot_block(example: Dict[str, Any], index: int) -> str:
-    """Renders one few-shot example as an EXAMPLE n: <json> block.
+def build_system_prompt() -> str:
+    """The task-invariant instruction turn: role, rules, field rules, output shape.
 
-    `example` is a record from fewshot.json, produced by build_fewshot.py out of the
+    Stated once here rather than on every demonstration turn. The examples that
+    follow show what a correct answer looks like; this says what correct means.
+    """
+    return (
+        _ROLE_AND_POSTURE
+        + "\nJudge every image against these four safety rules:\n"
+        + SAFETY_RULES_BLOCK
+        + "\n"
+        + _FIELD_RULES
+        + "\n"
+        + _OUTPUT_CONTRACT
+    )
+
+
+def render_fewshot_answer(example: Dict[str, Any]) -> str:
+    """The assistant turn for one few-shot example: its fenced JSON answer.
+
+    `example` is a block from fewshot.json, produced by build_fewshot.py out of the
     real ConstructionSite train split. Boxes in it are already 0-1000, matching what
     the teacher is asked to emit.
+
+    Caption plus the four violation keys, and nothing else -- the same key set the
+    output contract asks for, so the examples cannot demonstrate a field the contract
+    does not request.
     """
     payload: Dict[str, Any] = {"caption": example.get("caption", "")}
     for r in _RULE_KEYS:
         payload[f"{r}_violation"] = example.get(f"{r}_violation")
-    if example.get("confidence"):
-        payload["confidence"] = example["confidence"]
-
-    label = example.get("label") or "example"
     body = json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
-    return f"EXAMPLE {index} ({label}):\n```json\n{body}\n```\n"
+    return f"```json\n{body}\n```"
 
 
 def render_box_hints(record: Dict[str, Any], max_boxes: int = 12) -> str:
@@ -165,48 +188,59 @@ def render_box_hints(record: Dict[str, Any], max_boxes: int = 12) -> str:
     return hint
 
 
-def build_annotation_prompt(
-    fewshot: Optional[Sequence[Dict[str, Any]]] = None,
+def build_messages(
+    query_image: Any,
     record: Optional[Dict[str, Any]] = None,
+    fewshot: Optional[Sequence[Dict[str, Any]]] = None,
+    fewshot_images: Optional[Sequence[Any]] = None,
     include_box_hints: bool = True,
-) -> str:
-    """The full user-turn prompt for one image."""
-    parts: List[str] = [
-        "Annotate this construction site image for a safety-inspection dataset.\n\n"
-        "Judge the image against these four safety rules:\n",
-        SAFETY_RULES_BLOCK,
-        "\n",
-        _FIELD_RULES,
-        "\n",
+) -> List[Dict[str, Any]]:
+    """The full multimodal message list for one image.
+
+    `fewshot` and `fewshot_images` are positionally aligned; a block whose image
+    failed to load is dropped from both by the caller rather than being sent
+    text-only, which would put an unanchored box list in front of the model.
+    """
+    messages: List[Dict[str, Any]] = [
+        {"role": "system", "content": [{"type": "text", "text": build_system_prompt()}]}
     ]
 
-    if fewshot:
-        parts.append(
-            "These examples show the exact output format and the wording style "
-            "required. They are from a different set of images, so do not copy their "
-            "content -- only their shape and register.\n\n"
-        )
-        for i, ex in enumerate(fewshot, start=1):
-            parts.append(render_fewshot_block(ex, i))
-        parts.append("\n")
+    if fewshot and fewshot_images:
+        for example, image in zip(fewshot, fewshot_images):
+            messages.append({"role": "user", "content": [
+                {"type": "image", "image": image},
+                {"type": "text", "text": TURN_INSTRUCTION},
+            ]})
+            messages.append({"role": "assistant", "content": [
+                {"type": "text", "text": render_fewshot_answer(example)},
+            ]})
 
+    query_text = ""
     if include_box_hints and record is not None:
-        hint = render_box_hints(record)
-        if hint:
-            parts.append(hint)
-            parts.append("\n")
+        query_text += render_box_hints(record)
+        if query_text:
+            query_text += "\n"
+    query_text += TURN_INSTRUCTION
 
-    parts.append(_OUTPUT_CONTRACT)
-    return "".join(parts)
+    messages.append({"role": "user", "content": [
+        {"type": "image", "image": query_image},
+        {"type": "text", "text": query_text},
+    ]})
+    return messages
 
 
-def prompt_fingerprint(prompt: str, system_prompt: str = ANNOTATOR_SYSTEM_PROMPT) -> str:
-    """sha256 of system+user prompt, recorded in the run manifest.
+def prompt_fingerprint(fewshot: Optional[Sequence[Dict[str, Any]]] = None) -> str:
+    """sha256 over the system prompt and the few-shot answers, recorded in the manifest.
 
     Same purpose as the LLM judge's `rubric_sha256`: two annotation batches can be
-    checked for having been produced under identical instructions, which is the only
-    way to know whether a yield difference is the images or the prompt.
+    checked for having run under identical instructions, which is the only way to know
+    whether a yield difference is the images or the prompt. Deliberately excludes the
+    per-image box hints, which vary by design -- this fingerprints the CONTRACT, not
+    one request.
     """
-    import hashlib
-
-    return hashlib.sha256((system_prompt + "\n" + prompt).encode("utf-8")).hexdigest()
+    parts = [build_system_prompt(), TURN_INSTRUCTION]
+    for example in fewshot or []:
+        parts.append(example.get("source", ""))
+        parts.append(example.get("image_file", ""))
+        parts.append(render_fewshot_answer(example))
+    return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()

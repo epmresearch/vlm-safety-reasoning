@@ -159,20 +159,35 @@ def main() -> None:
         hit = [r for r in flagged if r in wanted]
         if not hit and not args.include_empty:
             continue
-        conf = rec.get("confidence") or {}
-        # Triage order: highest self-reported confidence on a wanted rule first, so
-        # the reviewer's first hour is spent where the acceptance rate is highest.
-        priority = max((float(conf.get(r, 0.0)) for r in wanted), default=0.0)
-        queue.append({"_rec": rec, "_priority": priority, "_hit": hit})
+        queue.append({"_rec": rec, "_hit": hit})
 
-    queue.sort(key=lambda q: (-len(q["_hit"]), -q["_priority"], q["_rec"]["new_image_id"]))
+    # Triage order, in the absence of any confidence signal: rows proposing more of
+    # the wanted rules first (a richer row is worth more of the reviewer's attention),
+    # then the geometrically mined buckets ahead of the weak priors and the random
+    # control, then id for determinism.
+    #
+    # There is deliberately NO model-reported confidence to sort on. A self-reported
+    # probability from an un-validated zero-shot teacher reads meaningful and is not,
+    # and nothing here would have checked it -- so it was removed from the output
+    # contract rather than shipped as a number the reviewer might trust.
+    bucket_rank = {
+        "rule_4_geometric": 0,
+        "rule_2_height_prior": 1,
+        "rule_3_excavation_prior": 2,
+        "random_control": 3,
+    }
+    queue.sort(key=lambda q: (
+        -len(q["_hit"]),
+        bucket_rank.get(q["_rec"].get("selection_bucket", ""), 9),
+        q["_rec"]["new_image_id"],
+    ))
 
     fieldnames = [
         "new_image_id", "file_name", "image_path", "selection_bucket",
-        "proposed_rules", "max_confidence", "caption",
+        "proposed_rules", "caption",
     ]
     for r in RULES:
-        fieldnames += [f"{r}_proposed", f"{r}_reason", f"{r}_boxes_1000", f"{r}_confidence"]
+        fieldnames += [f"{r}_proposed", f"{r}_reason", f"{r}_boxes_1000"]
     fieldnames += [
         "mocs_categories", "mocs_suggested_rule4_box_1000",
         # Reviewer fills these in. Left empty on purpose.
@@ -194,20 +209,17 @@ def main() -> None:
                 "image_path": str(Path(images_root) / rec["file_name"]) if images_root else "",
                 "selection_bucket": rec.get("selection_bucket", ""),
                 "proposed_rules": " ".join(item["_hit"]),
-                "max_confidence": f"{item['_priority']:.2f}",
                 "caption": rec.get("image_caption", ""),
                 "mocs_categories": " ".join(rec.get("mocs_categories") or []),
                 "mocs_suggested_rule4_box_1000": _suggested_rule4_box(
                     geometry.get(rec["new_image_id"], rec)
                 ),
             }
-            conf = rec.get("confidence") or {}
             for r in RULES:
                 v = rec.get(f"{r}_violation")
                 row[f"{r}_proposed"] = 1 if v is not None else 0
                 row[f"{r}_reason"] = (v or {}).get("reason", "") if v else ""
                 row[f"{r}_boxes_1000"] = _boxes_to_1000((v or {}).get("bounding_box")) if v else ""
-                row[f"{r}_confidence"] = f"{float(conf.get(r, 0.0)):.2f}" if conf else ""
             writer.writerow(row)
 
     logger.info("")
