@@ -276,10 +276,14 @@ def generate_batch(
         if imgs:
             image_inputs.extend(imgs if isinstance(imgs, list) else [imgs])
 
-    # NO truncation. models/inference.py truncates the prompt on purpose, but its
-    # prompt has the output contract near the START; ours ends with the JSON shape
-    # and the field rules, so right-truncation would silently cut off the very
-    # instructions that make the completion parseable.
+    # NO truncation. models/inference.py truncates the prompt on purpose, because its
+    # sequence is one short user turn and the risk is a prompt that overruns the
+    # window. Here the sequence is a system turn + five demonstration turns + the
+    # query, so the LAST thing in it is the query image and its box hints --
+    # right-truncation would silently drop the very image being annotated and the
+    # model would answer about a few-shot example instead. Qwen3-VL's context is far
+    # larger than the ~8,600 tokens this builds, so the ceiling is GPU memory (see
+    # --batch-size), not the window.
     inputs = processor(
         text=texts,
         images=image_inputs or None,
@@ -378,7 +382,7 @@ def run(args: argparse.Namespace) -> None:
         "temperature": args.temperature,
         "repetition_penalty": args.repetition_penalty,
         "batch_size": args.batch_size,
-        "box_hints": not args.no_box_hints,
+        "box_hints": args.box_hints,
         "fewshot_path": args.fewshot,
         "fewshot_count": len(fewshot),
         "fewshot_blocks": [
@@ -435,7 +439,7 @@ def run(args: argparse.Namespace) -> None:
             try:
                 completions = generate_batch(
                     model, processor, usable, images, fewshot, fewshot_images,
-                    not args.no_box_hints,
+                    args.box_hints,
                     args.max_new_tokens, args.repetition_penalty,
                     args.do_sample, args.temperature,
                 )
@@ -448,7 +452,7 @@ def run(args: argparse.Namespace) -> None:
                     try:
                         completions.append(generate_batch(
                             model, processor, [rec], [img], fewshot, fewshot_images,
-                            not args.no_box_hints,
+                            args.box_hints,
                             args.max_new_tokens, args.repetition_penalty,
                             args.do_sample, args.temperature,
                         )[0])
@@ -528,14 +532,26 @@ def main() -> None:
                           "On an 80 GB H100 (66 GB of bf16 weights, ~14 GB free) batch 2 "
                           "sits right at the edge and batch 4 will OOM. On a 141 GB H200, "
                           "4 is comfortable and 8 fits. Prove it with --limit 8 first")
-    ap.add_argument("--no-box-hints", action="store_true",
-                     help="Do not show the teacher MOCS's human-annotated worker/machine "
-                          "boxes for the query image. On by default because they ground "
-                          "the judgement and supply rule_4's exact geometry; turn them off "
-                          "to measure how much of the yield they are responsible for")
-    ap.add_argument("--max-new-tokens", type=int, default=512,
-                     help="A ~50-word caption plus up to four violation objects is ~250 "
-                          "tokens; 512 leaves room without inviting a runaway")
+    ap.add_argument("--box-hints", action="store_true",
+                     help="OFF by default. Injects MOCS's human-annotated worker/machine "
+                          "boxes for the QUERY image as text in the final turn. Off because "
+                          "(a) the five demonstrations are image->json with no hint block, so "
+                          "hinting only the query makes the one turn the model must answer "
+                          "the one turn it has never been shown; (b) the geometry it would "
+                          "improve is the teacher's rule_4 box, which export_review discards "
+                          "in favour of mocs_suggested_rule4_box_1000 from the same MOCS "
+                          "annotations; and (c) rule_4_geometric images always carry the "
+                          "pair note while random_control ones mostly do not, which would "
+                          "confound the bucket yield comparison the control exists to enable. "
+                          "Turn on only to measure how much yield the priming is worth")
+    ap.add_argument("--max-new-tokens", type=int, default=1024,
+                     help="A ~50-word caption plus four violation objects is ~300 tokens, "
+                          "so 1024 is generous headroom for an image with many instances "
+                          "per rule. It also matches configs/tasks/violations_only.yaml's "
+                          "own max_new_tokens. Costs nothing on a well-behaved completion "
+                          "(greedy stops at EOS) and ~131 MB of KV cache per sequence; the "
+                          "only real cost is that a degenerate decode loop burns twice as "
+                          "long before being cut, which repetition_penalty 1.05 guards")
     ap.add_argument("--repetition-penalty", type=float, default=1.05,
                      help="1.05, NOT the pipeline's 1.0. That 1.0 is a deliberate, pinned "
                           "decision for the training/inference path (CLAUDE.md's "
