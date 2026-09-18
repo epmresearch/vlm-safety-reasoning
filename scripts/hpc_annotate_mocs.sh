@@ -124,6 +124,7 @@ python -m mocs_annotation.annotate \
     --out-dir "$OUT_DIR" \
     --model "$MODEL" \
     --batch-size "$BATCH_SIZE" \
+    --keep-raw \
     $LIMIT_ARG
 
 echo "======================================================================"

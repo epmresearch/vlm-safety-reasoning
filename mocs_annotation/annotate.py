@@ -45,10 +45,9 @@ import json
 import os
 import sys
 import time
-import traceback
 from collections import Counter
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
@@ -447,6 +446,15 @@ def run(args: argparse.Namespace) -> None:
                 logger.warning(
                     f"Batch of {len(usable)} failed ({type(e).__name__}: {e}); retrying one by one"
                 )
+                # A failed batch is very often OOM, which leaves the allocator
+                # fragmented; without this the one-by-one retry tends to OOM too and
+                # the whole batch is lost for a reason that was recoverable.
+                try:
+                    import torch
+
+                    torch.cuda.empty_cache()
+                except Exception:
+                    pass
                 completions = []
                 for rec, img in zip(usable, images):
                     try:
@@ -481,6 +489,27 @@ def run(args: argparse.Namespace) -> None:
 
             out_f.flush()
             os.fsync(out_f.fileno())
+
+            # EARLY ABORT. This job runs unattended for hours; without this, a
+            # SYSTEMATIC failure -- the processor rejecting the six-image
+            # conversation, a bad images root, an OOM that recurs on every batch --
+            # would quietly burn the whole allocation writing 2,017 error records and
+            # be discovered the next morning. Stop as soon as the evidence is in, and
+            # say what the errors actually were. Whatever succeeded is already on
+            # disk and a resubmit picks up from there.
+            ok_so_far = status_counts[STATUS_OK]
+            if processed >= args.abort_after and ok_so_far / max(processed, 1) < args.min_success_rate:
+                recent = [
+                    f"{k}={v}" for k, v in status_counts.most_common() if k != STATUS_OK
+                ]
+                raise RuntimeError(
+                    f"Aborting: only {ok_so_far}/{processed} images produced a usable "
+                    f"proposal (floor is {args.min_success_rate:.0%} after "
+                    f"{args.abort_after} attempts). Failure mix: {', '.join(recent)}. "
+                    f"Read the `error` and `raw_output` fields in {proposals_path} to see "
+                    "why, fix it, then resubmit -- the successful records are kept and "
+                    "will be skipped. Pass --abort-after 0 to disable this guard."
+                )
 
             elapsed = time.time() - started
             rate = processed / elapsed if elapsed > 0 else 0.0
@@ -578,6 +607,14 @@ def main() -> None:
     ap.add_argument("--keep-raw", action="store_true",
                      help="Also store the raw completion on successful records (bigger file, "
                           "useful while tuning the prompt)")
+    ap.add_argument("--abort-after", type=int, default=16,
+                     help="Stop the job once this many images have been attempted if the "
+                          "success rate is below --min-success-rate. Exists because this "
+                          "runs unattended: a systematic failure would otherwise spend the "
+                          "whole allocation writing error records. 0 disables the guard")
+    ap.add_argument("--min-success-rate", type=float, default=0.2,
+                     help="Success floor for the --abort-after guard. Deliberately low -- "
+                          "it is there to catch TOTAL failure, not a mediocre teacher")
     ap.add_argument("--log-every", type=int, default=10, help="Log every N batches")
     args = ap.parse_args()
     run(args)
