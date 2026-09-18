@@ -23,9 +23,9 @@ conversion silently collapses every box to a point and zeroes every IoU downstre
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Optional, Sequence, Tuple
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, field_validator
 
 from core.constants import RULES
 from data.box_utils import clean_boxes, normalize_boxes, scale_1000_to_01
@@ -105,8 +105,7 @@ def _normalize_violation_shapes(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     Scoped to the four rule keys only. `fix_prediction_structure` is deliberately NOT
     used: it normalizes TOP-LEVEL keys against a task's canonical key set, and this
-    payload carries `caption` and `confidence`, which are not in violations_only's
-    key set.
+    payload carries `caption`, which is not in violations_only's key set.
     """
     from preprocessing.structural_repair import normalize_violation_value
 
