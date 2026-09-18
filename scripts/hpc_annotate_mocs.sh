@@ -4,7 +4,13 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
-#SBATCH --mem=150G
+#SBATCH --mem=250G
+# HOST RAM, not GPU. The GPU side is set by --gres and --batch-size; this is only
+# for the safetensors read at load, the decoded PIL images, and the processor's
+# pixel_values tensors before they move to the device -- a few GB at batch 8. 250G
+# is deliberate headroom (matching what the GRPO jobs already request on this
+# partition), not a requirement. If squeue shows the job stuck behind a busy node,
+# dropping this back to 150G costs nothing functionally.
 #SBATCH --gres=gpu:h100:1
 # H100, not H200. Qwen3-VL-32B in bf16 is ~66 GB of an 80 GB card, which fits with
 # ~14 GB for the vision encoder, KV cache and generation at batch 2. H100 is also far
@@ -44,7 +50,11 @@
 # expanded while possibly unset, matching the other phase scripts.
 set -eo pipefail
 
-BATCH_SIZE=${1:-2}
+# Default 8, sized for the H200 (141 GB): ~100 GB peak at 6 images x ~1,176 vision
+# tokens per request. This assumes the `--gres=gpu:h200:1` override on the sbatch
+# line. On an 80 GB H100 a batch of 8 will OOM, then self-heal via the one-by-one
+# retry -- correct results, but slower than just passing 1.
+BATCH_SIZE=${1:-8}
 LIMIT=${2:-}
 MODEL=${MOCS_ANNOT_MODEL:-Qwen/Qwen3-VL-32B-Instruct}
 
