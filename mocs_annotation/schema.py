@@ -170,6 +170,10 @@ def proposal_to_record(
         "width": selection["width"],
         "height": selection["height"],
         "selection_bucket": selection["selection_bucket"],
+        # Which MOCS file the image came from ("val" / "test"). Absent on selections
+        # made before multi-source support, hence .get() -- the filename number range
+        # still distinguishes them (val 19406-23406, test 23407-41672).
+        "source": selection.get("source", ""),
         "status": STATUS_OK,
         "image_caption": proposal.caption.strip(),
         **rules,
@@ -200,6 +204,7 @@ def failure_record(
         "width": selection["width"],
         "height": selection["height"],
         "selection_bucket": selection["selection_bucket"],
+        "source": selection.get("source", ""),
         "status": status,
         "error": error,
         "raw_output": (raw_output or "")[:4000],

@@ -81,8 +81,24 @@ class MocsImage:
     file_name: str
     width: int
     height: int
+    # Which annotation file this came from ("val" / "test"), and where its jpg lives.
+    # Both are carried per-image because a selection may draw from SEVERAL sources at
+    # once, and their images sit in different directories.
+    source: str = ""
+    images_root: str = ""
     # (category_name, [xmin, ymin, xmax, ymax]) in [0, 1]
     boxes: List[Tuple[str, List[float]]] = field(default_factory=list)
+
+    @property
+    def stem(self) -> str:
+        """Filename without extension -- the ONLY globally unique key.
+
+        MOCS restarts its COCO `id` at 1 in every split, so val and test share all
+        4,000 of val's ids. Filenames do not collide (val 19406-23406, test
+        23407-41672), so everything here keys on the stem and `image_id` is kept only
+        as provenance.
+        """
+        return self.file_name.rsplit(".", 1)[0]
 
     @property
     def megapixels(self) -> float:
@@ -103,15 +119,47 @@ class MocsImage:
 
 @dataclass
 class MocsSplit:
-    """A parsed MOCS annotation file."""
+    """One or more parsed MOCS annotation files, keyed by filename stem."""
 
-    path: Path
-    images: Dict[int, MocsImage]
+    path: str
+    images: Dict[str, MocsImage]
     category_names: List[str]
     has_annotations: bool
 
     def __len__(self) -> int:
         return len(self.images)
+
+
+def merge_splits(*splits: "MocsSplit") -> "MocsSplit":
+    """Combines several sources into one selectable pool.
+
+    Safe because the key is the filename stem, not the COCO id. Merging on `id` would
+    silently overwrite 4,000 val images with test images of the same id.
+
+    `has_annotations` becomes True if ANY source had them; per-image presence is what
+    the buckets actually test, so a mixed val+test pool mines the val images
+    geometrically and still carries the test ones in the random bucket.
+    """
+    merged: Dict[str, MocsImage] = {}
+    cats: List[str] = []
+    any_ann = False
+    paths: List[str] = []
+    for sp in splits:
+        collisions = set(merged) & set(sp.images)
+        if collisions:
+            raise ValueError(
+                f"{len(collisions)} filename collision(s) between sources, e.g. "
+                f"{sorted(collisions)[:3]}. Filenames are the unique key -- two sources "
+                "sharing one cannot be merged safely."
+            )
+        merged.update(sp.images)
+        any_ann = any_ann or sp.has_annotations
+        paths.append(str(sp.path))
+        for c in sp.category_names:
+            if c not in cats:
+                cats.append(c)
+    return MocsSplit(path=" + ".join(paths), images=merged,
+                      category_names=cats, has_annotations=any_ann)
 
 
 # ---------------------------------------------------------------------------
@@ -207,7 +255,7 @@ def worker_machine_pairs(
 # Loading
 # ---------------------------------------------------------------------------
 
-def load_mocs(annotation_path: str | Path) -> MocsSplit:
+def load_mocs(annotation_path: str | Path, images_root: str = "", source: str = "") -> MocsSplit:
     """Parses a MOCS COCO json (either an annotation_*.json or an image_info_*.json).
 
     Tolerates the image_info flavour, which has no 'annotations' key at all -- that
@@ -228,20 +276,30 @@ def load_mocs(annotation_path: str | Path) -> MocsSplit:
         )
 
     cat_by_id = {c["id"]: c["name"] for c in raw.get("categories", [])}
+    source = source or path.stem.replace("annotation_", "").replace("image_info_", "")
 
-    images: Dict[int, MocsImage] = {}
+    # Keyed by filename STEM, not COCO id -- ids restart at 1 in every MOCS split, so
+    # val and test share all 4,000 of val's ids and an id-keyed dict would silently
+    # lose half a merged pool. A second index maps id -> stem for the annotation pass.
+    images: Dict[str, MocsImage] = {}
+    by_coco_id: Dict[int, str] = {}
     for im in raw["images"]:
-        images[im["id"]] = MocsImage(
+        obj = MocsImage(
             image_id=im["id"],
             file_name=im["file_name"],
             width=int(im.get("width") or 0),
             height=int(im.get("height") or 0),
+            source=source,
+            images_root=str(images_root),
         )
+        images[obj.stem] = obj
+        by_coco_id[im["id"]] = obj.stem
 
     anns = raw.get("annotations") or []
     dropped = 0
     for a in anns:
-        img = images.get(a.get("image_id"))
+        stem = by_coco_id.get(a.get("image_id"))
+        img = images.get(stem) if stem else None
         if img is None:
             dropped += 1
             continue
@@ -256,7 +314,7 @@ def load_mocs(annotation_path: str | Path) -> MocsSplit:
         img.boxes.append((name, box))
 
     return MocsSplit(
-        path=path,
+        path=str(path),
         images=images,
         category_names=[c["name"] for c in raw.get("categories", [])],
         has_annotations=bool(anns),
@@ -293,32 +351,34 @@ def bucket_images(
     val has one 14.63 MP image and one at aspect ratio 4.55; those are not worth
     spending a VLM call on and the extreme panorama shapes tokenize badly.
     """
-    out: Dict[str, List[int]] = {b: [] for b in BUCKETS}
+    out: Dict[str, List[str]] = {b: [] for b in BUCKETS}
     machines = set(machine_categories)
     height_hints = set(HEIGHT_HINT_CATEGORIES)
     excavation_hints = set(EXCAVATION_HINT_CATEGORIES)
 
-    for image_id, img in split.images.items():
+    for key, img in split.images.items():
         if max_megapixels is not None and img.megapixels > max_megapixels:
             continue
         if max_aspect_ratio is not None and img.aspect_ratio > max_aspect_ratio:
             continue
 
-        out["random_control"].append(image_id)
+        out["random_control"].append(key)
 
-        if not split.has_annotations:
-            # image_info-only split: no boxes, so no bucket but the control.
+        # Per-IMAGE, not per-split: a merged val+test pool has boxes on the val
+        # images and none on the test ones, and the mined buckets must apply to
+        # exactly the images that actually carry geometry.
+        if not img.boxes:
             continue
 
         cats = img.categories()
         has_worker = CAT_WORKER in cats
 
         if has_worker and worker_machine_pairs(img, machine_categories, margin_frac):
-            out["rule_4_geometric"].append(image_id)
+            out["rule_4_geometric"].append(key)
         if has_worker and (cats & height_hints):
-            out["rule_2_height_prior"].append(image_id)
+            out["rule_2_height_prior"].append(key)
         if cats & excavation_hints:
-            out["rule_3_excavation_prior"].append(image_id)
+            out["rule_3_excavation_prior"].append(key)
 
     return out
 
@@ -331,6 +391,7 @@ def select_candidates(
     margin_frac: float = 0.25,
     max_megapixels: Optional[float] = None,
     max_aspect_ratio: Optional[float] = None,
+    exclude_ids: Optional[Iterable[str]] = None,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     """Picks images per bucket quota without repeats, and returns (records, manifest).
 
@@ -341,9 +402,22 @@ def select_candidates(
     buckets = bucket_images(
         split, machine_categories, margin_frac, max_megapixels, max_aspect_ratio
     )
+
+    # Images already annotated by an earlier run. Dropped from EVERY bucket before
+    # any quota is filled, so a follow-up run cannot re-spend GPU time on an image
+    # that already has a proposal -- and cannot produce a second, conflicting record
+    # for it either.
+    excluded = {str(x) for x in (exclude_ids or ())}
+    n_excluded = 0
+    if excluded:
+        for bucket, ids in buckets.items():
+            keep = [i for i in ids if f"mocs_{i}" not in excluded and i not in excluded]
+            n_excluded += len(ids) - len(keep)
+            buckets[bucket] = keep
+
     rng = random.Random(seed)
 
-    chosen: Dict[int, str] = {}
+    chosen: Dict[str, str] = {}
     per_bucket_taken: Dict[str, int] = {}
     # Rarest-first so a scarce bucket is not drained by a broader one that happens
     # to contain the same images.
@@ -358,21 +432,26 @@ def select_candidates(
         per_bucket_taken[bucket] = len(picked)
 
     records: List[Dict[str, Any]] = []
-    for image_id, bucket in sorted(chosen.items()):
-        img = split.images[image_id]
+    for key, bucket in sorted(chosen.items()):
+        img = split.images[key]
         pairs = (
             worker_machine_pairs(img, machine_categories, margin_frac)
-            if split.has_annotations
+            if img.boxes
             else []
         )
         records.append({
             # `mocs_` prefix so a combined dataset can always be split back apart,
             # mirroring the `_aug{N}` convention data/augment_rare_classes.py uses.
             "new_image_id": f"mocs_{img.file_name.rsplit('.', 1)[0]}",
-            "mocs_image_id": image_id,
+            "mocs_image_id": img.image_id,
             "file_name": img.file_name,
             "width": img.width,
             "height": img.height,
+            # Carried PER RECORD because a pool may mix val and test, whose jpgs live
+            # in different directories. annotate.py prefers this over the manifest's
+            # global images_root, falling back for selections made before it existed.
+            "source": img.source,
+            "images_root": img.images_root,
             "selection_bucket": bucket,
             "mocs_categories": sorted(img.categories()),
             # Human-annotated boxes, [0,1] xyxy. Kept as a SIDECAR, never written
@@ -387,6 +466,8 @@ def select_candidates(
 
     manifest = {
         "source_file": str(split.path),
+        "excluded_ids_supplied": len(excluded),
+        "excluded_from_pools": n_excluded,
         "source_has_annotations": split.has_annotations,
         "source_total_images": len(split),
         "seed": seed,

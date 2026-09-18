@@ -52,6 +52,7 @@ from mocs_annotation.mocs_data import (
     BUCKETS,
     MACHINE_CATEGORIES,
     load_mocs,
+    merge_splits,
     select_candidates,
 )
 
@@ -82,10 +83,20 @@ DEFAULT_QUOTAS = {
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--annotations", required=True,
-                     help="MOCS annotation_val.json (has boxes) or image_info_test.json (no boxes)")
-    ap.add_argument("--images-root", required=True,
-                     help="Directory holding the .jpg files, e.g. .../instances_val")
+    ap.add_argument("--annotations", required=True, nargs="+",
+                     help="One or more MOCS json files. annotation_val.json carries boxes "
+                          "(so it can be mined geometrically); image_info_test.json is "
+                          "image metadata only and contributes to random_control alone. "
+                          "Pass both to draw from all 22,264 images")
+    ap.add_argument("--images-root", required=True, nargs="+",
+                     help="Image directory for each --annotations file, in the same order "
+                          "(e.g. .../instances_val .../instances_test). Carried per record, "
+                          "because a mixed pool jpgs live in different directories")
+    ap.add_argument("--exclude", nargs="*", default=[],
+                     help="Paths to a previous selection.json and/or proposals.jsonl. Every "
+                          "image id found in them is dropped from all buckets BEFORE quotas "
+                          "are filled, so a follow-up run cannot re-annotate an image or "
+                          "produce a second conflicting record for it")
     ap.add_argument("--out", required=True, help="Path to write selection.json")
     for bucket in BUCKETS:
         ap.add_argument(f"--{bucket.replace('_', '-')}", type=int,
@@ -105,22 +116,55 @@ def main() -> None:
                           "image at 4.55")
     args = ap.parse_args()
 
-    images_root = Path(args.images_root)
-    if not images_root.is_dir():
-        raise SystemExit(f"--images-root is not a directory: {images_root}")
-
-    split = load_mocs(args.annotations)
-    logger.info(
-        f"Loaded {len(split)} images from {split.path.name} "
-        f"(annotations present: {split.has_annotations}; categories: {len(split.category_names)})"
-    )
-    if not split.has_annotations:
-        logger.warning(
-            "This file carries NO annotations, so only the random_control bucket can be "
-            "filled -- the rule_4 geometric miner and both weak priors need boxes. "
-            "MOCS's test split is image_info only (18,264 images); use annotation_val.json "
-            "for anything that needs mining."
+    if len(args.annotations) != len(args.images_root):
+        raise SystemExit(
+            f"--annotations has {len(args.annotations)} entries but --images-root has "
+            f"{len(args.images_root)}; they are paired positionally and must match."
         )
+
+    splits = []
+    for ann, root in zip(args.annotations, args.images_root):
+        root_path = Path(root)
+        if not root_path.is_dir():
+            raise SystemExit(f"--images-root is not a directory: {root_path}")
+        sp = load_mocs(ann, images_root=str(root_path))
+        logger.info(
+            f"Loaded {len(sp)} images from {Path(sp.path).name} -> {root_path} "
+            f"(annotations present: {sp.has_annotations})"
+        )
+        if not sp.has_annotations:
+            logger.info(
+                f"  {Path(sp.path).name} carries no boxes, so its images can only enter "
+                "random_control -- the geometric miner and both weak priors need geometry."
+            )
+        splits.append(sp)
+
+    split = merge_splits(*splits)
+    if len(splits) > 1:
+        logger.info(f"Merged {len(splits)} source(s) -> {len(split)} unique images")
+
+    exclude_ids = set()
+    for path in args.exclude:
+        f = Path(path)
+        if not f.exists():
+            raise SystemExit(f"--exclude file not found: {f}")
+        if f.suffix == ".jsonl":
+            with open(f, "r", encoding="utf-8") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if line:
+                        try:
+                            exclude_ids.add(json.loads(line)["new_image_id"])
+                        except Exception:
+                            pass
+        else:
+            with open(f, "r", encoding="utf-8") as fh:
+                payload = json.load(fh)
+            rows = payload.get("records", []) if isinstance(payload, dict) else payload
+            for r in rows:
+                if isinstance(r, dict) and "new_image_id" in r:
+                    exclude_ids.add(r["new_image_id"])
+        logger.info(f"Exclusions after {f.name}: {len(exclude_ids)} id(s)")
 
     quotas = {b: getattr(args, b) for b in BUCKETS}
     records, manifest = select_candidates(
@@ -131,18 +175,28 @@ def main() -> None:
         margin_frac=args.margin_frac,
         max_megapixels=args.max_megapixels,
         max_aspect_ratio=args.max_aspect_ratio,
+        exclude_ids=exclude_ids,
     )
 
-    # Fail now, not after a queue wait, if the image root does not match the json.
-    missing = [r["file_name"] for r in records[:50] if not (images_root / r["file_name"]).exists()]
+    # Fail now, not after a queue wait, if an image root does not match its json.
+    missing = [
+        f"{r['images_root']}/{r['file_name']}"
+        for r in records[:80]
+        if not (Path(r["images_root"]) / r["file_name"]).exists()
+    ]
     if missing:
         raise SystemExit(
-            f"{len(missing)} of the first 50 selected files are absent from {images_root}. "
-            f"First few: {missing[:5]}. Check --images-root matches --annotations "
-            "(instances_val goes with annotation_val.json)."
+            f"{len(missing)} of the first 80 selected files do not exist on disk. "
+            f"First few: {missing[:5]}. Check each --images-root is paired with the right "
+            "--annotations file (instances_val goes with annotation_val.json)."
         )
 
-    manifest["images_root"] = str(images_root)
+    # Kept for backward compatibility with annotate.py fallback; the per-record
+    # images_root is what a mixed-source selection actually uses.
+    manifest["images_root"] = str(Path(args.images_root[0]))
+    manifest["sources"] = [
+        {"annotations": a, "images_root": r} for a, r in zip(args.annotations, args.images_root)
+    ]
     payload = {"manifest": manifest, "records": records}
 
     out = Path(args.out)
@@ -158,6 +212,13 @@ def main() -> None:
     logger.info("Selected:")
     for b, n in manifest["quotas_filled"].items():
         logger.info(f"  {b:<26}{n:>6}  (requested {quotas.get(b, 0)})")
+    from collections import Counter
+    logger.info("By source: " + ", ".join(
+        f"{k}={v}" for k, v in Counter(r["source"] for r in records).most_common()))
+    if manifest.get("excluded_from_pools"):
+        logger.info(
+            f"Excluded {manifest['excluded_from_pools']} already-annotated image slot(s) "
+            f"from the pools ({manifest['excluded_ids_supplied']} ids supplied)")
     logger.info(f"TOTAL selected: {manifest['selected_total']} -> {out}")
     n_pairs = sum(len(r["worker_machine_pairs"]) for r in records)
     logger.info(f"Worker/machine pairs carried on the selection: {n_pairs}")

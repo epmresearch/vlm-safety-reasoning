@@ -58,6 +58,14 @@ BATCH_SIZE=${1:-8}
 LIMIT=${2:-}
 MODEL=${MOCS_ANNOT_MODEL:-Qwen/Qwen3-VL-32B-Instruct}
 
+# Output directory, and the two inputs. Overridable by environment variable so a
+# FOLLOW-UP run can write somewhere new while reusing the FIRST run's few-shot
+# blocks -- reusing them is what keeps prompt_sha256 identical across runs, which
+# is what makes the two proposal files safe to combine later.
+OUT_DIR_OVERRIDE=${MOCS_ANNOT_DIR:-}
+FEWSHOT_OVERRIDE=${MOCS_FEWSHOT:-}
+SELECTION_OVERRIDE=${MOCS_SELECTION:-}
+
 echo "Job started: $(date)"
 echo "Node: $SLURMD_NODENAME"
 echo "Job ID: $SLURM_JOB_ID"
@@ -90,9 +98,10 @@ fi
 HPC_DRIVE_ROOT="/home/$USER/vlm-finetuning-project1"
 export VLM_DATA_ROOT="$HPC_DRIVE_ROOT"
 
-OUT_DIR="$HPC_DRIVE_ROOT/datasets/mocs_annotation"
-SELECTION="$OUT_DIR/selection.json"
-FEWSHOT="$OUT_DIR/fewshot.json"
+OUT_DIR="${OUT_DIR_OVERRIDE:-$HPC_DRIVE_ROOT/datasets/mocs_annotation}"
+SELECTION="${SELECTION_OVERRIDE:-$OUT_DIR/selection.json}"
+FEWSHOT="${FEWSHOT_OVERRIDE:-$OUT_DIR/fewshot.json}"
+mkdir -p "$OUT_DIR"
 
 # Guard before the GPU is touched, in the style of hpc_merge_sft.sh / hpc_grpo.sh.
 # Both inputs are produced by CPU-only login-node steps; a missing one means a step

@@ -416,7 +416,11 @@ def run(args: argparse.Namespace) -> None:
             images: List[Any] = []
             usable: List[Dict[str, Any]] = []
             for rec in chunk:
-                path = images_root / rec["file_name"]
+                # Per-record root first: a selection may mix val and test, whose
+                # jpgs live in different directories. Falls back to the manifest-wide
+                # root for selections made before that field existed.
+                root = Path(rec.get("images_root") or images_root)
+                path = root / rec["file_name"]
                 try:
                     img = Image.open(path).convert("RGB")
                 except Exception as e:
