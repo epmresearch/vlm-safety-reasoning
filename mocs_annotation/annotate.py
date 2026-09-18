@@ -1,0 +1,511 @@
+#!/usr/bin/env python3
+"""
+Runs the teacher VLM over a MOCS image selection and writes one annotation proposal
+per image. Resumable, crash-safe, and does not touch anything the training pipeline
+reads.
+
+WHAT THIS IS NOT. These are PROPOSALS, not labels. Nothing here is fit to train on
+until a human has reviewed it. Two specific reasons, both measured:
+
+  1. A zero-shot VLM's violation-region IoU on this exact task tops out around 23%
+     in the dataset paper's Table 8, while this repo's own fine-tuned 8B reaches
+     45.6%. Training on teacher boxes would actively degrade the one axis where
+     these models already beat every published result on all four rules. For the
+     rule_4 bucket, prefer the human-annotated MOCS geometry carried on the
+     selection record (`worker_machine_pairs[].union_box`) over anything the teacher
+     draws.
+  2. Verification is one-sided: a reviewer removes false positives but can never
+     recover a violation the teacher never proposed. The prompt is calibrated toward
+     recall for that reason (see mocs_annotation/prompts.py), which means the
+     proposal stream is deliberately over-inclusive.
+
+WHY THIS RESUMES, WHEN run_inference.py DELIBERATELY DOES NOT. CLAUDE.md is emphatic
+that the training-path inference has no auto-resume, because a partial re-run there
+corrupts the metric denominator (two records for one image made
+structural_json_validity_rate read 0.500 over a denominator of 2). Neither hazard
+exists here: there is no denominator, and partial progress on a multi-hour
+annotation job is genuinely valuable. Safety comes from the same place instead --
+exactly one line per attempted image, keyed by id, and ids already present are
+skipped rather than re-run and appended.
+
+HPC only (needs torch + transformers + a GPU). Everything else in this package runs
+on a laptop.
+
+Usage (see scripts/hpc_annotate_mocs.sh for the real invocation):
+    python -m mocs_annotation.annotate \
+        --selection  $OUT/selection.json \
+        --fewshot    $OUT/fewshot.json \
+        --out-dir    $OUT \
+        --batch-size 2
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+import time
+import traceback
+from collections import Counter
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
+from core.logging import get_logger
+from mocs_annotation.prompts import (
+    ANNOTATOR_SYSTEM_PROMPT,
+    build_annotation_prompt,
+    prompt_fingerprint,
+)
+from mocs_annotation.schema import (
+    STATUS_GENERATION_ERROR,
+    STATUS_OK,
+    failure_record,
+    parse_proposal,
+    proposal_to_record,
+)
+
+logger = get_logger(__name__)
+
+DEFAULT_MODEL = "Qwen/Qwen3-VL-32B-Instruct"
+
+# Same 1.2 MP ceiling configs/sft.yaml applies to every training and inference call
+# in this repo. Non-negotiable here: MOCS val contains a 14.63 MP image, and an
+# uncapped image of that size expands to ~14,000 vision tokens. That is the exact
+# shape of the 92.97 GiB OOM recorded in models/model_loader.py's own comment.
+DEFAULT_MAX_PIXELS = 1204224
+DEFAULT_MIN_PIXELS = 200704
+
+
+# ---------------------------------------------------------------------------
+# I/O helpers
+# ---------------------------------------------------------------------------
+
+def _read_done_ids(path: Path) -> set:
+    """Ids already present in proposals.jsonl, so a resume never double-writes.
+
+    Tolerates a truncated final line, which is what a walltime kill or a node
+    failure mid-write leaves behind.
+    """
+    done: set = set()
+    if not path.exists():
+        return done
+    with open(path, "r", encoding="utf-8") as f:
+        for lineno, line in enumerate(f, start=1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                done.add(json.loads(line)["new_image_id"])
+            except Exception:
+                logger.warning(f"{path.name}:{lineno} is not parseable -- ignoring that line")
+    return done
+
+
+def _write_json_atomic(payload: Any, path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2, ensure_ascii=False)
+    os.replace(tmp, path)
+
+
+# ---------------------------------------------------------------------------
+# Model
+# ---------------------------------------------------------------------------
+
+def load_annotator(
+    model_id: str,
+    max_pixels: int,
+    min_pixels: int,
+    load_4bit: bool = False,
+    attn_implementation: str = "sdpa",
+):
+    """Loads the teacher VLM and its processor, with the project's pixel cap applied.
+
+    Reuses models/model_loader.py::apply_pixel_bounds rather than reimplementing it.
+    That function is importable without unsloth (unsloth is imported inside the
+    training functions, not at module scope) and it carries two hard-won details:
+    the Qwen image processor stores pixel AREAS under the misleadingly named
+    "shortest_edge"/"longest_edge" keys, and min_pixels/max_pixels are read-only
+    properties on transformers 5.4.0 so writing them must be best-effort.
+    """
+    import torch
+    from transformers import AutoProcessor
+
+    from models.model_loader import apply_pixel_bounds
+
+    logger.info(f"Loading annotator model: {model_id} (4bit={load_4bit}, attn={attn_implementation})")
+
+    kwargs: Dict[str, Any] = {
+        "dtype": torch.bfloat16,
+        "device_map": "cuda:0",
+        "attn_implementation": attn_implementation,
+    }
+    if load_4bit:
+        from transformers import BitsAndBytesConfig
+
+        kwargs["quantization_config"] = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_compute_dtype=torch.bfloat16,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_use_double_quant=True,
+        )
+        kwargs.pop("dtype")
+
+    model = None
+    errors: List[str] = []
+    # Qwen3-VL's own class first; the generic multimodal class as a fallback so a
+    # transformers version bump that renames or relocates it does not break the job.
+    for loader_name in ("Qwen3VLForConditionalGeneration", "AutoModelForImageTextToText"):
+        try:
+            import transformers
+
+            cls = getattr(transformers, loader_name)
+        except AttributeError:
+            errors.append(f"{loader_name}: not present in this transformers build")
+            continue
+        try:
+            model = cls.from_pretrained(model_id, **kwargs)
+            logger.info(f"Loaded via {loader_name}")
+            break
+        except Exception as e:  # noqa: BLE001 - we want the next loader to get a turn
+            errors.append(f"{loader_name}: {type(e).__name__}: {e}")
+
+    if model is None:
+        raise RuntimeError("Could not load the annotator model.\n  " + "\n  ".join(errors))
+
+    model.eval()
+
+    processor = AutoProcessor.from_pretrained(model_id)
+    apply_pixel_bounds(processor, min_pixels=min_pixels, max_pixels=max_pixels)
+
+    # Left padding is required for batched decoder-only generation, same as
+    # models/inference.py::generate_batch.
+    tok = getattr(processor, "tokenizer", None)
+    if tok is not None:
+        tok.padding_side = "left"
+        if tok.pad_token is None:
+            tok.pad_token = tok.eos_token
+
+    if torch.cuda.is_available():
+        props = torch.cuda.get_device_properties(0)
+        logger.info(
+            f"GPU: {props.name} | total {props.total_memory / 1e9:.1f} GB | "
+            f"allocated after load {torch.cuda.memory_allocated() / 1e9:.1f} GB"
+        )
+    return model, processor
+
+
+# ---------------------------------------------------------------------------
+# Generation
+# ---------------------------------------------------------------------------
+
+def _build_messages(image, prompt: str) -> List[Dict[str, Any]]:
+    return [
+        {"role": "system", "content": [{"type": "text", "text": ANNOTATOR_SYSTEM_PROMPT}]},
+        {"role": "user", "content": [
+            {"type": "image", "image": image},
+            {"type": "text", "text": prompt},
+        ]},
+    ]
+
+
+def generate_batch(
+    model,
+    processor,
+    images: List[Any],
+    prompts: List[str],
+    max_new_tokens: int,
+    repetition_penalty: float,
+    do_sample: bool,
+    temperature: float,
+) -> List[str]:
+    """Greedy (by default) batched generation. Returns one completion per input."""
+    import torch
+    from qwen_vl_utils import process_vision_info
+
+    conversations = [_build_messages(img, p) for img, p in zip(images, prompts)]
+    texts = [
+        processor.apply_chat_template(c, add_generation_prompt=True, tokenize=False)
+        for c in conversations
+    ]
+
+    image_inputs: List[Any] = []
+    for c in conversations:
+        imgs, _ = process_vision_info(c)
+        if imgs:
+            image_inputs.extend(imgs if isinstance(imgs, list) else [imgs])
+
+    # NO truncation. models/inference.py truncates the prompt on purpose, but its
+    # prompt has the output contract near the START; ours ends with the JSON shape
+    # and the field rules, so right-truncation would silently cut off the very
+    # instructions that make the completion parseable.
+    inputs = processor(
+        text=texts,
+        images=image_inputs or None,
+        return_tensors="pt",
+        padding=True,
+    ).to(model.device)
+
+    gen_kwargs: Dict[str, Any] = {
+        "max_new_tokens": max_new_tokens,
+        "do_sample": do_sample,
+        "repetition_penalty": repetition_penalty,
+        "use_cache": True,
+    }
+    if do_sample:
+        gen_kwargs["temperature"] = temperature
+
+    with torch.no_grad():
+        out = model.generate(**inputs, **gen_kwargs)
+
+    prompt_len = inputs["input_ids"].shape[1]
+    return processor.batch_decode(out[:, prompt_len:], skip_special_tokens=True)
+
+
+# ---------------------------------------------------------------------------
+# Driver
+# ---------------------------------------------------------------------------
+
+def run(args: argparse.Namespace) -> None:
+    from PIL import Image
+
+    out_dir = Path(args.out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    proposals_path = out_dir / "proposals.jsonl"
+    progress_path = out_dir / "progress.json"
+    manifest_path = out_dir / "annotate_manifest.json"
+
+    with open(args.selection, "r", encoding="utf-8") as f:
+        selection = json.load(f)
+    records: List[Dict[str, Any]] = selection["records"]
+    images_root = Path(args.images_root or selection["manifest"]["images_root"])
+    if not images_root.is_dir():
+        raise SystemExit(f"images root does not exist: {images_root}")
+
+    fewshot: List[Dict[str, Any]] = []
+    if args.fewshot:
+        with open(args.fewshot, "r", encoding="utf-8") as f:
+            fewshot = json.load(f)
+        logger.info(f"Loaded {len(fewshot)} few-shot block(s) from {args.fewshot}")
+    else:
+        logger.warning(
+            "No --fewshot given. The teacher will not be format- or register-"
+            "conditioned, which raises the parse-failure rate and produces reasons in "
+            "the wrong voice. Run mocs_annotation.build_fewshot first."
+        )
+
+    done = _read_done_ids(proposals_path)
+    if done:
+        logger.info(f"Resuming: {len(done)} image(s) already in {proposals_path.name}, skipping them")
+
+    todo = [r for r in records if r["new_image_id"] not in done]
+    if args.limit:
+        todo = todo[: args.limit]
+    logger.info(f"Selection holds {len(records)} image(s); {len(todo)} to annotate this run")
+
+    if not todo:
+        logger.info("Nothing to do.")
+        return
+
+    model, processor = load_annotator(
+        args.model, args.max_pixels, args.min_pixels, args.load_4bit, args.attn_implementation
+    )
+
+    # Provenance. Same role as the LLM judge's llm_judge_status.json: a later yield
+    # comparison between two batches is meaningless unless you can prove they ran
+    # under the same instructions and the same decoding settings.
+    sample_prompt = build_annotation_prompt(fewshot, todo[0], include_box_hints=not args.no_box_hints)
+    _write_json_atomic({
+        "model_id": args.model,
+        "load_4bit": args.load_4bit,
+        "attn_implementation": args.attn_implementation,
+        "max_pixels": args.max_pixels,
+        "min_pixels": args.min_pixels,
+        "max_new_tokens": args.max_new_tokens,
+        "do_sample": args.do_sample,
+        "temperature": args.temperature,
+        "repetition_penalty": args.repetition_penalty,
+        "batch_size": args.batch_size,
+        "box_hints": not args.no_box_hints,
+        "fewshot_path": args.fewshot,
+        "fewshot_count": len(fewshot),
+        "fewshot_sources": [e.get("source") for e in fewshot],
+        "selection_path": str(args.selection),
+        "selection_manifest": selection.get("manifest", {}),
+        "images_root": str(images_root),
+        "system_prompt": ANNOTATOR_SYSTEM_PROMPT,
+        "example_user_prompt": sample_prompt,
+        "prompt_sha256": prompt_fingerprint(sample_prompt),
+        "n_selected": len(records),
+        "n_this_run": len(todo),
+    }, manifest_path)
+    logger.info(f"Wrote run manifest to {manifest_path}")
+
+    status_counts: Counter = Counter()
+    bucket_hits: Counter = Counter()
+    started = time.time()
+    processed = 0
+
+    # Append mode: the file already holds whatever a previous attempt finished, and
+    # each line is one attempted image.
+    out_f = open(proposals_path, "a", encoding="utf-8")
+    try:
+        for start in range(0, len(todo), args.batch_size):
+            chunk = todo[start : start + args.batch_size]
+
+            images: List[Any] = []
+            prompts: List[str] = []
+            usable: List[Dict[str, Any]] = []
+            for rec in chunk:
+                path = images_root / rec["file_name"]
+                try:
+                    img = Image.open(path).convert("RGB")
+                except Exception as e:
+                    line = failure_record(rec, STATUS_GENERATION_ERROR, f"image load failed: {e}")
+                    out_f.write(json.dumps(line, ensure_ascii=False) + "\n")
+                    status_counts[STATUS_GENERATION_ERROR] += 1
+                    continue
+                images.append(img)
+                prompts.append(
+                    build_annotation_prompt(fewshot, rec, include_box_hints=not args.no_box_hints)
+                )
+                usable.append(rec)
+
+            if not usable:
+                out_f.flush()
+                continue
+
+            # Batch first; on any failure fall back to one image at a time so a
+            # single bad image cannot cost the whole batch. Unlike the training
+            # path, a per-image failure here is RECORDED as a failure and never
+            # written out as an empty success.
+            try:
+                completions = generate_batch(
+                    model, processor, images, prompts,
+                    args.max_new_tokens, args.repetition_penalty,
+                    args.do_sample, args.temperature,
+                )
+            except Exception as e:
+                logger.warning(
+                    f"Batch of {len(usable)} failed ({type(e).__name__}: {e}); retrying one by one"
+                )
+                completions = []
+                for img, prompt in zip(images, prompts):
+                    try:
+                        completions.append(generate_batch(
+                            model, processor, [img], [prompt],
+                            args.max_new_tokens, args.repetition_penalty,
+                            args.do_sample, args.temperature,
+                        )[0])
+                    except Exception as inner:
+                        completions.append(None)
+                        logger.error(f"single-image generation failed: {inner}")
+
+            for rec, raw in zip(usable, completions):
+                if raw is None:
+                    line = failure_record(
+                        rec, STATUS_GENERATION_ERROR, "generation raised for this image"
+                    )
+                else:
+                    proposal, status, error = parse_proposal(raw)
+                    if proposal is None:
+                        line = failure_record(rec, status, error or "unknown", raw_output=raw)
+                    else:
+                        line = proposal_to_record(proposal, rec)
+                        if args.keep_raw:
+                            line["raw_output"] = raw
+                        for r in line["flagged_rules"]:
+                            bucket_hits[f"{rec['selection_bucket']}::{r}"] += 1
+                out_f.write(json.dumps(line, ensure_ascii=False) + "\n")
+                status_counts[line["status"]] += 1
+                processed += 1
+
+            out_f.flush()
+            os.fsync(out_f.fileno())
+
+            elapsed = time.time() - started
+            rate = processed / elapsed if elapsed > 0 else 0.0
+            remaining = (len(todo) - processed) / rate if rate > 0 else float("nan")
+            _write_json_atomic({
+                "n_selected": len(records),
+                "n_attempted_this_run": processed,
+                "n_remaining_this_run": len(todo) - processed,
+                "status_counts": dict(status_counts),
+                "rule_hits_by_bucket": dict(bucket_hits),
+                "elapsed_seconds": round(elapsed, 1),
+                "images_per_second": round(rate, 3),
+                "eta_seconds": None if rate <= 0 else round(remaining, 1),
+            }, progress_path)
+
+            if (start // max(args.batch_size, 1)) % args.log_every == 0:
+                logger.info(
+                    f"{processed}/{len(todo)}  ok={status_counts[STATUS_OK]}  "
+                    f"{rate:.2f} img/s  eta {remaining / 60:.0f} min"
+                )
+    finally:
+        out_f.close()
+
+    logger.info("=" * 70)
+    logger.info(f"Annotation pass complete in {(time.time() - started) / 60:.1f} min")
+    for status, n in status_counts.most_common():
+        logger.info(f"  {status:<20}{n:>6}")
+    if bucket_hits:
+        logger.info("Rule hits by selection bucket (proposals, NOT verified labels):")
+        for key, n in sorted(bucket_hits.items()):
+            logger.info(f"  {key:<44}{n:>5}")
+    logger.info(f"Proposals -> {proposals_path}")
+    logger.info(f"Progress  -> {progress_path}")
+    logger.info("Next: python -m mocs_annotation.export_review --proposals ... --out review.csv")
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--selection", required=True, help="selection.json from select_images.py")
+    ap.add_argument("--fewshot", default=None, help="fewshot.json from build_fewshot.py")
+    ap.add_argument("--out-dir", required=True, help="Directory for proposals.jsonl / progress.json")
+    ap.add_argument("--images-root", default=None,
+                     help="Override the images root recorded in selection.json")
+    ap.add_argument("--model", default=DEFAULT_MODEL)
+    ap.add_argument("--batch-size", type=int, default=2,
+                     help="2 is the safe default: 33B in bf16 is ~66 GB of an 80 GB H100, "
+                          "leaving ~14 GB for the vision encoder, KV cache and generation. "
+                          "Try 4 after a --limit 8 smoke test; drop to 1 if it OOMs")
+    ap.add_argument("--max-new-tokens", type=int, default=512,
+                     help="A ~50-word caption plus up to four violation objects is ~250 "
+                          "tokens; 512 leaves room without inviting a runaway")
+    ap.add_argument("--repetition-penalty", type=float, default=1.05,
+                     help="1.05, NOT the pipeline's 1.0. That 1.0 is a deliberate, pinned "
+                          "decision for the training/inference path (CLAUDE.md's "
+                          "ghost-variable table) so results stay comparable. This is an "
+                          "offline tool with no comparability constraint, and a teacher "
+                          "generating free-form caption prose is exactly where a decode "
+                          "loop appears -- the 2B baseline looped to the token cap on 80%% "
+                          "of images. Set 1.0 to match the pipeline exactly")
+    ap.add_argument("--do-sample", action="store_true",
+                     help="Off by default: greedy makes the annotation pass reproducible, "
+                          "matching the pipeline's do_sample=False inference")
+    ap.add_argument("--temperature", type=float, default=0.7)
+    ap.add_argument("--max-pixels", type=int, default=DEFAULT_MAX_PIXELS)
+    ap.add_argument("--min-pixels", type=int, default=DEFAULT_MIN_PIXELS)
+    ap.add_argument("--load-4bit", action="store_true",
+                     help="NF4 via bitsandbytes (~20 GB instead of ~66 GB). Escape hatch if "
+                          "80 GB proves tight; costs some box precision")
+    ap.add_argument("--attn-implementation", default="sdpa",
+                     help="sdpa is always available; flash_attention_2 is faster if installed")
+    ap.add_argument("--limit", type=int, default=None,
+                     help="Annotate only the first N un-done images. USE THIS FIRST: "
+                          "--limit 8 is the smoke test that proves the model loads, the "
+                          "images resolve and the output parses")
+    ap.add_argument("--keep-raw", action="store_true",
+                     help="Also store the raw completion on successful records (bigger file, "
+                          "useful while tuning the prompt)")
+    ap.add_argument("--log-every", type=int, default=10, help="Log every N batches")
+    args = ap.parse_args()
+    run(args)
+
+
+if __name__ == "__main__":
+    main()

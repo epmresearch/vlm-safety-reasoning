@@ -13,6 +13,10 @@ venv/
 .idea/
 wandb/
 data/processed/
+# Third-party MOCS dataset (An et al. 2021) -- 85MB of COCO json, not ours to
+# redistribute, and mocs_annotation/ reads it from $VLM_DATA_ROOT/datasets/filtered/
+# on ARC rather than from the repo.
+data/filtering/
 struct.md
 setup_project_structure.py
 cb.py
