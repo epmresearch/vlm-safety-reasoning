@@ -169,7 +169,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     </div>
 
     <div class="sec">
-      <h3>Rules &mdash; judge all four <span style="color:var(--maybe)">(not just the flagged ones)</span></h3>
+      <h3>Is each rule broken in THIS photo? <kbd>1</kbd><kbd>2</kbd><kbd>3</kbd><kbd>4</kbd></h3>
+      <div class="muted" style="margin:-2px 0 7px">Your own judgement of the photograph &mdash;
+        <em>not</em> whether you agree with the model. Answer all four, every image.</div>
       <div id="rules"></div>
     </div>
 
@@ -180,12 +182,18 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     </div>
 
     <div class="sec">
-      <h3>Decision</h3>
+      <h3>This image</h3>
       <div class="row">
-        <button class="dec big y" data-dec="accept">Accept <kbd>A</kbd></button>
-        <button class="dec big n" data-dec="reject">Reject <kbd>R</kbd></button>
-        <button class="dec big m" data-dec="unsure">Unsure <kbd>U</kbd></button>
+        <button class="dec big y" data-dec="accept"
+                title="My answers above are right — use this image">Use it <kbd>A</kbd></button>
+        <button class="dec big n" data-dec="reject"
+                title="Unusable photo — blurry, unclear, or not a construction scene">Discard <kbd>R</kbd></button>
+        <button class="dec big m" data-dec="unsure"
+                title="Come back to this one">Unsure <kbd>U</kbd></button>
       </div>
+      <div class="muted" style="margin-top:5px"><strong>Use it</strong> even when every rule is
+        &ldquo;no&rdquo; &mdash; a verified safe photo is still useful.
+        <strong>Discard</strong> is only for photos nobody could judge.</div>
       <div class="row" style="margin-top:7px">
         <button id="bHard" class="m">flag as hard / needs 2nd opinion <kbd>H</kbd></button>
       </div>
@@ -226,6 +234,23 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 <div id="help"><div>
   <h2 style="margin-top:0">How to review</h2>
   <p>Every row is a <strong>model proposal, not a label</strong>. Your decision is what makes it data.</p>
+
+  <h3>The two questions, and what they are NOT</h3>
+  <p><strong>1. Is each rule broken in this photo?</strong> &mdash; <em>yes</em> / <em>no</em> per rule.
+     This is your reading of the photograph. It is <strong>not</strong> &ldquo;do I agree with the
+     model&rdquo;.</p>
+  <table>
+    <tr><td>model flagged rule&nbsp;1, and there really is a PPE breach</td><td><strong>yes</strong></td></tr>
+    <tr><td>model flagged rule&nbsp;1, but there isn't one</td><td><strong>no</strong></td></tr>
+    <tr><td>model said nothing about rule&nbsp;2, but there <em>is</em> a harness breach</td><td><strong>yes</strong></td></tr>
+    <tr><td>model said nothing about rule&nbsp;2, and there isn't one</td><td><strong>no</strong></td></tr>
+  </table>
+  <p class="muted">A typical image: rule_1 <em>yes</em>, rules 2&ndash;4 <em>no</em>. Four answers, every time.</p>
+  <p><strong>2. Can we use this image?</strong> &mdash; <em>Use it</em> / <em>Discard</em> / <em>Unsure</em>.
+     <em>Use it</em> means &ldquo;my answers above are correct&rdquo;, so press it even when every
+     rule is <em>no</em> &mdash; a verified safe photo is still useful data. <em>Discard</em> is only
+     for a photo nobody could judge: too blurry, too dark, or not a construction scene.
+     You should rarely need it.</p>
   <h3>Two things that are easy to get wrong</h3>
   <ol>
     <li><strong>On every image you accept, judge all four rules AND the caption</strong> &mdash;
@@ -465,8 +490,10 @@ function render(){
         <span class="nm">${r}</span>
         <span class="chip">${p?'proposed':'not proposed'}</span>
         <span class="grow" style="flex:1"></span>
-        <button class="y rv ${val==='y'?'on':''}" data-r="${r}" data-v="y">yes</button>
-        <button class="n rv ${val==='n'?'on':''}" data-r="${r}" data-v="n">no</button>
+        <button class="y rv ${val==='y'?'on':''}" data-r="${r}" data-v="y"
+                title="${r} IS broken in this photo">yes</button>
+        <button class="n rv ${val==='n'?'on':''}" data-r="${r}" data-v="n"
+                title="${r} is NOT broken in this photo">no</button>
       </div>
       ${p?`<div class="reason">${esc(d.r[r].reason||"")}</div>
            <div class="muted">${(d.r[r].boxes||[]).length} model box(es)${mine?` · ${mine} of yours`:""}</div>`
