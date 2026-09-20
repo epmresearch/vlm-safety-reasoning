@@ -111,8 +111,11 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   <input id="fText" placeholder="search caption / id" style="width:170px">
   <span class="grow"></span>
   <span id="prog" class="muted"></span>
+  <span id="smode" class="chip"></span>
   <span id="unsaved"></span>
-  <button id="bExport" class="big">Export</button>
+  <button id="bSaveFile" class="big">Save to file…</button>
+  <button id="bOpenFile">Open saved file…</button>
+  <button id="bExport">Export</button>
   <button id="bImport">Import</button>
   <button id="bHelp">?</button>
   <input type="file" id="fileIn" accept=".json" style="display:none">
@@ -236,11 +239,22 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     <tr><td><kbd>N</kbd></td><td>next undecided</td></tr>
     <tr><td><kbd>E</kbd></td><td>export</td></tr>
   </table>
-  <h3>Saving</h3>
-  <p>Your work saves automatically in this browser after every click. <strong>Press
-     Export regularly anyway</strong> &mdash; that downloads the file you send back.
-     Clearing browser data would otherwise lose everything. <em>Import</em> reloads an
-     exported file so you can carry on where you left off, or on another machine.</p>
+  <h3>Saving &mdash; do this first</h3>
+  <p><strong>Click &ldquo;Save to file&hellip;&rdquo; in the toolbar before you start</strong> and
+     choose somewhere to keep <code>review_results.json</code>. From then on every change you
+     make is written straight into that file &mdash; no Export needed, nothing to remember.</p>
+  <p>Next session: open the app and click <strong>&ldquo;Open saved file&hellip;&rdquo;</strong>,
+     pick the same file, and you carry on exactly where you stopped.</p>
+  <p>The chip in the toolbar always tells you what is happening:
+     <span class="chip" style="background:#123d22;border-color:#2ecc71;color:#8ef0b0">saving to file ✓</span>
+     means you are safe;
+     <span class="chip" style="background:#3d3512;border-color:#ffb020;color:#ffd98a">saving in browser</span>
+     means it is only kept in this browser;
+     <span class="chip" style="background:#4d1414;border-color:#ff5252;color:#ffb3b3">NOT SAVING</span>
+     means press &ldquo;Save to file&hellip;&rdquo; now.</p>
+  <p class="muted">&ldquo;Save to file&hellip;&rdquo; needs Chrome or Edge. In other browsers use
+     <em>Export</em> (downloads the file) and <em>Import</em> (loads it back) instead, and do it
+     often.</p>
   <p class="muted">Suggested order: <strong>sample</strong> first (it tells us how accurate
      the model is), then <strong>tier1</strong> (the two rarest, most valuable rules).</p>
   <button onclick="document.getElementById('help').style.display='none'">Close</button>
@@ -261,9 +275,63 @@ let exportedAt = 0;
 const img = new Image();
 
 // ---------------------------------------------------------------- persistence
+//
+// THREE TIERS, because browser storage cannot be relied on for a file:// page --
+// it is blocked outright in some configurations and wiped on close in others, and
+// losing a day of review to that would be unforgivable.
+//
+//   1. A REAL FILE on disk, via the File System Access API. The reviewer picks a
+//      .json once; after that every single change is written straight to it, with
+//      no further clicks. This is the one we want.
+//   2. localStorage, if it works. Survives reloads on the same machine.
+//   3. Neither -- a loud red banner and manual Export. Never silent.
+//
+// The active tier is shown in the toolbar at all times, so nobody has to guess
+// whether their work is safe.
+let fileHandle = null, saveTimer = null;
+let localOK = false, saveMode = "none";
+
+function probeLocal(){
+  try{ localStorage.setItem("__probe", "1");
+       const ok = localStorage.getItem("__probe") === "1";
+       localStorage.removeItem("__probe"); return ok; }
+  catch(e){ return false; }
+}
+function setMode(m){
+  saveMode = m;
+  const el = document.getElementById("smode");
+  if(m === "file"){ el.textContent = "saving to file ✓";
+                    el.style.cssText = "background:#123d22;border-color:#2ecc71;color:#8ef0b0"; }
+  else if(m === "local"){ el.textContent = "saving in browser";
+                    el.style.cssText = "background:#3d3512;border-color:#ffb020;color:#ffd98a"; }
+  else { el.textContent = "NOT SAVING — click “Save to file…”";
+         el.style.cssText = "background:#4d1414;border-color:#ff5252;color:#ffb3b3;font-weight:700"; }
+}
 function load(){ try{ state = JSON.parse(localStorage.getItem(LS_KEY)) || {}; }catch(e){ state={}; } }
-function save(){ try{ localStorage.setItem(LS_KEY, JSON.stringify(state)); }
-                 catch(e){ console.warn("localStorage full/blocked", e); } }
+function save(){
+  if(localOK){ try{ localStorage.setItem(LS_KEY, JSON.stringify(state)); }
+               catch(e){ localOK=false; if(!fileHandle) setMode("none"); } }
+  scheduleWrite();
+}
+function scheduleWrite(){
+  if(!fileHandle) return;
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(writeFile, 700);   // debounce: typing a reason is many events
+}
+async function writeFile(){
+  if(!fileHandle) return;
+  try{
+    const w = await fileHandle.createWritable();
+    await w.write(payloadJSON());
+    await w.close();
+    setMode("file");
+    exportedAt = Object.values(state).filter(v=>v.decision).length;
+    render();
+  }catch(e){
+    console.warn("file write failed", e);
+    fileHandle = null; setMode(localOK ? "local" : "none"); render();
+  }
+}
 function vd(id){ const o = state[id] || (state[id] = {rules:{}, boxes:{}, reasons:{}});
                  o.rules=o.rules||{}; o.boxes=o.boxes||{}; o.reasons=o.reasons||{}; return o; }
 function decided(id){ return !!(state[id] && state[id].decision); }
@@ -462,8 +530,26 @@ document.addEventListener("keydown",e=>{
 
 // ---------------------------------------------------------------- export
 function b1000(b){ return "["+b.map(c=>Math.round(c*1000)).join(", ")+"]"; }
-function doExport(){
-  const rows=[], out={};
+function reviewerName(){
+  let r=(localStorage.getItem("mocs_reviewer")||"").trim();
+  if(!r){ r=(prompt("Your name (recorded in the saved file):","")||"reviewer").trim();
+          try{ localStorage.setItem("mocs_reviewer", r); }catch(e){} }
+  return r;
+}
+function payloadJSON(){
+  const out={};
+  for(const d of DATA){
+    const v=state[d.id];
+    if(!v || (!v.decision && !v.notes && !Object.keys(v.rules||{}).length
+        && !Object.keys(v.boxes||{}).length && !Object.keys(v.reasons||{}).length)) continue;
+    out[d.id]=v;
+  }
+  return JSON.stringify({reviewer:(localStorage.getItem("mocs_reviewer")||"reviewer"),
+    exported_at:new Date().toISOString(), corpus_key:META.corpus_key,
+    n_decided:Object.values(state).filter(v=>v.decision).length, verdicts:out}, null, 1);
+}
+function buildRows(){
+  const rows=[];
   for(const d of DATA){
     const v=state[d.id]; if(!v || (!v.decision && !v.notes && !Object.keys(v.rules||{}).length
         && !Object.keys(v.boxes||{}).length && !Object.keys(v.reasons||{}).length)) continue;
@@ -493,12 +579,12 @@ function doExport(){
     row.verify_notes=v.notes||"";
     rows.push(row);
   }
-  const rev=(localStorage.getItem("mocs_reviewer")||"").trim()
-        || (prompt("Your name (recorded in the export):","")||"reviewer");
-  localStorage.setItem("mocs_reviewer",rev);
-  dl("review_results.json", JSON.stringify(
-      {reviewer:rev, exported_at:new Date().toISOString(), corpus_key:META.corpus_key,
-       n_decided:rows.filter(r=>r.verify_decision).length, verdicts:out}, null, 1));
+  return rows;
+}
+function doExport(){
+  reviewerName();
+  const rows=buildRows();
+  dl("review_results.json", payloadJSON());
   if(rows.length){
     const cols=Object.keys(rows[0]);
     const csv=[cols.join(",")].concat(rows.map(r=>cols.map(c=>{
@@ -508,6 +594,47 @@ function doExport(){
   }
   exportedAt=Object.values(state).filter(v=>v.decision).length; render();
 }
+
+// ---------------------------------------------------------------- file saving
+const FS_OK = (typeof window.showSaveFilePicker === "function");
+const PICK_OPTS = {suggestedName:"review_results.json",
+  types:[{description:"Review results (JSON)", accept:{"application/json":[".json"]}}]};
+
+async function pickSaveFile(){
+  if(!FS_OK){ alert("This browser cannot write files directly (needs Chrome or Edge).\n\n"+
+                    "Use the Export button instead, and do it often."); return; }
+  try{
+    reviewerName();
+    fileHandle = await window.showSaveFilePicker(PICK_OPTS);
+    await writeFile();
+    alert("Saving to that file from now on.\n\nEvery change is written automatically — you do "+
+          "not need to press Export again.\n\nNext time you open the app, press "+
+          "“Open saved file…” and choose the same file to carry on.");
+  }catch(e){ if(e && e.name!=="AbortError") alert("Could not use that file: "+e.message); }
+}
+async function pickOpenFile(){
+  if(!FS_OK){ bImport.click(); return; }
+  try{
+    const [h] = await window.showOpenFilePicker(
+        {types:PICK_OPTS.types, multiple:false});
+    const txt = await (await h.getFile()).text();
+    const j = JSON.parse(txt);
+    if(j.corpus_key && j.corpus_key!==META.corpus_key &&
+       !confirm("That file came from a DIFFERENT review package.\n\n  file: "+j.corpus_key+
+                "\n  this: "+META.corpus_key+"\n\nOpen anyway?")) return;
+    const ids=new Set(DATA.map(d=>d.id)); const v=j.verdicts||j;
+    let n=0, skipped=0;
+    for(const k in v){ if(ids.has(k)){ state[k]=v[k]; n++; } else skipped++; }
+    fileHandle = h;                       // keep writing to the SAME file from now on
+    if(j.reviewer){ try{ localStorage.setItem("mocs_reviewer", j.reviewer); }catch(e){} }
+    save(); exportedAt=Object.values(state).filter(x=>x.decision).length; applyFilters();
+    setMode("file");
+    alert("Loaded "+n+" record(s)."+(skipped?"\n"+skipped+" not in this package, ignored.":"")+
+          "\n\nSaving back to this same file from now on.");
+  }catch(e){ if(e && e.name!=="AbortError") alert("Could not open that file: "+e.message); }
+}
+bSaveFile.onclick=pickSaveFile;
+bOpenFile.onclick=pickOpenFile;
 function dl(name,text){
   const a=document.createElement("a");
   a.href=URL.createObjectURL(new Blob([text],{type:"text/plain;charset=utf-8"}));
@@ -546,10 +673,27 @@ window.addEventListener("beforeunload",e=>{
   fQueue.innerHTML='<option value="">all queues</option>'+
     order.filter(q=>qs.has(q)).map(q=>`<option value="${q}">${q}</option>`).join("");
   fQueue.value = qs.has("sample") ? "sample" : "";
-  load(); exportedAt=Object.values(state).filter(v=>v.decision).length;
+
+  localOK = probeLocal();
+  if(localOK) load();
+  setMode(localOK ? "local" : "none");
+  exportedAt=Object.values(state).filter(v=>v.decision).length;
   applyFilters();
-  if(!localStorage.getItem("mocs_seen_help")){ help.style.display="flex";
-    localStorage.setItem("mocs_seen_help","1"); }
+
+  let seenHelp=false;
+  try{ seenHelp = !!localStorage.getItem("mocs_seen_help");
+       localStorage.setItem("mocs_seen_help","1"); }catch(e){}
+  if(!seenHelp) help.style.display="flex";
+
+  // If browser storage is unavailable, nothing survives a reload -- say so once,
+  // loudly, and point at the fix rather than letting them find out after an hour.
+  if(!localOK) setTimeout(()=>alert(
+    "This browser will not keep your progress between page loads.\n\n"+
+    (FS_OK ? "Click “Save to file…” in the toolbar and choose where to keep "+
+             "review_results.json. After that every change is written straight to that file, "+
+             "and you can reopen it later with “Open saved file…”."
+           : "Press Export often — that is the only way your work is kept in this browser. "+
+             "Chrome or Edge would let the app save to a file automatically instead.")), 400);
 })();
 </script>
 </body>
