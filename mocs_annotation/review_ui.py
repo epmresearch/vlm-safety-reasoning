@@ -15,12 +15,14 @@ their own laptop, probably Windows, who should not have to install anything.
     correction is the whole point: rule_2 and rule_3 have no MOCS geometry, so
     without it a good detection with a sloppy box can only be rejected, and those
     are the two scarcest rules in the project.
-  * AUTOSAVE TO localStorage ON EVERY KEYSTROKE, because losing six hours of review
-    to a closed tab would be worse than any amount of slowness. An unexported-count
-    badge nags past 50 decisions.
-  * EXPORT IS LOSSLESS JSON + a readable CSV carrying the same columns the
-    spreadsheet path produces, so whichever way the review happens, the file that
-    comes back downstream is the same shape.
+  * ONE SAVING MECHANISM: a real .json file on the reviewer's disk, written on every
+    change via the File System Access API. No browser storage anywhere -- on a
+    file:// page it is blocked in some configurations and wiped on close in others,
+    so it can appear to work right up until a day of review disappears. There is
+    also no Export/Import: they were one-shot snapshots that did not establish
+    ongoing saving, which is exactly the trap this design removes.
+  * NOBODY CAN START WITHOUT A FILE. A full-screen gate blocks the app until one is
+    chosen, so there is no path where someone works for an hour into nothing.
 """
 
 HTML_TEMPLATE = r"""<!DOCTYPE html>
@@ -80,9 +82,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   .caption{background:var(--panel2);border:1px solid var(--line);border-radius:8px;
            padding:8px;font-size:13px}
   .badge{background:var(--no);color:#fff;border-radius:99px;padding:1px 7px;font-size:11px}
-  #help{position:fixed;inset:0;background:rgba(0,0,0,.82);display:none;z-index:9;
+  #help,#gate{position:fixed;inset:0;background:rgba(0,0,0,.82);display:none;z-index:9;
         align-items:center;justify-content:center}
-  #help>div{background:var(--panel);border:1px solid var(--line);border-radius:12px;
+  #gate{background:rgba(10,11,14,.97);z-index:10}
+  #help>div,#gate>div{background:var(--panel);border:1px solid var(--line);border-radius:12px;
             padding:22px;max-width:620px;max-height:84vh;overflow:auto}
   kbd{background:var(--panel2);border:1px solid var(--line);border-radius:4px;
       padding:1px 6px;font:12px ui-monospace,monospace}
@@ -112,13 +115,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   <span class="grow"></span>
   <span id="prog" class="muted"></span>
   <span id="smode" class="chip"></span>
-  <span id="unsaved"></span>
-  <button id="bSaveFile" class="big">Save to file…</button>
-  <button id="bOpenFile">Open saved file…</button>
-  <button id="bExport">Export</button>
-  <button id="bImport">Import</button>
+  <button id="bSaveFile" class="big">Save to new file…</button>
+  <button id="bOpenFile" class="big">Open saved file…</button>
   <button id="bHelp">?</button>
-  <input type="file" id="fileIn" accept=".json" style="display:none">
 </div>
 
 <div class="wrap">
@@ -199,6 +198,23 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   </div>
 </div>
 
+<div id="gate"><div>
+  <h2 style="margin-top:0">Choose where your work is saved</h2>
+  <p>Everything you do is written straight to a file on your own computer, as you go.
+     Nothing is kept in the browser, so nothing can be lost by closing a tab or clearing
+     browsing data &mdash; but you have to pick that file before you start.</p>
+  <div class="row" style="margin:18px 0">
+    <button id="gSave" class="big">Save to new file&hellip;</button>
+    <button id="gOpen" class="big">Open saved file&hellip;</button>
+  </div>
+  <p class="muted"><strong>First time?</strong> Press <em>Save to new file&hellip;</em> and
+     save it as <code>review_results.json</code> somewhere you will remember, such as your
+     Documents folder.<br>
+     <strong>Coming back?</strong> Press <em>Open saved file&hellip;</em> and pick that same
+     file &mdash; your work reappears and keeps saving to it.</p>
+  <p id="gateWarn" style="color:#ff8a8a"></p>
+</div></div>
+
 <div id="help"><div>
   <h2 style="margin-top:0">How to review</h2>
   <p>Every row is a <strong>model proposal, not a label</strong>. Your decision is what makes it data.</p>
@@ -239,22 +255,20 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     <tr><td><kbd>N</kbd></td><td>next undecided</td></tr>
     <tr><td><kbd>E</kbd></td><td>export</td></tr>
   </table>
-  <h3>Saving &mdash; do this first</h3>
-  <p><strong>Click &ldquo;Save to file&hellip;&rdquo; in the toolbar before you start</strong> and
-     choose somewhere to keep <code>review_results.json</code>. From then on every change you
-     make is written straight into that file &mdash; no Export needed, nothing to remember.</p>
-  <p>Next session: open the app and click <strong>&ldquo;Open saved file&hellip;&rdquo;</strong>,
-     pick the same file, and you carry on exactly where you stopped.</p>
-  <p>The chip in the toolbar always tells you what is happening:
-     <span class="chip" style="background:#123d22;border-color:#2ecc71;color:#8ef0b0">saving to file ✓</span>
-     means you are safe;
-     <span class="chip" style="background:#3d3512;border-color:#ffb020;color:#ffd98a">saving in browser</span>
-     means it is only kept in this browser;
-     <span class="chip" style="background:#4d1414;border-color:#ff5252;color:#ffb3b3">NOT SAVING</span>
-     means press &ldquo;Save to file&hellip;&rdquo; now.</p>
-  <p class="muted">&ldquo;Save to file&hellip;&rdquo; needs Chrome or Edge. In other browsers use
-     <em>Export</em> (downloads the file) and <em>Import</em> (loads it back) instead, and do it
-     often.</p>
+  <h3>Saving</h3>
+  <p>Your work goes <strong>straight into a file on your own computer</strong>, automatically,
+     every time you change anything. Nothing is stored in the browser, so closing the tab or
+     clearing browsing data cannot lose it.</p>
+  <p><strong>Starting out:</strong> press <em>Save to new file&hellip;</em> and save it as
+     <code>review_results.json</code> somewhere you will remember.<br>
+     <strong>Coming back:</strong> press <em>Open saved file&hellip;</em> and pick that same file.
+     Your work reappears and keeps saving to it.</p>
+  <p>The chip in the toolbar shows the filename and the time of the last save, so you can always
+     see that it is working. If it ever turns red and says
+     <span class="chip" style="background:#4d1414;border-color:#ff5252;color:#ffb3b3">NOT SAVING</span>,
+     stop and choose the file again.</p>
+  <p class="muted">When you finish a session, send that <code>.json</code> file back. There is
+     nothing to export &mdash; it is already up to date.</p>
   <p class="muted">Suggested order: <strong>sample</strong> first (it tells us how accurate
      the model is), then <strong>tier1</strong> (the two rarest, most valuable rules).</p>
   <button onclick="document.getElementById('help').style.display='none'">Close</button>
@@ -271,52 +285,38 @@ let state = {};          // id -> verdict object
 let view = [];           // filtered indices into DATA
 let pos = 0;
 let layers = {rule_1:1,rule_2:1,rule_3:1,rule_4:1,mocs:1};
-let exportedAt = 0;
 const img = new Image();
 
 // ---------------------------------------------------------------- persistence
 //
-// THREE TIERS, because browser storage cannot be relied on for a file:// page --
-// it is blocked outright in some configurations and wiped on close in others, and
-// losing a day of review to that would be unforgivable.
+// ONE mechanism: a real file on the reviewer's disk, via the File System Access
+// API. They pick it before they start; after that every change is written to it
+// automatically. Nothing is kept in the browser.
 //
-//   1. A REAL FILE on disk, via the File System Access API. The reviewer picks a
-//      .json once; after that every single change is written straight to it, with
-//      no further clicks. This is the one we want.
-//   2. localStorage, if it works. Survives reloads on the same machine.
-//   3. Neither -- a loud red banner and manual Export. Never silent.
-//
-// The active tier is shown in the toolbar at all times, so nobody has to guess
-// whether their work is safe.
-let fileHandle = null, saveTimer = null;
-let localOK = false, saveMode = "none";
+// Why not localStorage as a backup: on a file:// page it is blocked outright in
+// some browser configurations and wiped on close in others, which means it can
+// look like it is working right up until a day of review disappears. A mechanism
+// that fails silently is worse than no mechanism, so there is only the file --
+// and the app refuses to let anyone start reviewing until it has one.
+let fileHandle = null, saveTimer = null, pending = false, reviewer = "";
 
-function probeLocal(){
-  try{ localStorage.setItem("__probe", "1");
-       const ok = localStorage.getItem("__probe") === "1";
-       localStorage.removeItem("__probe"); return ok; }
-  catch(e){ return false; }
-}
-function setMode(m){
-  saveMode = m;
+function setMode(ok, extra){
   const el = document.getElementById("smode");
-  if(m === "file"){ el.textContent = "saving to file ✓";
-                    el.style.cssText = "background:#123d22;border-color:#2ecc71;color:#8ef0b0"; }
-  else if(m === "local"){ el.textContent = "saving in browser";
-                    el.style.cssText = "background:#3d3512;border-color:#ffb020;color:#ffd98a"; }
-  else { el.textContent = "NOT SAVING — click “Save to file…”";
-         el.style.cssText = "background:#4d1414;border-color:#ff5252;color:#ffb3b3;font-weight:700"; }
+  if(ok){ el.textContent = "saving to " + (fileHandle ? fileHandle.name : "file") +
+                           (extra ? " · " + extra : "");
+          el.style.cssText = "background:#123d22;border-color:#2ecc71;color:#8ef0b0"; }
+  else  { el.textContent = "NOT SAVING";
+          el.style.cssText = "background:#4d1414;border-color:#ff5252;color:#ffb3b3;font-weight:700"; }
 }
-function load(){ try{ state = JSON.parse(localStorage.getItem(LS_KEY)) || {}; }catch(e){ state={}; } }
+function showGate(msg){
+  document.getElementById("gateWarn").textContent = msg || "";
+  gate.style.display = "flex";
+}
 function save(){
-  if(localOK){ try{ localStorage.setItem(LS_KEY, JSON.stringify(state)); }
-               catch(e){ localOK=false; if(!fileHandle) setMode("none"); } }
-  scheduleWrite();
-}
-function scheduleWrite(){
-  if(!fileHandle) return;
+  if(!fileHandle){ showGate("Your last change was not saved — choose a file."); return; }
+  pending = true;
   clearTimeout(saveTimer);
-  saveTimer = setTimeout(writeFile, 700);   // debounce: typing a reason is many events
+  saveTimer = setTimeout(writeFile, 600);   // debounce: typing a reason fires many events
 }
 async function writeFile(){
   if(!fileHandle) return;
@@ -324,12 +324,13 @@ async function writeFile(){
     const w = await fileHandle.createWritable();
     await w.write(payloadJSON());
     await w.close();
-    setMode("file");
-    exportedAt = Object.values(state).filter(v=>v.decision).length;
-    render();
+    pending = false;
+    setMode(true, "saved " + new Date().toLocaleTimeString());
   }catch(e){
     console.warn("file write failed", e);
-    fileHandle = null; setMode(localOK ? "local" : "none"); render();
+    fileHandle = null; setMode(false);
+    showGate("Could not write to that file (" + (e.message || e.name) +
+             "). Choose it again, or pick a new one.");
   }
 }
 function vd(id){ const o = state[id] || (state[id] = {rules:{}, boxes:{}, reasons:{}});
@@ -432,8 +433,6 @@ function render(){
   prog.textContent = view.length
     ? `${pos+1} / ${view.length}   ·   ${Object.values(state).filter(v=>v.decision).length} decided of ${DATA.length}`
     : "nothing matches these filters";
-  const pending=Object.values(state).filter(v=>v.decision).length-exportedAt;
-  unsaved.innerHTML = pending>50 ? `<span class="badge">${pending} unexported — press Export</span>` : "";
   if(!d){ ctx.clearRect(0,0,cv.width,cv.height); rid.textContent="-"; rules.innerHTML=""; return; }
   const v=vd(d.id);
   rid.textContent=d.id; rsrc.textContent=d.src; rrun.textContent=d.run;
@@ -522,20 +521,13 @@ document.addEventListener("keydown",e=>{
   else if(k==="c"){ const v=vd(d.id); v.caption_ok = v.caption_ok==="y"?"n":v.caption_ok==="n"?"":"y"; save(); render(); }
   else if(k==="h"){ const v=vd(d.id); v.hard=!v.hard; save(); render(); }
   else if(k==="n") nextTodo();
-  else if(k==="e") doExport();
   else if(e.key==="ArrowRight") step(1);
   else if(e.key==="ArrowLeft") step(-1);
   else if(k==="?") help.style.display="flex";
 });
 
-// ---------------------------------------------------------------- export
+// ---------------------------------------------------------------- the saved file
 function b1000(b){ return "["+b.map(c=>Math.round(c*1000)).join(", ")+"]"; }
-function reviewerName(){
-  let r=(localStorage.getItem("mocs_reviewer")||"").trim();
-  if(!r){ r=(prompt("Your name (recorded in the saved file):","")||"reviewer").trim();
-          try{ localStorage.setItem("mocs_reviewer", r); }catch(e){} }
-  return r;
-}
 function payloadJSON(){
   const out={};
   for(const d of DATA){
@@ -544,10 +536,14 @@ function payloadJSON(){
         && !Object.keys(v.boxes||{}).length && !Object.keys(v.reasons||{}).length)) continue;
     out[d.id]=v;
   }
-  return JSON.stringify({reviewer:(localStorage.getItem("mocs_reviewer")||"reviewer"),
-    exported_at:new Date().toISOString(), corpus_key:META.corpus_key,
-    n_decided:Object.values(state).filter(v=>v.decision).length, verdicts:out}, null, 1);
+  return JSON.stringify({reviewer:reviewer||"reviewer",
+    saved_at:new Date().toISOString(), corpus_key:META.corpus_key,
+    n_decided:Object.values(state).filter(v=>v.decision).length,
+    n_touched:Object.keys(out).length, verdicts:out}, null, 1);
 }
+// Kept, unused by the app itself: it is the one place that documents, in code, the
+// exact column set a verdict maps onto -- which is what build_review.py's CSVs use
+// and what any later join has to produce.
 function buildRows(){
   const rows=[];
   for(const d of DATA){
@@ -581,89 +577,53 @@ function buildRows(){
   }
   return rows;
 }
-function doExport(){
-  reviewerName();
-  const rows=buildRows();
-  dl("review_results.json", payloadJSON());
-  if(rows.length){
-    const cols=Object.keys(rows[0]);
-    const csv=[cols.join(",")].concat(rows.map(r=>cols.map(c=>{
-      const s=String(r[c]??""); return /[",\n]/.test(s) ? '"'+s.replace(/"/g,'""')+'"' : s;
-    }).join(","))).join("\n");
-    dl("review_results.csv","﻿"+csv);
-  }
-  exportedAt=Object.values(state).filter(v=>v.decision).length; render();
-}
-
-// ---------------------------------------------------------------- file saving
+// ---------------------------------------------------------------- file pickers
 const FS_OK = (typeof window.showSaveFilePicker === "function");
-const PICK_OPTS = {suggestedName:"review_results.json",
-  types:[{description:"Review results (JSON)", accept:{"application/json":[".json"]}}]};
+const PICK_TYPES = [{description:"Review results (JSON)",
+                     accept:{"application/json":[".json"]}}];
 
+function askName(){
+  if(!reviewer) reviewer = (prompt("Your name (recorded in the file):","")||"reviewer").trim();
+  return reviewer;
+}
 async function pickSaveFile(){
-  if(!FS_OK){ alert("This browser cannot write files directly (needs Chrome or Edge).\n\n"+
-                    "Use the Export button instead, and do it often."); return; }
   try{
-    reviewerName();
-    fileHandle = await window.showSaveFilePicker(PICK_OPTS);
+    askName();
+    fileHandle = await window.showSaveFilePicker(
+        {suggestedName:"review_results.json", types:PICK_TYPES});
     await writeFile();
-    alert("Saving to that file from now on.\n\nEvery change is written automatically — you do "+
-          "not need to press Export again.\n\nNext time you open the app, press "+
-          "“Open saved file…” and choose the same file to carry on.");
-  }catch(e){ if(e && e.name!=="AbortError") alert("Could not use that file: "+e.message); }
+    gate.style.display="none";
+    render();
+  }catch(e){ if(e && e.name!=="AbortError") showGate("Could not use that file: "+e.message); }
 }
 async function pickOpenFile(){
-  if(!FS_OK){ bImport.click(); return; }
   try{
-    const [h] = await window.showOpenFilePicker(
-        {types:PICK_OPTS.types, multiple:false});
-    const txt = await (await h.getFile()).text();
-    const j = JSON.parse(txt);
+    const [h] = await window.showOpenFilePicker({types:PICK_TYPES, multiple:false});
+    const j = JSON.parse(await (await h.getFile()).text());
+    // A file from a DIFFERENT package would merge ids that are not in DATA, show
+    // nothing on screen, and give no clue why. Check, and report what landed.
     if(j.corpus_key && j.corpus_key!==META.corpus_key &&
        !confirm("That file came from a DIFFERENT review package.\n\n  file: "+j.corpus_key+
                 "\n  this: "+META.corpus_key+"\n\nOpen anyway?")) return;
     const ids=new Set(DATA.map(d=>d.id)); const v=j.verdicts||j;
     let n=0, skipped=0;
     for(const k in v){ if(ids.has(k)){ state[k]=v[k]; n++; } else skipped++; }
-    fileHandle = h;                       // keep writing to the SAME file from now on
-    if(j.reviewer){ try{ localStorage.setItem("mocs_reviewer", j.reviewer); }catch(e){} }
-    save(); exportedAt=Object.values(state).filter(x=>x.decision).length; applyFilters();
-    setMode("file");
+    fileHandle = h;                       // keep writing back to this SAME file
+    reviewer = j.reviewer || reviewer;
+    await writeFile();
+    gate.style.display="none";
+    applyFilters();
     alert("Loaded "+n+" record(s)."+(skipped?"\n"+skipped+" not in this package, ignored.":"")+
-          "\n\nSaving back to this same file from now on.");
-  }catch(e){ if(e && e.name!=="AbortError") alert("Could not open that file: "+e.message); }
+          "\n\nSaving back to this file from now on.");
+  }catch(e){ if(e && e.name!=="AbortError") showGate("Could not open that file: "+e.message); }
 }
-bSaveFile.onclick=pickSaveFile;
-bOpenFile.onclick=pickOpenFile;
-function dl(name,text){
-  const a=document.createElement("a");
-  a.href=URL.createObjectURL(new Blob([text],{type:"text/plain;charset=utf-8"}));
-  a.download=name; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),1500);
-}
-bExport.onclick=doExport;
-bImport.onclick=()=>fileIn.click();
-fileIn.onchange=()=>{ const f=fileIn.files[0]; if(!f) return; const fr=new FileReader();
-  fr.onload=()=>{ try{ const j=JSON.parse(fr.result);
-      const v=j.verdicts||j;
-      // Importing an export from a DIFFERENT package used to "succeed" silently:
-      // every id merged into state, none of them in DATA, nothing appeared on screen,
-      // and the reviewer had no way to tell. Check, and report what actually landed.
-      if(j.corpus_key && j.corpus_key!==META.corpus_key &&
-         !confirm("That file came from a DIFFERENT review package.\n\n  file: "+j.corpus_key+
-                  "\n  this: "+META.corpus_key+"\n\nImport anyway?")) { fileIn.value=""; return; }
-      const ids=new Set(DATA.map(d=>d.id));
-      let n=0, skipped=0;
-      for(const k in v){ if(ids.has(k)){ state[k]=v[k]; n++; } else skipped++; }
-      save(); exportedAt=Object.values(state).filter(x=>x.decision).length; applyFilters();
-      alert("Imported "+n+" record(s)."+
-            (skipped? "\n"+skipped+" id(s) are not in this package and were ignored." : "")+
-            (j.reviewer? "\nReviewer: "+j.reviewer : "")+
-            (j.exported_at? "\nExported: "+j.exported_at : ""));
-    }catch(e){ alert("Could not read that file: "+e); } };
-  fr.readAsText(f); fileIn.value=""; };
+bSaveFile.onclick=pickSaveFile; gSave.onclick=pickSaveFile;
+bOpenFile.onclick=pickOpenFile; gOpen.onclick=pickOpenFile;
+
+// Only fires if a write is still queued or the handle broke -- in the normal case
+// everything is already on disk within 600 ms and closing is safe.
 window.addEventListener("beforeunload",e=>{
-  const pending=Object.values(state).filter(v=>v.decision).length-exportedAt;
-  if(pending>0){ e.preventDefault(); e.returnValue=""; }
+  if(pending || !fileHandle){ e.preventDefault(); e.returnValue=""; }
 });
 
 // ---------------------------------------------------------------- boot
@@ -674,26 +634,22 @@ window.addEventListener("beforeunload",e=>{
     order.filter(q=>qs.has(q)).map(q=>`<option value="${q}">${q}</option>`).join("");
   fQueue.value = qs.has("sample") ? "sample" : "";
 
-  localOK = probeLocal();
-  if(localOK) load();
-  setMode(localOK ? "local" : "none");
-  exportedAt=Object.values(state).filter(v=>v.decision).length;
+  setMode(false);
   applyFilters();
 
-  let seenHelp=false;
-  try{ seenHelp = !!localStorage.getItem("mocs_seen_help");
-       localStorage.setItem("mocs_seen_help","1"); }catch(e){}
-  if(!seenHelp) help.style.display="flex";
-
-  // If browser storage is unavailable, nothing survives a reload -- say so once,
-  // loudly, and point at the fix rather than letting them find out after an hour.
-  if(!localOK) setTimeout(()=>alert(
-    "This browser will not keep your progress between page loads.\n\n"+
-    (FS_OK ? "Click “Save to file…” in the toolbar and choose where to keep "+
-             "review_results.json. After that every change is written straight to that file, "+
-             "and you can reopen it later with “Open saved file…”."
-           : "Press Export often — that is the only way your work is kept in this browser. "+
-             "Chrome or Edge would let the app save to a file automatically instead.")), 400);
+  // No file, no reviewing. The gate cannot be dismissed any other way, so there is
+  // no path where someone works for an hour into nothing.
+  if(!FS_OK){
+    document.querySelector("#gate>div").innerHTML =
+      "<h2 style='margin-top:0'>Please use Chrome or Edge</h2>"+
+      "<p>This tool saves your work straight to a file on your computer, which this "+
+      "browser does not support. Firefox and Safari cannot run it.</p>"+
+      "<p class='muted'>Copy the folder's address into Chrome or Edge and open "+
+      "<code>index.html</code> there.</p>";
+    gate.style.display="flex";
+    return;
+  }
+  showGate("");
 })();
 </script>
 </body>
