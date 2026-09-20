@@ -209,6 +209,13 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       exists it came from human annotation &mdash; prefer it. Otherwise, if the finding is
       right but the box is wrong, pick the rule under &ldquo;draw box for&rdquo; and drag a
       new one on the image.</li>
+    <li><strong>If you turn a rule ON that the model did not propose, fill in the reason
+      box.</strong> It appears inside the rule card as soon as you mark the rule
+      &ldquo;yes&rdquo;. One sentence: <em>who or what is at fault, identified by position
+      or appearance, and what the breach is</em> &mdash; e.g. &ldquo;The worker on the left
+      is on foot without a hard hat.&rdquo; Without it we get a violation with nothing to
+      learn from. For a rule the model <em>did</em> propose, leave it blank unless its
+      reason is wrong.</li>
   </ol>
   <h3>Colours</h3>
   <table>
@@ -257,7 +264,8 @@ const img = new Image();
 function load(){ try{ state = JSON.parse(localStorage.getItem(LS_KEY)) || {}; }catch(e){ state={}; } }
 function save(){ try{ localStorage.setItem(LS_KEY, JSON.stringify(state)); }
                  catch(e){ console.warn("localStorage full/blocked", e); } }
-function vd(id){ return state[id] || (state[id] = {rules:{}, boxes:{}}); }
+function vd(id){ const o = state[id] || (state[id] = {rules:{}, boxes:{}, reasons:{}});
+                 o.rules=o.rules||{}; o.boxes=o.boxes||{}; o.reasons=o.reasons||{}; return o; }
 function decided(id){ return !!(state[id] && state[id].decision); }
 
 // ---------------------------------------------------------------- filtering
@@ -385,16 +393,27 @@ function render(){
       ${p?`<div class="reason">${esc(d.r[r].reason||"")}</div>
            <div class="muted">${(d.r[r].boxes||[]).length} model box(es)${mine?` · ${mine} of yours`:""}</div>`
          :`<div class="muted">${mine?`${mine} box(es) you drew`:"&mdash;"}</div>`}
+      ${val==="y"?`<input class="rsn" data-r="${r}" value="${esc(v.reasons[r]||"")}"
+          style="width:100%;margin-top:6px" placeholder="${p
+            ? "reason looks wrong? write a better one (optional)"
+            : "REASON NEEDED — one sentence: who/what is at fault, and what the breach is"}">`:""}
     </div>`;
   }).join("");
   rules.querySelectorAll(".rv").forEach(b=>b.onclick=()=>{
     const o=vd(d.id); o.rules[b.dataset.r]= o.rules[b.dataset.r]===b.dataset.v?"":b.dataset.v;
     save(); render();
   });
+  // oninput only SAVES -- it must not re-render, or the field loses focus mid-word.
+  rules.querySelectorAll(".rsn").forEach(el=>el.oninput=()=>{
+    vd(d.id).reasons[el.dataset.r]=el.value; save();
+  });
   img.onload=drawCanvas; img.onerror=drawCanvas;
   if(img.getAttribute("src")!==d.img){ img.src=d.img; } else drawCanvas();
 }
-function esc(s){ return s.replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
+// Escapes " as well as &<> because this also fills a value="..." attribute; a reason
+// containing a quote would otherwise break out of it and mangle the rule card.
+function esc(s){ return String(s==null?"":s).replace(/[&<>"]/g,
+    c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
 
 // ---------------------------------------------------------------- actions
 function setDec(x){ const d=cur(); if(!d) return; const v=vd(d.id);
@@ -447,7 +466,7 @@ function doExport(){
   const rows=[], out={};
   for(const d of DATA){
     const v=state[d.id]; if(!v || (!v.decision && !v.notes && !Object.keys(v.rules||{}).length
-        && !Object.keys(v.boxes||{}).length)) continue;
+        && !Object.keys(v.boxes||{}).length && !Object.keys(v.reasons||{}).length)) continue;
     out[d.id]=v;
     const row={new_image_id:d.id, image_file:d.img.split("/").pop(), mocs_image_id:d.mid,
       file_name:d.fn, source:d.src, run:d.run,
@@ -464,7 +483,9 @@ function doExport(){
     row.verify_decision=v.decision||"";
     for(const r of RULES) row["verify_"+r]=(v.rules||{})[r]||"";
     row.verify_caption_ok=v.caption_ok||"";
-    row.verify_corrected_reason=v.reason||"";
+    row.verify_corrected_reason=Object.entries(v.reasons||{})
+        .filter(([,t])=>t&&t.trim()).map(([r,t])=>r+": "+t.trim()).join("; ");
+    row.verify_corrected_reason_json=JSON.stringify(v.reasons||{});
     row.verify_corrected_boxes_1000=Object.entries(v.boxes||{})
         .flatMap(([r,bs])=>bs.map(b=>r+":"+b1000(b))).join("; ");
     row.verify_corrected_boxes_json=JSON.stringify(v.boxes||{});
@@ -496,10 +517,21 @@ bExport.onclick=doExport;
 bImport.onclick=()=>fileIn.click();
 fileIn.onchange=()=>{ const f=fileIn.files[0]; if(!f) return; const fr=new FileReader();
   fr.onload=()=>{ try{ const j=JSON.parse(fr.result);
-      const v=j.verdicts||j; let n=0;
-      for(const k in v){ state[k]=v[k]; n++; }
-      save(); applyFilters();
-      alert("Imported "+n+" record(s)."+(j.reviewer?" Reviewer: "+j.reviewer:""));
+      const v=j.verdicts||j;
+      // Importing an export from a DIFFERENT package used to "succeed" silently:
+      // every id merged into state, none of them in DATA, nothing appeared on screen,
+      // and the reviewer had no way to tell. Check, and report what actually landed.
+      if(j.corpus_key && j.corpus_key!==META.corpus_key &&
+         !confirm("That file came from a DIFFERENT review package.\n\n  file: "+j.corpus_key+
+                  "\n  this: "+META.corpus_key+"\n\nImport anyway?")) { fileIn.value=""; return; }
+      const ids=new Set(DATA.map(d=>d.id));
+      let n=0, skipped=0;
+      for(const k in v){ if(ids.has(k)){ state[k]=v[k]; n++; } else skipped++; }
+      save(); exportedAt=Object.values(state).filter(x=>x.decision).length; applyFilters();
+      alert("Imported "+n+" record(s)."+
+            (skipped? "\n"+skipped+" id(s) are not in this package and were ignored." : "")+
+            (j.reviewer? "\nReviewer: "+j.reviewer : "")+
+            (j.exported_at? "\nExported: "+j.exported_at : ""));
     }catch(e){ alert("Could not read that file: "+e); } };
   fr.readAsText(f); fileIn.value=""; };
 window.addEventListener("beforeunload",e=>{

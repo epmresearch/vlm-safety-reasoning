@@ -233,7 +233,8 @@ def row_for(rec: Dict[str, Any], image_file: str) -> Dict[str, Any]:
     row.update({
         "verify_decision": "", "verify_rule_1": "", "verify_rule_2": "",
         "verify_rule_3": "", "verify_rule_4": "", "verify_caption_ok": "",
-        "verify_corrected_reason": "", "verify_corrected_boxes_1000": "",
+        "verify_corrected_reason": "", "verify_corrected_reason_json": "",
+        "verify_corrected_boxes_1000": "",
         "verify_corrected_boxes_json": "", "verify_difficulty": "", "verify_notes": "",
     })
     return row
@@ -246,8 +247,8 @@ FIELDNAMES = (
     + ["mocs_categories", "mocs_suggested_rule4_box_1000", "image_path_original",
        "verify_decision", "verify_rule_1", "verify_rule_2", "verify_rule_3",
        "verify_rule_4", "verify_caption_ok", "verify_corrected_reason",
-       "verify_corrected_boxes_1000", "verify_corrected_boxes_json",
-       "verify_difficulty", "verify_notes"]
+       "verify_corrected_reason_json", "verify_corrected_boxes_1000",
+       "verify_corrected_boxes_json", "verify_difficulty", "verify_notes"]
 )
 
 
@@ -341,6 +342,12 @@ def main() -> None:
                          "so layers can be toggled and the reviewer can DRAW CORRECTED "
                          "BOXES. Without --ui the boxes are burnt into the jpgs for the "
                          "spreadsheet workflow instead")
+    ap.add_argument("--reuse-images", action="store_true",
+                    help="Do not stage images; use whatever is already in <out>/images/. "
+                         "This is how you regenerate index.html LOCALLY after a UI tweak: "
+                         "the corpus's `image_path` points at ARC, which does not exist on "
+                         "a laptop, so a normal run would fail to render all 5,056 and "
+                         "produce an app with no pictures")
     ap.add_argument("--no-render", action="store_true",
                     help="Skip staging images entirely (CSV only, much faster)")
     ap.add_argument("--max-render-px", type=int, default=1600,
@@ -396,7 +403,16 @@ def main() -> None:
 
     images_dir = out_dir / "images"
     rendered: Dict[str, str] = {}
-    if args.no_render:
+    if args.reuse_images:
+        for rid in needed:
+            if (images_dir / f"{rid}.jpg").exists():
+                rendered[rid] = f"{rid}.jpg"
+        logger.info(f"--reuse-images: found {len(rendered)}/{len(needed)} already staged "
+                    f"in {images_dir}")
+        if len(rendered) < len(needed):
+            logger.warning(f"  {len(needed) - len(rendered)} image(s) missing -- those rows "
+                           "will have no picture in the app")
+    elif args.no_render:
         logger.info("--no-render: CSVs only, image_file column left empty")
     else:
         kind = "clean (the app draws boxes)" if args.ui else "with boxes drawn on"
