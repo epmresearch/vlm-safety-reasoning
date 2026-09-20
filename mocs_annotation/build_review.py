@@ -289,11 +289,13 @@ makes it data.
 
 ## Two things that are easy to get wrong
 
-**1. Verify ALL FOUR rules on every row you accept — not just the proposed one.**
-About one in ten construction images violates rule_1 (missing hard hat / uncovered
-shoulders or legs). If you accept a row and leave `verify_rule_1` blank when the image
-really does show a rule_1 violation, you inject a false negative into the strongest
-rule in the project. Mark each of `verify_rule_1` … `verify_rule_4` as `y` or `n`.
+**1. On every row you accept, fill ALL FOUR rules AND the caption — not just the
+proposed rule.** About one in ten construction images violates rule_1 (missing hard hat
+/ uncovered shoulders or legs). If you accept a row and leave `verify_rule_1` blank when
+the image really does show a rule_1 violation, you inject a false negative into the
+strongest rule in the project. Mark each of `verify_rule_1` … `verify_rule_4` as `y` or
+`n`, and `verify_caption_ok` as `y` or `n` — a rule left blank is read as "not
+violated", and a caption left blank cannot be used at all.
 
 **2. Do not trust the model's boxes.** Where a green "MOCS r4" box exists, prefer it —
 it comes from human annotation. Elsewhere, if the box is wrong but the finding is

@@ -39,31 +39,38 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     --r1:#00E5FF; --r2:#FFEA00; --r3:#FF3D00; --r4:#D500F9; --mocs:#00E676;
   }
   *{box-sizing:border-box}
-  body{margin:0;font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
-       background:var(--bg);color:var(--fg);overflow:hidden}
+  /* The page is a flex COLUMN, not a hardcoded calc(100vh - 53px). The toolbar wraps
+     to two or three rows on a laptop screen, and any fixed guess at its height pushes
+     the bottom of the app off-screen -- invisibly, because of overflow:hidden. */
+  html,body{height:100%}
+  body{margin:0;font:13px/1.4 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+       background:var(--bg);color:var(--fg);overflow:hidden;
+       display:flex;flex-direction:column}
   button{font:inherit;cursor:pointer;border:1px solid var(--line);background:var(--panel2);
-         color:var(--fg);border-radius:6px;padding:5px 10px}
+         color:var(--fg);border-radius:6px;padding:4px 8px}
   button:hover{border-color:var(--accent)}
   button.on{background:var(--accent);border-color:var(--accent);color:#fff}
   select,input,textarea{font:inherit;background:var(--panel2);color:var(--fg);
-         border:1px solid var(--line);border-radius:6px;padding:5px 8px}
-  .bar{display:flex;gap:8px;align-items:center;padding:8px 12px;background:var(--panel);
-       border-bottom:1px solid var(--line);flex-wrap:wrap}
+         border:1px solid var(--line);border-radius:6px;padding:4px 7px}
+  .bar{display:flex;gap:6px;align-items:center;padding:6px 9px;background:var(--panel);
+       border-bottom:1px solid var(--line);flex-wrap:wrap;flex:0 0 auto}
   .grow{flex:1}
-  .wrap{display:flex;height:calc(100vh - 53px)}
-  .left{flex:1;min-width:0;display:flex;flex-direction:column;background:#0e1013}
-  .canvasbox{flex:1;position:relative;display:flex;align-items:center;justify-content:center;
-             overflow:hidden}
+  .wrap{display:flex;flex:1 1 auto;min-height:0}
+  .left{flex:1 1 auto;min-width:0;min-height:0;display:flex;flex-direction:column;
+        background:#0e1013}
+  .canvasbox{flex:1 1 auto;min-height:0;position:relative;display:flex;
+             align-items:center;justify-content:center;overflow:hidden}
   canvas{max-width:100%;max-height:100%;cursor:crosshair}
-  .right{width:430px;flex-shrink:0;overflow-y:auto;background:var(--panel);
-         border-left:1px solid var(--line);padding:12px}
-  .sec{margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid var(--line)}
+  .right{width:380px;flex:0 0 380px;min-height:0;overflow-y:auto;background:var(--panel);
+         border-left:1px solid var(--line);padding:10px}
+  @media (max-width:1250px){ .right{width:330px;flex:0 0 330px} }
+  .sec{margin-bottom:10px;padding-bottom:9px;border-bottom:1px solid var(--line)}
   .sec:last-child{border:0}
-  h3{margin:0 0 7px;font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--dim)}
-  .row{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
-  .chip{display:inline-block;padding:1px 7px;border-radius:99px;font-size:11px;
+  h3{margin:0 0 5px;font-size:10px;letter-spacing:.09em;text-transform:uppercase;color:var(--dim)}
+  .row{display:flex;gap:5px;align-items:center;flex-wrap:wrap}
+  .chip{display:inline-block;padding:1px 6px;border-radius:99px;font-size:11px;
         background:var(--panel2);border:1px solid var(--line);color:var(--dim)}
-  .rule{border:1px solid var(--line);border-radius:8px;padding:8px;margin-bottom:7px;
+  .rule{border:1px solid var(--line);border-radius:8px;padding:6px 7px;margin-bottom:5px;
         background:var(--panel2)}
   .rule.prop{border-left:4px solid var(--line)}
   .rule[data-r="rule_1"].prop{border-left-color:var(--r1)}
@@ -78,9 +85,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   .n{border-color:var(--no)} .n.on{background:var(--no);border-color:var(--no);color:#2a0606}
   .m{border-color:var(--maybe)} .m.on{background:var(--maybe);border-color:var(--maybe);color:#2a1a00}
   textarea{width:100%;min-height:52px;resize:vertical}
-  .big{font-size:15px;padding:9px 14px;font-weight:600}
+  .big{font-size:14px;padding:6px 11px;font-weight:600}
   .caption{background:var(--panel2);border:1px solid var(--line);border-radius:8px;
-           padding:8px;font-size:13px}
+           padding:7px;font-size:12.5px;max-height:130px;overflow-y:auto}
+  textarea#notes{min-height:40px}
   .badge{background:var(--no);color:#fff;border-radius:99px;padding:1px 7px;font-size:11px}
   #help,#gate{position:fixed;inset:0;background:rgba(0,0,0,.82);display:none;z-index:9;
         align-items:center;justify-content:center}
@@ -97,7 +105,6 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 <body>
 
 <div class="bar">
-  <strong>__TITLE__</strong>
   <select id="fQueue"></select>
   <select id="fRule">
     <option value="">all rules</option>
@@ -111,33 +118,33 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   <select id="fSource">
     <option value="">val+test</option><option value="val">val</option><option value="test">test</option>
   </select>
-  <input id="fText" placeholder="search caption / id" style="width:170px">
+  <input id="fText" placeholder="search" style="width:110px">
   <span class="grow"></span>
   <span id="prog" class="muted"></span>
   <span id="smode" class="chip"></span>
-  <button id="bSaveFile" class="big">Save to new file…</button>
-  <button id="bOpenFile" class="big">Open saved file…</button>
-  <button id="bHelp">?</button>
+  <button id="bSaveFile" class="big" title="Save to a new file">Save to file…</button>
+  <button id="bOpenFile" class="big" title="Open a file you saved earlier">Open…</button>
+  <button id="bHelp" title="Help">?</button>
 </div>
 
 <div class="wrap">
   <div class="left">
     <div class="canvasbox"><canvas id="cv"></canvas></div>
     <div class="bar" style="border-top:1px solid var(--line);border-bottom:0">
-      <span class="muted">layers</span>
-      <button class="lay on" data-r="rule_1"><span class="sw" style="background:var(--r1)"></span>rule_1</button>
-      <button class="lay on" data-r="rule_2"><span class="sw" style="background:var(--r2)"></span>rule_2</button>
-      <button class="lay on" data-r="rule_3"><span class="sw" style="background:var(--r3)"></span>rule_3</button>
-      <button class="lay on" data-r="rule_4"><span class="sw" style="background:var(--r4)"></span>rule_4</button>
-      <button class="lay on" data-r="mocs"><span class="sw" style="background:var(--mocs)"></span>MOCS r4</button>
+      <span class="muted">show</span>
+      <button class="lay on" data-r="rule_1" title="rule_1 boxes"><span class="sw" style="background:var(--r1)"></span>1</button>
+      <button class="lay on" data-r="rule_2" title="rule_2 boxes"><span class="sw" style="background:var(--r2)"></span>2</button>
+      <button class="lay on" data-r="rule_3" title="rule_3 boxes"><span class="sw" style="background:var(--r3)"></span>3</button>
+      <button class="lay on" data-r="rule_4" title="rule_4 boxes"><span class="sw" style="background:var(--r4)"></span>4</button>
+      <button class="lay on" data-r="mocs" title="human-annotated MOCS box"><span class="sw" style="background:var(--mocs)"></span>MOCS</button>
       <span class="grow"></span>
-      <span class="muted">draw box for</span>
-      <select id="drawRule">
+      <span class="muted">draw</span>
+      <select id="drawRule" title="Pick a rule, then drag on the image to add a box">
         <option value="">off</option>
         <option value="rule_1">rule_1</option><option value="rule_2">rule_2</option>
         <option value="rule_3">rule_3</option><option value="rule_4">rule_4</option>
       </select>
-      <button id="bClearBoxes">clear my boxes</button>
+      <button id="bClearBoxes" title="Remove every box you drew on this image">clear mine</button>
     </div>
   </div>
 
@@ -150,13 +157,14 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       <div class="muted" id="rq" style="margin-top:4px"></div>
     </div>
 
-    <div class="sec">
-      <h3>Caption</h3>
+    <div class="sec" id="secCap">
+      <h3>Caption &mdash; is it true of this photo? <kbd>C</kbd></h3>
       <div class="caption" id="cap"></div>
       <div class="row" style="margin-top:6px">
         <span class="muted">accurate?</span>
         <button class="y" data-cap="y">yes</button>
         <button class="n" data-cap="n">no</button>
+        <span id="capTodo" class="chip" style="border-color:var(--maybe);color:var(--maybe)">not judged</span>
       </div>
     </div>
 
@@ -220,10 +228,12 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   <p>Every row is a <strong>model proposal, not a label</strong>. Your decision is what makes it data.</p>
   <h3>Two things that are easy to get wrong</h3>
   <ol>
-    <li><strong>Judge all four rules on every image you accept</strong>, not only the ones the
-      model flagged. About 1 image in 10 violates rule&nbsp;1 (no hard hat / uncovered
-      shoulders or legs). Accepting a row while leaving rule&nbsp;1 unset, when the image
-      really does show it, puts a false negative into the strongest rule in the project.</li>
+    <li><strong>On every image you accept, judge all four rules AND the caption</strong> &mdash;
+      not only the rules the model flagged. About 1 image in 10 violates rule&nbsp;1 (no hard
+      hat / uncovered shoulders or legs), so leaving it unset on a photo that really shows it
+      puts a false negative into the strongest rule in the project. A rule you never marked is
+      recorded as <em>not violated</em>, and a caption you never marked cannot be used at all.
+      The app will stop you if you try to accept with anything unjudged.</li>
     <li><strong>Do not trust the model's boxes.</strong> Where a green <em>MOCS r4</em> box
       exists it came from human annotation &mdash; prefer it. Otherwise, if the finding is
       right but the box is wrong, pick the rule under &ldquo;draw box for&rdquo; and drag a
@@ -443,6 +453,7 @@ function render(){
       ? "green box = human-annotated worker+machine region — prefer it for rule_4"
       : "no MOCS geometry for this image";
   document.querySelectorAll("[data-cap]").forEach(b=>b.classList.toggle("on",v.caption_ok===b.dataset.cap));
+  capTodo.style.display = v.caption_ok ? "none" : "inline-block";
   document.querySelectorAll(".dec").forEach(b=>b.classList.toggle("on",v.decision===b.dataset.dec));
   bHard.classList.toggle("on",!!v.hard);
   notes.value=v.notes||"";
@@ -483,9 +494,25 @@ function esc(s){ return String(s==null?"":s).replace(/[&<>"]/g,
     c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
 
 // ---------------------------------------------------------------- actions
-function setDec(x){ const d=cur(); if(!d) return; const v=vd(d.id);
+function setDec(x){
+  const d=cur(); if(!d) return; const v=vd(d.id);
+  // An ACCEPT with anything left unset is the one silently damaging outcome: a rule
+  // nobody looked at is recorded as "not violated" (a false negative in the data),
+  // and an unchecked caption cannot be used as a training target at all. Reject needs
+  // neither, and if the reviewer follows the instructions this never fires.
+  if(x==="accept" && v.decision!==x){
+    const miss = RULES.filter(r=>!v.rules[r]);
+    if(!v.caption_ok) miss.push("caption");
+    if(miss.length && !confirm(
+        "Not judged yet: "+miss.join(", ")+".\n\n"+
+        "An unjudged rule gets recorded as NOT violated, and an unjudged caption cannot "+
+        "be used at all. Press Cancel and mark them first — keys 1-4 for the rules, "+
+        "C for the caption.\n\n"+
+        "Accept anyway?")) return;
+  }
   v.decision = v.decision===x ? "" : x; v.ts=new Date().toISOString(); save();
-  if(v.decision) nextTodo(); else render(); }
+  if(v.decision) nextTodo(); else render();
+}
 function step(n){ if(!view.length) return; pos=(pos+n+view.length)%view.length; render(); }
 function nextTodo(){ for(let k=1;k<=view.length;k++){ const i=(pos+k)%view.length;
     if(!decided(DATA[view[i]].id)){ pos=i; render(); return; } } step(1); }
@@ -512,6 +539,9 @@ help.onclick=e=>{ if(e.target===help) help.style.display="none"; };
 
 document.addEventListener("keydown",e=>{
   if(/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;
+  // Shortcuts used to keep working behind the gate, quietly changing state that
+  // could not be written anywhere.
+  if(gate.style.display==="flex") return;
   const k=e.key.toLowerCase(); const d=cur(); if(!d) return;
   if(["1","2","3","4"].includes(k)){ const r="rule_"+k; const v=vd(d.id);
     v.rules[r] = v.rules[r]==="y" ? "n" : v.rules[r]==="n" ? "" : "y"; save(); render(); e.preventDefault(); }
@@ -620,10 +650,14 @@ async function pickOpenFile(){
 bSaveFile.onclick=pickSaveFile; gSave.onclick=pickSaveFile;
 bOpenFile.onclick=pickOpenFile; gOpen.onclick=pickOpenFile;
 
-// Only fires if a write is still queued or the handle broke -- in the normal case
-// everything is already on disk within 600 ms and closing is safe.
+// Only fires if a write is still queued, or there is work in memory with nowhere to
+// put it. Without the second condition it warned the instant the page opened, while
+// the gate was still up and there was nothing to lose -- an alarm that cries wolf is
+// worse than none, because it trains people to click through the real one.
 window.addEventListener("beforeunload",e=>{
-  if(pending || !fileHandle){ e.preventDefault(); e.returnValue=""; }
+  if(pending || (!fileHandle && Object.keys(state).length)){
+    e.preventDefault(); e.returnValue="";
+  }
 });
 
 // ---------------------------------------------------------------- boot
