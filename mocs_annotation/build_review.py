@@ -265,65 +265,189 @@ def write_csv(rows: Iterable[Dict[str, Any]], path: Path) -> int:
     return n
 
 
-REVIEWER_README = """# MOCS annotation review
+REVIEWER_README = r"""# Construction-site safety image review
 
-Every row here is a **proposal from a model**, not a label. Your acceptance is what
-makes it data.
+Thank you for doing this. Everything you need is below. The app repeats all of it on its
+**? Help** page, which opens by itself the first time and any time you press `?`.
 
-## How to work
+**What this is.** A computer model looked at 22,000 construction photographs and *guessed*
+which safety rules each one breaks. Its guesses are often wrong. Your job is to say what is
+actually true. **Your answers, not the model's, become the dataset.**
 
-1. Open a `review_*.csv` in Excel or LibreOffice.
-2. For each row, open `images/<image_file>` — the proposed boxes are already drawn on
-   it, colour-coded per rule.
-3. Fill the `verify_*` columns. Leave everything else untouched.
+Three steps per photo, then it moves on by itself. About 5-8 seconds each once you find a
+rhythm.
 
-## The colours
+---
+
+## 1. Setting up
+
+1. **Extract the zip** to a normal folder, e.g. `C:\mocs_review\`. Do not open `index.html`
+   from inside the zip, and do not move it away from the `images` folder next to it - it
+   will not find the photographs.
+2. If you keep it in OneDrive or Dropbox, right-click the folder and choose
+   **"Always keep on this device"**, or the images stay in the cloud and never load.
+3. Open **`index.html`** in **Chrome or Edge**. A normal window, not private/incognito.
+   Nothing to install. (Firefox and Safari cannot run it; the app will say so.)
+
+## 2. Saving your work - before anything else
+
+A window appears asking where to save. Click **"Save to new file..."**, type your name, and
+save it as `review_results.json` somewhere you will remember, such as Documents. The
+instructions open straight afterwards.
+
+The chip at the top right turns green and shows the filename and the time of the last save.
+**Everything you do is written into that file automatically.** Nothing is kept in the
+browser, so a closed tab or cleared history cannot lose it.
+
+**Coming back another day:** open `index.html`, click **"Open..."**, choose that same file,
+and you continue exactly where you stopped.
+
+If the chip ever turns red and says **NOT SAVING**, stop and choose the file again.
+
+## 3. What is on screen
+
+- **Left:** the photograph, with the model's proposed boxes drawn on it. The buttons
+  underneath switch each colour on and off, and let you draw your own box.
+- **Right:** three numbered steps, top to bottom. **Step 3 and its buttons are always
+  visible at the bottom** - they do not scroll away.
 
 | colour | meaning |
 |---|---|
-| cyan | proposed rule_1 — basic PPE |
-| yellow | proposed rule_2 — safety harness at height |
-| orange-red | proposed rule_3 — edge / excavation protection |
-| magenta | proposed rule_4 — person in a machine's operating radius |
-| **green — "MOCS r4"** | **human-annotated** worker+machine box from the MOCS dataset |
+| cyan | proposed rule 1 - basic PPE |
+| yellow | proposed rule 2 - safety harness |
+| orange-red | proposed rule 3 - edge protection |
+| magenta | proposed rule 4 - blind spot |
+| **green "MOCS"** | **a human-drawn box** from the source dataset - more reliable than the model's |
+| dashed | a box **you** drew (click it to delete it) |
 
-## Two things that are easy to get wrong
+## 4. The four safety rules
 
-**1. On every row you accept, fill ALL FOUR rules AND the caption — not just the
-proposed rule.** About one in ten construction images violates rule_1 (missing hard hat
-/ uncovered shoulders or legs). If you accept a row and leave `verify_rule_1` blank when
-the image really does show a rule_1 violation, you inject a false negative into the
-strongest rule in the project. Mark each of `verify_rule_1` … `verify_rule_4` as `y` or
-`n`, and `verify_caption_ok` as `y` or `n` — a rule left blank is read as "not
-violated", and a caption left blank cannot be used at all.
+Judge by these definitions, not by general site practice:
 
-**2. Do not trust the model's boxes.** Where a green "MOCS r4" box exists, prefer it —
-it comes from human annotation. Elsewhere, if the box is wrong but the finding is
-right, write a corrected box into `verify_corrected_boxes_1000` using the same
-`[xmin, ymin, xmax, ymax]` 0–1000 scale (0,0 = top-left).
+1. **Basic PPE** - a person *on foot* is missing basic PPE: no hard hat, or clothing that
+   leaves the shoulders or legs uncovered.
+2. **Safety harness** - a person *working at height* (scaffold, roof, beam, ladder or other
+   elevated structure) is not wearing a safety harness.
+3. **Edge protection** - an open excavation, trench, pit or floor edge has no guard rail,
+   barrier or warning marking.
+4. **Blind spot** - a person is standing within the operating radius or blind spot of an
+   excavator or other heavy machine.
 
-## Column meanings
+The test for all four: **answer *yes* only if you can point at the specific person, edge or
+machine at fault.** If you cannot see who or what is to blame, the answer is *no*.
+
+---
+
+## 5. Step 1 - the caption  (key `C`)
+
+One sentence describing the photo. **yes** if it matches what you see, **no** if it is wrong
+or describes a different scene. Required on every photo.
+
+## 6. Step 2 - the four rules  (keys `1` `2` `3` `4`)
+
+For each rule: **is it broken in this photo, yes or no?** Look at the photo and answer.
+It is **not** "do I agree with the model".
+
+The app tells you, in words under each pair of buttons, exactly what your answer recorded:
+
+| the model | what you see | you press | the app shows |
+|---|---|---|---|
+| flagged rule 1 | there really is a PPE breach | **yes** | confirmed - model was right |
+| flagged rule 1 | there is no breach | **no** | false alarm - model was wrong |
+| said nothing about rule 2 | there *is* a harness breach | **yes** | you added it - model missed it |
+| said nothing about rule 2 | no harness breach | **no** | agreed - not broken |
+
+Answer **all four on every photo**. A typical photo ends up rule 1 *yes*, rules 2-4 *no*.
+
+**Why blanks matter:** a rule you never answered is recorded as *not broken*, so skipping one
+on a photo that really does show it puts a mistake into the data. Same for the caption - one
+left blank cannot be used at all. The orange bar in Step 3 always names what is still missing,
+and the app stops you finishing a photo while anything is blank.
+
+## 7. Step 3 - use it or discard it  (keys `A` `R` `U`)
+
+| button | when |
+|---|---|
+| **Use it** `A` | "my answers above are correct". The normal ending for almost every photo. Press it **even when all four rules are *no*** - a confirmed-safe photo is as useful to us as a violation. |
+| **Discard** `R` | the *photograph* is unusable: too blurry, too dark, or not a construction scene. **Not** for "the model was wrong" - that is just *no* on the rules, then **Use it**. You should rarely need this. |
+| **Unsure** `U` | leave it and come back later. |
+| **hard** `H` | use freely, on top of any of the above: "this one was genuinely ambiguous". Knowing which were hard is useful - much better than agonising over it. |
+
+Use it and Discard both save and jump to the next photo automatically.
+
+## 8. Boxes and reasons
+
+The model's boxes are often wrong. If a rule really is broken but its box is on the wrong
+thing, choose that rule under **"draw a better box for"** below the photo and drag a new box.
+Drawing a box also sets that rule to *yes*. Click one of your dashed boxes to delete it.
+Where a green **MOCS** box exists, prefer it - a human drew it.
+
+If you turn **on** a rule the model did not propose, a **reason** box appears in that card.
+Please fill it: one sentence naming who or what is at fault and what the breach is, e.g.
+*"The worker on the left is on foot without a hard hat."* Without it the finding has no
+explanation attached. For a rule the model *did* propose, leave the box empty unless its
+sentence is wrong.
+
+## 9. Keyboard
+
+| key | does |
+|---|---|
+| `C` | caption: yes -> no -> blank |
+| `1` `2` `3` `4` | that rule: yes -> no -> blank |
+| `A` | Use it |
+| `R` | Discard |
+| `U` | Unsure |
+| `H` | flag as hard |
+| left / right arrow | previous / next photo |
+| `N` | next photo you have not done |
+| `?` | open the help page; `Esc` closes it |
+
+## 10. What order to work in
+
+Use the dropdown at the top left:
+
+1. **`sample`** - 150 photos, chosen at random. **Do this first.** It measures how accurate
+   the model is overall, which decides whether the rest is worth doing. Send the file back
+   after this before carrying on.
+2. **`tier1`** - 1,495 photos. The two rarest violation types, and the most valuable.
+3. **`tier2`** - 3,422 photos. Only after we have looked at the first two together.
+4. **`negatives`** - 100 photos where the model proposed *nothing*. Here you are checking
+   whether it missed something.
+
+## 11. Sending work back
+
+Email the `review_results.json` file whenever you finish a session. It is always up to date -
+there is nothing to export. Several files can be merged, so send it as often as you like.
+
+## 12. If something goes wrong
+
+| symptom | cause |
+|---|---|
+| no photos, grey boxes instead | the zip was not fully extracted, or `index.html` was moved away from `images` |
+| the app will not start | not Chrome or Edge |
+| red **NOT SAVING** chip | click "Save to file..." again |
+| I cannot find the Use it / Discard buttons | they are pinned at the bottom right, below the orange bar - they never scroll away |
+| anything else | press `F12`, click **Console**, and send a screenshot of the red text |
+
+---
+
+## Appendix - the spreadsheet fallback
+
+The `review_*.csv` files are a backup route if the app cannot be used at all. Open one in
+Excel, find each photo in `images/`, and fill the `verify_*` columns by hand:
 
 | column | fill with |
 |---|---|
-| `verify_decision` | `accept` / `reject` / `unsure` |
-| `verify_rule_1..4` | `y` if that rule really is violated, `n` if not |
-| `verify_caption_ok` | `y` / `n` — is the caption factually true of the image? |
-| `verify_corrected_reason` | a better one-sentence reason, if the model's is wrong |
-| `verify_corrected_boxes_1000` | `[x1, y1, x2, y2]`, 0–1000 scale; `;` between boxes |
+| `verify_decision` | `accept` (= Use it) / `reject` (= Discard) / `unsure` |
+| `verify_rule_1..4` | `y` if that rule really is broken, `n` if not |
+| `verify_caption_ok` | `y` / `n` |
+| `verify_corrected_reason` | a better one-sentence reason, if needed |
+| `verify_corrected_boxes_1000` | `[x1, y1, x2, y2]` on a 0-1000 scale, `;` between boxes |
+| `verify_difficulty` | `hard` if the photo was ambiguous |
 | `verify_notes` | anything else |
 
-`mocs_suggested_rule4_box_1000` is **empty for most rows on purpose** — MOCS's test
-split ships no human annotations, so the suggestion only exists for val-sourced images.
-
-## Order
-
-Do `review_sample.csv` first. It is a random sample and it tells us how accurate the
-model is overall. Then `review_tier1.csv` — those are the two rarest, most valuable
-rules. `review_negatives.csv` is images where the model proposed *nothing*: check
-whether it missed a real violation.
+The app is much faster and much less error-prone; use this only if you have to.
 """
-
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)

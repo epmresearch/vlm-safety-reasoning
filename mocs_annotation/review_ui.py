@@ -23,6 +23,15 @@ their own laptop, probably Windows, who should not have to install anything.
     ongoing saving, which is exactly the trap this design removes.
   * NOBODY CAN START WITHOUT A FILE. A full-screen gate blocks the app until one is
     chosen, so there is no path where someone works for an hour into nothing.
+  * THE ACTION BUTTONS ARE PINNED, NEVER SCROLLED. The right panel is a scrolling
+    body plus a fixed footer. When every section lived in one scrolling column the
+    Use it / Discard buttons fell below the fold on a 1366x768 laptop -- so the app
+    read as though it had no decision buttons at all, which is exactly how it was
+    reported.
+  * THE UI STATES WHAT IT IS RECORDING, rather than explaining it in a help page.
+    Every rule shows, in words, the fact your yes/no just asserted ("false alarm --
+    model was wrong"), and the pinned bar names what is still unanswered. Prose in
+    a help overlay is read once; a chip under your thumb is read every image.
 """
 
 HTML_TEMPLATE = r"""<!DOCTYPE html>
@@ -61,15 +70,30 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   .canvasbox{flex:1 1 auto;min-height:0;position:relative;display:flex;
              align-items:center;justify-content:center;overflow:hidden}
   canvas{max-width:100%;max-height:100%;cursor:crosshair}
-  .right{width:380px;flex:0 0 380px;min-height:0;overflow-y:auto;background:var(--panel);
-         border-left:1px solid var(--line);padding:10px}
-  @media (max-width:1250px){ .right{width:330px;flex:0 0 330px} }
+  /* Scrolling body + PINNED footer -- see the module docstring. The decision buttons
+     must be on screen at every window height; they are the point of the app. */
+  .right{width:390px;flex:0 0 390px;min-height:0;background:var(--panel);
+         border-left:1px solid var(--line);display:flex;flex-direction:column}
+  .rscroll{flex:1 1 auto;min-height:0;overflow-y:auto;padding:10px}
+  .rfoot{flex:0 0 auto;background:var(--panel2);border-top:2px solid var(--line);
+         padding:8px 10px}
+  @media (max-width:1250px){ .right{width:340px;flex:0 0 340px} }
   .sec{margin-bottom:10px;padding-bottom:9px;border-bottom:1px solid var(--line)}
-  .sec:last-child{border:0}
+  .sec:last-child{border:0;margin-bottom:0}
   h3{margin:0 0 5px;font-size:10px;letter-spacing:.09em;text-transform:uppercase;color:var(--dim)}
+  .step{background:var(--accent);color:#fff;border-radius:4px;padding:1px 5px;
+        letter-spacing:0;margin-right:6px;font-size:10px}
   .row{display:flex;gap:5px;align-items:center;flex-wrap:wrap}
   .chip{display:inline-block;padding:1px 6px;border-radius:99px;font-size:11px;
         background:var(--panel2);border:1px solid var(--line);color:var(--dim)}
+  /* The "what you just recorded" chips. Colour carries the meaning at a glance,
+     the words carry it unambiguously. */
+  .st{display:inline-block;padding:1px 7px;border-radius:99px;font-size:11px;
+      border:1px solid var(--line);background:var(--panel2);color:var(--dim)}
+  .st.todo{color:#ffd28a;border-color:var(--maybe);background:#3a2a00;font-weight:600}
+  .st.good{color:#8ef0b0;border-color:var(--ok);background:#123d22}
+  .st.bad {color:#ffb3b3;border-color:var(--no);background:#3d1212}
+  .st.add {color:#cfe0ff;border-color:var(--accent);background:#132844}
   .rule{border:1px solid var(--line);border-radius:8px;padding:6px 7px;margin-bottom:5px;
         background:var(--panel2)}
   .rule.prop{border-left:4px solid var(--line)}
@@ -77,6 +101,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   .rule[data-r="rule_2"].prop{border-left-color:var(--r2)}
   .rule[data-r="rule_3"].prop{border-left-color:var(--r3)}
   .rule[data-r="rule_4"].prop{border-left-color:var(--r4)}
+  .rule.unset{border-color:var(--maybe)}
   .rule .hd{display:flex;align-items:center;gap:6px;margin-bottom:5px}
   .rule .nm{font-weight:600}
   .reason{color:var(--fg);font-size:13px;margin:4px 0}
@@ -84,20 +109,20 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   .y{border-color:var(--ok)} .y.on{background:var(--ok);border-color:var(--ok);color:#06210f}
   .n{border-color:var(--no)} .n.on{background:var(--no);border-color:var(--no);color:#2a0606}
   .m{border-color:var(--maybe)} .m.on{background:var(--maybe);border-color:var(--maybe);color:#2a1a00}
-  textarea{width:100%;min-height:52px;resize:vertical}
+  textarea{width:100%;min-height:46px;resize:vertical}
   .big{font-size:14px;padding:6px 11px;font-weight:600}
   .caption{background:var(--panel2);border:1px solid var(--line);border-radius:8px;
-           padding:7px;font-size:12.5px;max-height:130px;overflow-y:auto}
-  textarea#notes{min-height:40px}
-  .badge{background:var(--no);color:#fff;border-radius:99px;padding:1px 7px;font-size:11px}
+           padding:7px;font-size:12.5px;max-height:120px;overflow-y:auto}
   #help,#gate{position:fixed;inset:0;background:rgba(0,0,0,.82);display:none;z-index:9;
         align-items:center;justify-content:center}
   #gate{background:rgba(10,11,14,.97);z-index:10}
   #help>div,#gate>div{background:var(--panel);border:1px solid var(--line);border-radius:12px;
-            padding:22px;max-width:620px;max-height:84vh;overflow:auto}
+            padding:22px;max-width:680px;max-height:86vh;overflow:auto}
   kbd{background:var(--panel2);border:1px solid var(--line);border-radius:4px;
       padding:1px 6px;font:12px ui-monospace,monospace}
   table{border-collapse:collapse;width:100%} td{padding:3px 6px;vertical-align:top}
+  th{padding:3px 6px;text-align:left;font-size:11px;text-transform:uppercase;
+     letter-spacing:.06em;color:var(--dim);border-bottom:1px solid var(--line)}
   .sw{display:inline-block;width:11px;height:11px;border-radius:2px;margin-right:5px;
       vertical-align:-1px}
 </style>
@@ -105,50 +130,53 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 <body>
 
 <div class="bar">
-  <select id="fQueue"></select>
-  <select id="fRule">
+  <select id="fQueue" title="Which batch of photos to work through"></select>
+  <select id="fRule" title="Show only photos where the model flagged this rule">
     <option value="">all rules</option>
-    <option value="rule_1">rule_1</option><option value="rule_2">rule_2</option>
-    <option value="rule_3">rule_3</option><option value="rule_4">rule_4</option>
+    <option value="rule_1">model flagged rule_1</option>
+    <option value="rule_2">model flagged rule_2</option>
+    <option value="rule_3">model flagged rule_3</option>
+    <option value="rule_4">model flagged rule_4</option>
   </select>
   <select id="fState">
-    <option value="">all</option><option value="todo">undecided</option>
-    <option value="done">decided</option>
+    <option value="">all</option><option value="todo">not done yet</option>
+    <option value="done">done</option>
   </select>
   <select id="fSource">
     <option value="">val+test</option><option value="val">val</option><option value="test">test</option>
   </select>
-  <input id="fText" placeholder="search" style="width:110px">
+  <input id="fText" placeholder="search" style="width:100px">
   <span class="grow"></span>
   <span id="prog" class="muted"></span>
   <span id="smode" class="chip"></span>
-  <button id="bSaveFile" class="big" title="Save to a new file">Save to file…</button>
-  <button id="bOpenFile" class="big" title="Open a file you saved earlier">Open…</button>
-  <button id="bHelp" title="Help">?</button>
+  <button id="bSaveFile" class="big" title="Start a new results file">Save to file&hellip;</button>
+  <button id="bOpenFile" class="big" title="Carry on from a file you saved earlier">Open&hellip;</button>
+  <button id="bHelp" class="big" title="How to use this (or press ?)">? Help</button>
 </div>
 
 <div class="wrap">
   <div class="left">
     <div class="canvasbox"><canvas id="cv"></canvas></div>
     <div class="bar" style="border-top:1px solid var(--line);border-bottom:0">
-      <span class="muted">show</span>
-      <button class="lay on" data-r="rule_1" title="rule_1 boxes"><span class="sw" style="background:var(--r1)"></span>1</button>
-      <button class="lay on" data-r="rule_2" title="rule_2 boxes"><span class="sw" style="background:var(--r2)"></span>2</button>
-      <button class="lay on" data-r="rule_3" title="rule_3 boxes"><span class="sw" style="background:var(--r3)"></span>3</button>
-      <button class="lay on" data-r="rule_4" title="rule_4 boxes"><span class="sw" style="background:var(--r4)"></span>4</button>
-      <button class="lay on" data-r="mocs" title="human-annotated MOCS box"><span class="sw" style="background:var(--mocs)"></span>MOCS</button>
+      <span class="muted">show boxes</span>
+      <button class="lay on" data-r="rule_1" title="show / hide rule_1 boxes"><span class="sw" style="background:var(--r1)"></span>1</button>
+      <button class="lay on" data-r="rule_2" title="show / hide rule_2 boxes"><span class="sw" style="background:var(--r2)"></span>2</button>
+      <button class="lay on" data-r="rule_3" title="show / hide rule_3 boxes"><span class="sw" style="background:var(--r3)"></span>3</button>
+      <button class="lay on" data-r="rule_4" title="show / hide rule_4 boxes"><span class="sw" style="background:var(--r4)"></span>4</button>
+      <button class="lay on" data-r="mocs" title="show / hide the human-drawn MOCS box"><span class="sw" style="background:var(--mocs)"></span>MOCS</button>
       <span class="grow"></span>
-      <span class="muted">draw</span>
-      <select id="drawRule" title="Pick a rule, then drag on the image to add a box">
-        <option value="">off</option>
+      <span class="muted">draw a better box for</span>
+      <select id="drawRule" title="Pick a rule, then drag a box on the photo">
+        <option value="">(off)</option>
         <option value="rule_1">rule_1</option><option value="rule_2">rule_2</option>
         <option value="rule_3">rule_3</option><option value="rule_4">rule_4</option>
       </select>
-      <button id="bClearBoxes" title="Remove every box you drew on this image">clear mine</button>
+      <button id="bClearBoxes" title="Remove every box you drew on this photo">clear mine</button>
     </div>
   </div>
 
   <div class="right">
+   <div class="rscroll">
     <div class="sec">
       <div class="row" style="justify-content:space-between">
         <strong id="rid">-</strong>
@@ -158,64 +186,64 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     </div>
 
     <div class="sec" id="secCap">
-      <h3>Caption &mdash; is it true of this photo? <kbd>C</kbd></h3>
+      <h3><span class="step">Step 1</span>Does the caption match this photo? <kbd>C</kbd></h3>
       <div class="caption" id="cap"></div>
       <div class="row" style="margin-top:6px">
-        <span class="muted">accurate?</span>
-        <button class="y" data-cap="y">yes</button>
-        <button class="n" data-cap="n">no</button>
-        <span id="capTodo" class="chip" style="border-color:var(--maybe);color:var(--maybe)">not judged</span>
+        <button class="y" data-cap="y" title="The caption describes this photo correctly">yes</button>
+        <button class="n" data-cap="n" title="The caption is wrong, or describes a different scene">no</button>
+        <span id="capSt" class="st"></span>
       </div>
     </div>
 
     <div class="sec">
-      <h3>Is each rule broken in THIS photo? <kbd>1</kbd><kbd>2</kbd><kbd>3</kbd><kbd>4</kbd></h3>
-      <div class="muted" style="margin:-2px 0 7px">Your own judgement of the photograph &mdash;
-        <em>not</em> whether you agree with the model. Answer all four, every image.</div>
+      <h3><span class="step">Step 2</span>Is each rule broken in THIS photo? <kbd>1</kbd><kbd>2</kbd><kbd>3</kbd><kbd>4</kbd></h3>
+      <div class="muted" style="margin:-2px 0 7px">
+        Answer for <strong>all four</strong>, on every photo, by looking at the photo.
+        <strong>yes</strong> = it really is broken here; <strong>no</strong> = it is not.
+        This is <em>not</em> &ldquo;do I agree with the model&rdquo; &mdash; the coloured line
+        under each pair of buttons tells you exactly what you just recorded.</div>
       <div id="rules"></div>
     </div>
 
     <div class="sec">
-      <h3>MOCS</h3>
+      <h3>Extra information</h3>
       <div class="muted" id="cats"></div>
       <div class="muted" id="r4hint" style="margin-top:4px"></div>
+      <textarea id="notes" placeholder="notes for me (optional)" style="margin-top:7px"></textarea>
     </div>
+   </div>
 
-    <div class="sec">
-      <h3>This image</h3>
+   <div class="rfoot">
+      <div class="row" style="margin-bottom:6px">
+        <span class="step">Step 3</span><span id="todoChip" class="st"></span>
+      </div>
       <div class="row">
         <button class="dec big y" data-dec="accept"
-                title="My answers above are right — use this image">Use it <kbd>A</kbd></button>
+                title="My answers above are right - keep this photo and my answers">Use it <kbd>A</kbd></button>
         <button class="dec big n" data-dec="reject"
-                title="Unusable photo — blurry, unclear, or not a construction scene">Discard <kbd>R</kbd></button>
+                title="Nobody could judge this photo - blurry, too dark, or not a construction scene">Discard <kbd>R</kbd></button>
         <button class="dec big m" data-dec="unsure"
-                title="Come back to this one">Unsure <kbd>U</kbd></button>
+                title="Leave it and come back later">Unsure <kbd>U</kbd></button>
+        <span class="grow"></span>
+        <button id="bHard" class="m" title="Mark as difficult, for a second opinion">hard <kbd>H</kbd></button>
       </div>
-      <div class="muted" style="margin-top:5px"><strong>Use it</strong> even when every rule is
-        &ldquo;no&rdquo; &mdash; a verified safe photo is still useful.
-        <strong>Discard</strong> is only for photos nobody could judge.</div>
+      <div class="muted" style="margin-top:5px">
+        <strong>Use it</strong> = my answers are right &mdash; press it <em>even when every
+        rule is &ldquo;no&rdquo;</em>. <strong>Discard</strong> = the photo itself is unusable
+        (rare). Either one saves and jumps to the next photo.</div>
       <div class="row" style="margin-top:7px">
-        <button id="bHard" class="m">flag as hard / needs 2nd opinion <kbd>H</kbd></button>
+        <button id="bPrev" title="Previous photo">&larr; prev</button>
+        <button id="bNext" title="Next photo">next &rarr;</button>
+        <button id="bNextTodo" title="Skip to the next photo you have not done">next not-done <kbd>N</kbd></button>
+        <span class="grow"></span>
+        <input id="jump" style="width:80px" placeholder="go to #" title="Type a position number, or an image id">
       </div>
-      <textarea id="notes" placeholder="notes (optional)" style="margin-top:7px"></textarea>
-    </div>
-
-    <div class="sec">
-      <div class="row">
-        <button id="bPrev">&larr; prev</button>
-        <button id="bNext">next &rarr;</button>
-        <button id="bNextTodo" class="big">next undecided <kbd>N</kbd></button>
-      </div>
-      <div class="row" style="margin-top:7px">
-        <span class="muted">jump</span>
-        <input id="jump" style="width:90px" placeholder="# or id">
-      </div>
-    </div>
+   </div>
   </div>
 </div>
 
 <div id="gate"><div>
-  <h2 style="margin-top:0">Choose where your work is saved</h2>
+  <h2 style="margin-top:0">First: choose where your work is saved</h2>
   <p>Everything you do is written straight to a file on your own computer, as you go.
      Nothing is kept in the browser, so nothing can be lost by closing a tab or clearing
      browsing data &mdash; but you have to pick that file before you start.</p>
@@ -225,88 +253,128 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   </div>
   <p class="muted"><strong>First time?</strong> Press <em>Save to new file&hellip;</em> and
      save it as <code>review_results.json</code> somewhere you will remember, such as your
-     Documents folder.<br>
+     Documents folder. The instructions open straight afterwards.<br>
      <strong>Coming back?</strong> Press <em>Open saved file&hellip;</em> and pick that same
      file &mdash; your work reappears and keeps saving to it.</p>
   <p id="gateWarn" style="color:#ff8a8a"></p>
 </div></div>
 
 <div id="help"><div>
-  <h2 style="margin-top:0">How to review</h2>
-  <p>Every row is a <strong>model proposal, not a label</strong>. Your decision is what makes it data.</p>
+  <h2 style="margin-top:0">How to review &mdash; everything, on one page</h2>
+  <p>A computer model looked at each photo and <strong>guessed</strong> which safety rules it
+     breaks. Those guesses are often wrong. You decide what is actually true, and
+     <strong>your answers are what become the dataset</strong>.</p>
+  <p class="muted">Three steps per photo, then it moves on by itself. About 5&ndash;8 seconds
+     each once you get into a rhythm.</p>
 
-  <h3>The two questions, and what they are NOT</h3>
-  <p><strong>1. Is each rule broken in this photo?</strong> &mdash; <em>yes</em> / <em>no</em> per rule.
-     This is your reading of the photograph. It is <strong>not</strong> &ldquo;do I agree with the
-     model&rdquo;.</p>
+  <h3>Step 1 &mdash; the caption <kbd>C</kbd></h3>
+  <p>One sentence describing the photo. <strong>yes</strong> if it matches what you see,
+     <strong>no</strong> if it is wrong or describes a different scene.</p>
+
+  <h3>Step 2 &mdash; the four rules <kbd>1</kbd><kbd>2</kbd><kbd>3</kbd><kbd>4</kbd></h3>
+  <p>For each rule: <strong>is it broken in this photo, yes or no?</strong> Look at the photo
+     and answer. It is <em>not</em> a vote on whether the model was right &mdash; though your
+     answer does decide that, and the app says so back to you:</p>
   <table>
-    <tr><td>model flagged rule&nbsp;1, and there really is a PPE breach</td><td><strong>yes</strong></td></tr>
-    <tr><td>model flagged rule&nbsp;1, but there isn't one</td><td><strong>no</strong></td></tr>
-    <tr><td>model said nothing about rule&nbsp;2, but there <em>is</em> a harness breach</td><td><strong>yes</strong></td></tr>
-    <tr><td>model said nothing about rule&nbsp;2, and there isn't one</td><td><strong>no</strong></td></tr>
+    <tr><th>the model</th><th>what you see</th><th>press</th><th>the app records</th></tr>
+    <tr><td>flagged rule&nbsp;1</td><td>there really is a PPE breach</td><td><strong>yes</strong></td><td><span class="st good">confirmed &mdash; model was right</span></td></tr>
+    <tr><td>flagged rule&nbsp;1</td><td>there is no breach</td><td><strong>no</strong></td><td><span class="st bad">false alarm &mdash; model was wrong</span></td></tr>
+    <tr><td>said nothing about rule&nbsp;2</td><td>there <em>is</em> a harness breach</td><td><strong>yes</strong></td><td><span class="st add">you added it &mdash; model missed it</span></td></tr>
+    <tr><td>said nothing about rule&nbsp;2</td><td>no harness breach</td><td><strong>no</strong></td><td><span class="st good">agreed &mdash; not broken</span></td></tr>
   </table>
-  <p class="muted">A typical image: rule_1 <em>yes</em>, rules 2&ndash;4 <em>no</em>. Four answers, every time.</p>
-  <p><strong>2. Can we use this image?</strong> &mdash; <em>Use it</em> / <em>Discard</em> / <em>Unsure</em>.
-     <em>Use it</em> means &ldquo;my answers above are correct&rdquo;, so press it even when every
-     rule is <em>no</em> &mdash; a verified safe photo is still useful data. <em>Discard</em> is only
-     for a photo nobody could judge: too blurry, too dark, or not a construction scene.
-     You should rarely need it.</p>
-  <h3>Two things that are easy to get wrong</h3>
-  <ol>
-    <li><strong>On every image you accept, judge all four rules AND the caption</strong> &mdash;
-      not only the rules the model flagged. About 1 image in 10 violates rule&nbsp;1 (no hard
-      hat / uncovered shoulders or legs), so leaving it unset on a photo that really shows it
-      puts a false negative into the strongest rule in the project. A rule you never marked is
-      recorded as <em>not violated</em>, and a caption you never marked cannot be used at all.
-      The app will stop you if you try to accept with anything unjudged.</li>
-    <li><strong>Do not trust the model's boxes.</strong> Where a green <em>MOCS r4</em> box
-      exists it came from human annotation &mdash; prefer it. Otherwise, if the finding is
-      right but the box is wrong, pick the rule under &ldquo;draw box for&rdquo; and drag a
-      new one on the image.</li>
-    <li><strong>If you turn a rule ON that the model did not propose, fill in the reason
-      box.</strong> It appears inside the rule card as soon as you mark the rule
-      &ldquo;yes&rdquo;. One sentence: <em>who or what is at fault, identified by position
-      or appearance, and what the breach is</em> &mdash; e.g. &ldquo;The worker on the left
-      is on foot without a hard hat.&rdquo; Without it we get a violation with nothing to
-      learn from. For a rule the model <em>did</em> propose, leave it blank unless its
-      reason is wrong.</li>
-  </ol>
-  <h3>Colours</h3>
+  <p class="muted">A typical photo ends up rule_1 <em>yes</em>, rules 2&ndash;4 <em>no</em>.
+     Four answers every time &mdash; a rule left blank is recorded as <em>not broken</em>,
+     so skipping one on a photo that really does show it puts a mistake into the data.</p>
+
+  <h3>The four rules, in full</h3>
   <table>
-    <tr><td><span class="sw" style="background:var(--r1)"></span>rule_1</td><td>basic PPE &mdash; no hard hat, uncovered shoulders/legs</td></tr>
-    <tr><td><span class="sw" style="background:var(--r2)"></span>rule_2</td><td>working at height with no safety harness</td></tr>
-    <tr><td><span class="sw" style="background:var(--r3)"></span>rule_3</td><td>open excavation / edge with no guard rail or barrier</td></tr>
-    <tr><td><span class="sw" style="background:var(--r4)"></span>rule_4</td><td>person inside a machine's operating radius / blind spot</td></tr>
-    <tr><td><span class="sw" style="background:var(--mocs)"></span>MOCS r4</td><td><strong>human-annotated</strong> worker+machine box. Trust this over the model</td></tr>
+    <tr><td><span class="sw" style="background:var(--r1)"></span><strong>rule_1</strong></td>
+        <td>a person <em>on foot</em> is missing basic PPE &mdash; no hard hat, or clothing
+            that leaves the shoulders or legs uncovered</td></tr>
+    <tr><td><span class="sw" style="background:var(--r2)"></span><strong>rule_2</strong></td>
+        <td>a person <em>working at height</em> (scaffold, roof, beam, ladder) is not wearing
+            a safety harness</td></tr>
+    <tr><td><span class="sw" style="background:var(--r3)"></span><strong>rule_3</strong></td>
+        <td>an open excavation, trench, pit or floor edge has no guard rail, barrier or
+            warning marking</td></tr>
+    <tr><td><span class="sw" style="background:var(--r4)"></span><strong>rule_4</strong></td>
+        <td>a person is standing inside the operating radius / blind spot of an excavator or
+            other heavy machine</td></tr>
   </table>
-  <p class="muted">Dashed boxes are ones you drew. Click a dashed box to delete it.</p>
+  <p><strong>The test for all four:</strong> answer <em>yes</em> only if you can point at the
+     specific person, edge or machine at fault. If you cannot see who or what is to blame,
+     the answer is <em>no</em>.</p>
+
+  <h3>Step 3 &mdash; use it or discard it <kbd>A</kbd> <kbd>R</kbd> <kbd>U</kbd></h3>
+  <table>
+    <tr><td style="white-space:nowrap"><strong>Use it</strong> <kbd>A</kbd></td>
+        <td>&ldquo;my answers above are correct&rdquo;. This is the normal ending for almost
+            every photo &mdash; press it <strong>even when all four rules are
+            &ldquo;no&rdquo;</strong>, because a confirmed-safe photo is as useful to us as a
+            violation.</td></tr>
+    <tr><td style="white-space:nowrap"><strong>Discard</strong> <kbd>R</kbd></td>
+        <td>the <em>photograph</em> is unusable: too blurry, too dark, or not a construction
+            scene at all. <strong>Not</strong> for &ldquo;the model was wrong&rdquo; &mdash;
+            that is simply <em>no</em> on the rules, then <em>Use it</em>. You should rarely
+            need this.</td></tr>
+    <tr><td style="white-space:nowrap"><strong>Unsure</strong> <kbd>U</kbd></td>
+        <td>leave it and come back later.</td></tr>
+    <tr><td style="white-space:nowrap"><strong>hard</strong> <kbd>H</kbd></td>
+        <td>use freely, on top of any of the above: &ldquo;this one was genuinely
+            ambiguous&rdquo;. Knowing which were hard is useful &mdash; much better than
+            agonising over it.</td></tr>
+  </table>
+  <p class="muted">The orange bar just above those buttons always names what is still
+     unanswered, and the app stops you pressing <em>Use it</em> while anything is blank.</p>
+
+  <h3>Boxes</h3>
+  <table>
+    <tr><td style="white-space:nowrap"><span class="sw" style="background:var(--mocs)"></span><strong>green &ldquo;MOCS&rdquo;</strong></td>
+        <td><strong>drawn by a human</strong>, from the source dataset. Trust it over the
+            model's.</td></tr>
+    <tr><td>solid colour</td><td>the model's guess &mdash; often on the wrong thing</td></tr>
+    <tr><td>dashed</td><td>a box <strong>you</strong> drew. Click it to delete it.</td></tr>
+  </table>
+  <p>If a rule really is broken but the model's box is on the wrong object, pick that rule in
+     <em>&ldquo;draw a better box for&rdquo;</em> under the photo and drag a new box. Drawing a
+     box also sets that rule to <em>yes</em>.</p>
+
+  <h3>Reasons</h3>
+  <p>If you turn <strong>on</strong> a rule the model did not propose, a reason box appears in
+     that card. Please write one sentence naming <em>who or what</em> is at fault and
+     <em>what</em> the breach is &mdash; e.g. &ldquo;The worker on the left is on foot without a
+     hard hat.&rdquo; For a rule the model <em>did</em> propose, leave it blank unless its
+     sentence is wrong.</p>
+
   <h3>Keyboard</h3>
   <table>
-    <tr><td><kbd>1</kbd><kbd>2</kbd><kbd>3</kbd><kbd>4</kbd></td><td>cycle that rule: yes &rarr; no &rarr; unset</td></tr>
-    <tr><td><kbd>A</kbd> <kbd>R</kbd> <kbd>U</kbd></td><td>accept / reject / unsure</td></tr>
-    <tr><td><kbd>C</kbd></td><td>toggle &ldquo;caption accurate&rdquo;</td></tr>
+    <tr><td><kbd>1</kbd><kbd>2</kbd><kbd>3</kbd><kbd>4</kbd></td><td>that rule: yes &rarr; no &rarr; blank</td></tr>
+    <tr><td><kbd>C</kbd></td><td>caption: yes &rarr; no &rarr; blank</td></tr>
+    <tr><td><kbd>A</kbd></td><td>Use it</td></tr>
+    <tr><td><kbd>R</kbd></td><td>Discard</td></tr>
+    <tr><td><kbd>U</kbd></td><td>Unsure</td></tr>
     <tr><td><kbd>H</kbd></td><td>flag as hard</td></tr>
-    <tr><td><kbd>&larr;</kbd> <kbd>&rarr;</kbd></td><td>previous / next image</td></tr>
-    <tr><td><kbd>N</kbd></td><td>next undecided</td></tr>
-    <tr><td><kbd>E</kbd></td><td>export</td></tr>
+    <tr><td><kbd>&larr;</kbd> <kbd>&rarr;</kbd></td><td>previous / next photo</td></tr>
+    <tr><td><kbd>N</kbd></td><td>next photo you have not done</td></tr>
+    <tr><td><kbd>?</kbd></td><td>open this page &mdash; <kbd>Esc</kbd> closes it</td></tr>
   </table>
-  <h3>Saving</h3>
+
+  <h3>Saving, and sending your work back</h3>
   <p>Your work goes <strong>straight into a file on your own computer</strong>, automatically,
      every time you change anything. Nothing is stored in the browser, so closing the tab or
      clearing browsing data cannot lose it.</p>
-  <p><strong>Starting out:</strong> press <em>Save to new file&hellip;</em> and save it as
+  <p><strong>Starting out:</strong> press <em>Save to file&hellip;</em> and save it as
      <code>review_results.json</code> somewhere you will remember.<br>
-     <strong>Coming back:</strong> press <em>Open saved file&hellip;</em> and pick that same file.
-     Your work reappears and keeps saving to it.</p>
-  <p>The chip in the toolbar shows the filename and the time of the last save, so you can always
-     see that it is working. If it ever turns red and says
+     <strong>Coming back:</strong> press <em>Open&hellip;</em> and pick that same file. Your
+     work reappears and keeps saving to it.</p>
+  <p>The chip in the toolbar shows the filename and the time of the last save. If it ever
+     turns red and says
      <span class="chip" style="background:#4d1414;border-color:#ff5252;color:#ffb3b3">NOT SAVING</span>,
      stop and choose the file again.</p>
-  <p class="muted">When you finish a session, send that <code>.json</code> file back. There is
-     nothing to export &mdash; it is already up to date.</p>
-  <p class="muted">Suggested order: <strong>sample</strong> first (it tells us how accurate
-     the model is), then <strong>tier1</strong> (the two rarest, most valuable rules).</p>
-  <button onclick="document.getElementById('help').style.display='none'">Close</button>
+  <p class="muted">When you finish a session, email that <code>.json</code> file back. There is
+     nothing to export &mdash; it is already up to date. Order of work: <strong>sample</strong>
+     first (150 photos; it tells us how accurate the model is), then <strong>tier1</strong>.</p>
+  <button class="big" onclick="document.getElementById('help').style.display='none'">Close &mdash; start reviewing</button>
 </div></div>
 
 <script>
@@ -314,7 +382,6 @@ const DATA = __DATA__;
 const META = __META__;
 const RULES = ["rule_1","rule_2","rule_3","rule_4"];
 const COL = {rule_1:"#00E5FF",rule_2:"#FFEA00",rule_3:"#FF3D00",rule_4:"#D500F9",mocs:"#00E676"};
-const LS_KEY = "mocs_review_" + META.corpus_key;
 
 let state = {};          // id -> verdict object
 let view = [];           // filtered indices into DATA
@@ -371,6 +438,14 @@ async function writeFile(){
 function vd(id){ const o = state[id] || (state[id] = {rules:{}, boxes:{}, reasons:{}});
                  o.rules=o.rules||{}; o.boxes=o.boxes||{}; o.reasons=o.reasons||{}; return o; }
 function decided(id){ return !!(state[id] && state[id].decision); }
+
+// What is still unanswered on this image. ONE function, used by the pinned bar and
+// by the Use-it guard, so the warning can never disagree with what the bar showed.
+function missingOn(v){
+  const m = RULES.filter(r=>!v.rules[r]);
+  if(!v.caption_ok) m.push("caption");
+  return m;
+}
 
 // ---------------------------------------------------------------- filtering
 function applyFilters(){
@@ -463,45 +538,63 @@ window.addEventListener("resize",drawCanvas);
 
 // ---------------------------------------------------------------- render
 function cur(){ return view.length ? DATA[view[pos]] : null; }
+
+// The four things a yes/no can MEAN, spelled out. This is the standing answer to
+// "what does yes mean when the model did not propose the rule?" -- printed under the
+// buttons, every image, instead of buried in a help page nobody re-reads.
+function ruleStatus(proposed, val){
+  if(!val)     return ["todo", "not judged yet"];
+  if(proposed) return val==="y" ? ["good","confirmed — model was right"]
+                                : ["bad", "false alarm — model was wrong"];
+  return         val==="y" ? ["add", "you added it — model missed it"]
+                           : ["good","agreed — not broken"];
+}
 function render(){
   const d=cur();
   prog.textContent = view.length
-    ? `${pos+1} / ${view.length}   ·   ${Object.values(state).filter(v=>v.decision).length} decided of ${DATA.length}`
+    ? `${pos+1} / ${view.length}   ·   ${Object.values(state).filter(v=>v.decision).length} done of ${DATA.length}`
     : "nothing matches these filters";
-  if(!d){ ctx.clearRect(0,0,cv.width,cv.height); rid.textContent="-"; rules.innerHTML=""; return; }
+  if(!d){ ctx.clearRect(0,0,cv.width,cv.height); rid.textContent="-"; rules.innerHTML="";
+          todoChip.className="st"; todoChip.textContent=""; return; }
   const v=vd(d.id);
   rid.textContent=d.id; rsrc.textContent=d.src; rrun.textContent=d.run;
   rq.textContent="queues: "+(d.q||[]).join(", ");
   cap.textContent=d.cap||"(no caption)";
-  cats.textContent="categories: "+((d.cats||[]).join(", ")||"none (test split carries no MOCS annotations)");
+  cats.textContent="MOCS categories: "+((d.cats||[]).join(", ")||"none (the test split carries no MOCS annotations)");
   r4hint.textContent=(d.r4&&d.r4.length)
-      ? "green box = human-annotated worker+machine region — prefer it for rule_4"
-      : "no MOCS geometry for this image";
+      ? "green box = human-drawn worker+machine region — prefer it for rule_4"
+      : "no human-drawn box for this photo";
   document.querySelectorAll("[data-cap]").forEach(b=>b.classList.toggle("on",v.caption_ok===b.dataset.cap));
-  capTodo.style.display = v.caption_ok ? "none" : "inline-block";
+  const cs = !v.caption_ok      ? ["todo","not judged yet"]
+           : v.caption_ok==="y" ? ["good","caption is correct"]
+                                : ["bad", "caption is wrong"];
+  capSt.className="st "+cs[0]; capSt.textContent=cs[1];
   document.querySelectorAll(".dec").forEach(b=>b.classList.toggle("on",v.decision===b.dataset.dec));
   bHard.classList.toggle("on",!!v.hard);
   notes.value=v.notes||"";
+
   rules.innerHTML = RULES.map(r=>{
-    const p=d.r[r]&&d.r[r].p, val=v.rules[r]||"";
+    const p=!!(d.r[r]&&d.r[r].p), val=v.rules[r]||"";
     const mine=(v.boxes[r]||[]).length;
-    return `<div class="rule ${p?'prop':''}" data-r="${r}">
+    const st=ruleStatus(p,val);
+    return `<div class="rule ${p?'prop':''} ${val?'':'unset'}" data-r="${r}">
       <div class="hd"><span class="sw" style="background:${COL[r]}"></span>
         <span class="nm">${r}</span>
-        <span class="chip">${p?'proposed':'not proposed'}</span>
+        <span class="chip">${p?'model flagged it':'model said nothing'}</span>
         <span class="grow" style="flex:1"></span>
         <button class="y rv ${val==='y'?'on':''}" data-r="${r}" data-v="y"
                 title="${r} IS broken in this photo">yes</button>
         <button class="n rv ${val==='n'?'on':''}" data-r="${r}" data-v="n"
                 title="${r} is NOT broken in this photo">no</button>
       </div>
+      <div><span class="st ${st[0]}">${st[1]}</span></div>
       ${p?`<div class="reason">${esc(d.r[r].reason||"")}</div>
            <div class="muted">${(d.r[r].boxes||[]).length} model box(es)${mine?` · ${mine} of yours`:""}</div>`
-         :`<div class="muted">${mine?`${mine} box(es) you drew`:"&mdash;"}</div>`}
+         :`<div class="muted" style="margin-top:4px">${mine?`${mine} box(es) you drew`:"the model did not mention this rule"}</div>`}
       ${val==="y"?`<input class="rsn" data-r="${r}" value="${esc(v.reasons[r]||"")}"
           style="width:100%;margin-top:6px" placeholder="${p
-            ? "reason looks wrong? write a better one (optional)"
-            : "REASON NEEDED — one sentence: who/what is at fault, and what the breach is"}">`:""}
+            ? "reason wrong? write a better one (optional)"
+            : "REASON PLEASE — one sentence: who/what is at fault, and what the breach is"}">`:""}
     </div>`;
   }).join("");
   rules.querySelectorAll(".rv").forEach(b=>b.onclick=()=>{
@@ -512,6 +605,21 @@ function render(){
   rules.querySelectorAll(".rsn").forEach(el=>el.oninput=()=>{
     vd(d.id).reasons[el.dataset.r]=el.value; save();
   });
+
+  // The pinned bar always names what is left, in the same words the guard will use.
+  const miss=missingOn(v);
+  if(miss.length){
+    todoChip.className="st todo";
+    todoChip.textContent="still to judge: "+miss.join(", ");
+  } else {
+    const needR=RULES.filter(r=>v.rules[r]==="y" && !(d.r[r]&&d.r[r].p)
+                                && !(v.reasons[r]||"").trim());
+    if(needR.length){ todoChip.className="st add";
+                      todoChip.textContent="all judged · please add a reason for "+needR.join(", "); }
+    else { todoChip.className="st good";
+           todoChip.textContent="all 4 rules + caption judged — ready"; }
+  }
+
   img.onload=drawCanvas; img.onerror=drawCanvas;
   if(img.getAttribute("src")!==d.img){ img.src=d.img; } else drawCanvas();
 }
@@ -523,19 +631,18 @@ function esc(s){ return String(s==null?"":s).replace(/[&<>"]/g,
 // ---------------------------------------------------------------- actions
 function setDec(x){
   const d=cur(); if(!d) return; const v=vd(d.id);
-  // An ACCEPT with anything left unset is the one silently damaging outcome: a rule
-  // nobody looked at is recorded as "not violated" (a false negative in the data),
-  // and an unchecked caption cannot be used as a training target at all. Reject needs
-  // neither, and if the reviewer follows the instructions this never fires.
+  // A "Use it" with anything left unset is the one silently damaging outcome: a rule
+  // nobody looked at is recorded as "not broken" (a false negative in the data), and
+  // an unjudged caption cannot be used as a training target at all. Discard needs
+  // neither, and if the reviewer watches the orange bar this never fires.
   if(x==="accept" && v.decision!==x){
-    const miss = RULES.filter(r=>!v.rules[r]);
-    if(!v.caption_ok) miss.push("caption");
+    const miss = missingOn(v);
     if(miss.length && !confirm(
         "Not judged yet: "+miss.join(", ")+".\n\n"+
-        "An unjudged rule gets recorded as NOT violated, and an unjudged caption cannot "+
-        "be used at all. Press Cancel and mark them first — keys 1-4 for the rules, "+
+        "An unjudged rule is recorded as NOT broken, and an unjudged caption cannot "+
+        "be used at all. Press Cancel and answer them first — keys 1-4 for the rules, "+
         "C for the caption.\n\n"+
-        "Accept anyway?")) return;
+        "Use it anyway?")) return;
   }
   v.decision = v.decision===x ? "" : x; v.ts=new Date().toISOString(); save();
   if(v.decision) nextTodo(); else render();
@@ -569,6 +676,8 @@ document.addEventListener("keydown",e=>{
   // Shortcuts used to keep working behind the gate, quietly changing state that
   // could not be written anywhere.
   if(gate.style.display==="flex") return;
+  if(e.key==="Escape"){ help.style.display="none"; return; }
+  if(help.style.display==="flex") return;   // reading the instructions is not reviewing
   const k=e.key.toLowerCase(); const d=cur(); if(!d) return;
   if(["1","2","3","4"].includes(k)){ const r="rule_"+k; const v=vd(d.id);
     v.rules[r] = v.rules[r]==="y" ? "n" : v.rules[r]==="n" ? "" : "y"; save(); render(); e.preventDefault(); }
@@ -585,14 +694,19 @@ document.addEventListener("keydown",e=>{
 
 // ---------------------------------------------------------------- the saved file
 function b1000(b){ return "["+b.map(c=>Math.round(c*1000)).join(", ")+"]"; }
+// "Has this record been touched at all?" -- one predicate, so the saved file and the
+// row builder can never disagree about what counts as work worth keeping. caption_ok
+// and hard are included: judging only the caption, or only flagging a photo as hard,
+// is still work, and the earlier version silently dropped both.
+function touched(v){
+  return !!(v && (v.decision || v.notes || v.hard || v.caption_ok
+                  || Object.keys(v.rules||{}).length
+                  || Object.keys(v.boxes||{}).length
+                  || Object.keys(v.reasons||{}).length));
+}
 function payloadJSON(){
   const out={};
-  for(const d of DATA){
-    const v=state[d.id];
-    if(!v || (!v.decision && !v.notes && !Object.keys(v.rules||{}).length
-        && !Object.keys(v.boxes||{}).length && !Object.keys(v.reasons||{}).length)) continue;
-    out[d.id]=v;
-  }
+  for(const d of DATA){ const v=state[d.id]; if(touched(v)) out[d.id]=v; }
   return JSON.stringify({reviewer:reviewer||"reviewer",
     saved_at:new Date().toISOString(), corpus_key:META.corpus_key,
     n_decided:Object.values(state).filter(v=>v.decision).length,
@@ -604,9 +718,7 @@ function payloadJSON(){
 function buildRows(){
   const rows=[];
   for(const d of DATA){
-    const v=state[d.id]; if(!v || (!v.decision && !v.notes && !Object.keys(v.rules||{}).length
-        && !Object.keys(v.boxes||{}).length && !Object.keys(v.reasons||{}).length)) continue;
-    out[d.id]=v;
+    const v=state[d.id]; if(!touched(v)) continue;
     const row={new_image_id:d.id, image_file:d.img.split("/").pop(), mocs_image_id:d.mid,
       file_name:d.fn, source:d.src, run:d.run,
       proposed_rules:RULES.filter(r=>d.r[r]&&d.r[r].p).join(" "),
@@ -644,6 +756,7 @@ function askName(){
   return reviewer;
 }
 async function pickSaveFile(){
+  const firstTime = !fileHandle;
   try{
     askName();
     fileHandle = await window.showSaveFilePicker(
@@ -651,6 +764,9 @@ async function pickSaveFile(){
     await writeFile();
     gate.style.display="none";
     render();
+    // Choosing a brand-new file means a brand-new reviewer, almost always. Show the
+    // instructions once, unprompted, rather than hoping the "?" button gets pressed.
+    if(firstTime) help.style.display="flex";
   }catch(e){ if(e && e.name!=="AbortError") showGate("Could not use that file: "+e.message); }
 }
 async function pickOpenFile(){
