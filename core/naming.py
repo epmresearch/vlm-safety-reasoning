@@ -89,17 +89,43 @@ def results_dir_names(task: str, tier: str, version: str) -> dict:
     }
 
 
-def slurm_job_name(task: str, phase: str) -> str:
-    """SBATCH --job-name for one pipeline phase, e.g. 'vlm-base-oo'."""
-    short = {"baseline": "base", "sft": "sft", "merge": "merge-sft", "grpo": "grpo"}
-    if phase not in short:
-        raise ValueError(f"Unknown phase: {phase!r}. Known: {sorted(short)}")
-    return f"vlm-{short[phase]}-{task_prefix(task)}"
+_JOB_NAME_PHASE = {"baseline": "base", "sft": "sft", "merge": "merge-sft", "grpo": "grpo"}
+_LOG_STEM_PHASE = {"baseline": "base", "sft": "sft", "merge": "merge_sft", "grpo": "grpo"}
 
 
-def slurm_log_stem(task: str, phase: str) -> str:
-    """Log filename stem for one pipeline phase, e.g. 'base_oo'."""
-    short = {"baseline": "base", "sft": "sft", "merge": "merge_sft", "grpo": "grpo"}
+def _phase_token(short: dict, phase: str) -> str:
     if phase not in short:
         raise ValueError(f"Unknown phase: {phase!r}. Known: {sorted(short)}")
-    return f"{short[phase]}_{task_prefix(task)}"
+    return short[phase]
+
+
+def slurm_job_name(task: str, phase: str, tier: str, version: str) -> str:
+    """SBATCH --job-name for one pipeline phase, e.g. 'vlm-base-oo-2b-v1'.
+
+    tier and version are REQUIRED, deliberately. They used to be absent, which made
+    a job name identify only the task and phase -- so a 24-job submission (2 tasks x
+    3 tiers x 4 phases) produced just 8 distinct names and `squeue -u $USER` could
+    not tell a 2b job from an 8b one. Making them optional would have re-admitted
+    exactly that ambiguity for any caller that forgot them, which is the same
+    silent-default failure shape every entry point in this repo has already closed
+    (see the required --task/--tier flags on run_sft.py and friends).
+
+    `version` is expected in v<digits> form; scripts/submit_pipeline.py validates
+    that up front, before any name is built.
+    """
+    return f"vlm-{_phase_token(_JOB_NAME_PHASE, phase)}-{task_prefix(task)}-{tier}-{version}"
+
+
+def slurm_log_stem(task: str, phase: str, tier: str, version: str) -> str:
+    """Log filename stem for one pipeline phase, e.g. 'base_oo_2b_v1'.
+
+    SLURM appends the job id, so the full filenames are
+    ``base_oo_2b_v1_<jobid>.{out,err}``.
+
+    The tier and version are APPENDED rather than inserted, so every pre-existing
+    glob keeps working: `logs/grpo_vo_*.err` still matches `grpo_vo_8b_v2_*.err`.
+    Both are REQUIRED for the reason given on slurm_job_name above -- the job id
+    alone did disambiguate the files, but only after opening one, which is precisely
+    the lookup you do not want during a 24-job burst with partial failures.
+    """
+    return f"{_phase_token(_LOG_STEM_PHASE, phase)}_{task_prefix(task)}_{tier}_{version}"

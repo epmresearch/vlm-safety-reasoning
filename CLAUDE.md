@@ -219,7 +219,9 @@ $VLM_DATA_ROOT/
 │                                           # parsed_predictions.json, json_parse_failures.json,
 │                                           # schema_validation_failures.json,
 │                                           # llm_judge_status.json, llm_judge_details.json
-├── logs/                                   # <log_stem>_<jobid>.{out,err} + the Python-side run_*.txt
+├── logs/                                   # <phase>_<prefix>_<tier>_<version>_<jobid>.{out,err}
+│                                           # (e.g. sft_oo_8b_v1_48530001.out)
+│                                           # + the Python-side run_*.txt
 └── (HF cache is separate: $HOME/scratch/hf_cache, set by every phase script)
 ```
 
@@ -866,7 +868,17 @@ For `--version v1`, tier `8b`:
 | Merged KL base | `merged-unified-sft-8b-v1` | `merged-vo-sft-8b-v1` | `merged-vt-sft-8b-v1` | `merged-oo-sft-8b-v1` | `merged-co-sft-8b-v1` |
 | GRPO variant | `unified-grpo-8b-v1` | `vo-grpo-8b-v1` | `vt-grpo-8b-v1` | `oo-grpo-8b-v1` | `co-grpo-8b-v1` |
 | Baseline results dir | `unified-baseline-8b-v1` | `vo-baseline-8b-v1` | `vt-baseline-8b-v1` | `oo-baseline-8b-v1` | `co-baseline-8b-v1` |
-| SLURM job / log stem | `vlm-sft-unified` / `sft_unified` | `vlm-sft-vo` / `sft_vo` | `vlm-sft-vt` / `sft_vt` | `vlm-sft-oo` / `sft_oo` | `vlm-sft-co` / `sft_co` |
+| SLURM job / log stem | `vlm-sft-unified-8b-v1` / `sft_unified_8b_v1` | `vlm-sft-vo-8b-v1` / `sft_vo_8b_v1` | `vlm-sft-vt-8b-v1` / `sft_vt_8b_v1` | `vlm-sft-oo-8b-v1` / `sft_oo_8b_v1` | `vlm-sft-co-8b-v1` / `sft_co_8b_v1` |
+
+**SLURM job names and log stems carry the tier and version as of 2026-09-23.** They used to be
+`(task, phase)` only, so a 24-job submission (2 tasks × 3 tiers × 4 phases) produced just **8**
+distinct stems — `logs/sft_oo_<jobid>.out` could not be attributed to a tier without opening it, and
+`squeue -u $USER` showed six identical `vlm-sft-oo` rows. `core/naming.py::slurm_job_name` and
+`slurm_log_stem` now take `(task, phase, tier, version)`, all four **required** (no silent default,
+same rule as the `--task`/`--tier` flags on every entry point). Tier and version are **appended**, not
+inserted, so every pre-existing glob still matches: `logs/grpo_vo_*.err` finds `grpo_vo_8b_v2_*.err`.
+Pinned by `tests/test_core/test_name_isolation.py`, which also now holds job names and log stems to
+the same tier/version-uniqueness standard as every other writable name.
 
 `merged_checkpoint_name()` produces byte-identical strings in `submit_pipeline.py`, `hpc_merge_sft.sh`,
 `hpc_grpo.sh` and `run_inference.py`'s reverse-engineering regex — confirmed by direct round-trip test for all
@@ -1248,7 +1260,13 @@ references carries no information.
 **Debugging notes:**
 
 - `_safe_reward` swallows exceptions and returns `0.0` at WARNING level — a broken reward is indistinguishable
-  from a bad model. Grep SLURM stderr for `"Error in reward function"` before trusting a low score.
+  from a bad model. Grep the SLURM **`.out`** file — `core/logging.py:17-22` adds exactly one sink,
+  on `sys.stdout`, so the `.err` file never contains this string no matter how broken the reward is
+  (this doc said "stderr" until 2026-09-23). Grep **both** spellings, `"Error in reward function"`
+  (per-sample, `_safe_reward`) and `"Error in batch reward function"` (`_safe_batch_reward`, which is
+  what `reward_caption` uses). Neither names the component: `functools.wraps` captured the *inner*
+  function's `__name__`, so every line reads `compute_reward` — identify the component from the
+  traceback's file path (`rewards/reward_grounding.py` vs `rewards/reward_caption.py`).
 - Watch `frac_reward_zero_std` (W&B, or the offline log — see [W&B runs fully offline](#commands) above): a
   prior run showed 0.53. `reward_format/std` at 0.0 post-SFT is expected (saturated), not a bug.
 - `object_only`'s ~0.5 `frac_reward_zero_std` floor is structural (see the throughput note above), not a sign

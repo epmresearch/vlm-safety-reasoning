@@ -226,16 +226,24 @@ Common `squeue` reasons:
 Reading progress — **W&B is offline in every phase script**, so nothing appears in the web dashboard:
 
 ```bash
-tail -f $VLM_DATA_ROOT/logs/sft_vo_<jobid>.out       # SFT logs every step, evals every 25
-tail -f $VLM_DATA_ROOT/logs/grpo_vo_<jobid>.out      # GRPO logs every 5 steps
-grep -c "Error in reward function" $VLM_DATA_ROOT/logs/grpo_vo_<jobid>.err   # must be 0
-wandb sync $HOME/scratch/wandb/offline-run-*         # optional, after the fact
+# Log filenames are <phase>_<prefix>_<tier>_<version>_<jobid>.{out,err} (tier and version
+# added 2026-09-23 -- before that a 24-job submission produced only 8 distinct stems and you
+# had to open a file to learn which tier it was). Wildcards still work either way.
+tail -f $VLM_DATA_ROOT/logs/sft_vo_2b_v2_<jobid>.out    # SFT logs every step, evals every 25
+tail -f $VLM_DATA_ROOT/logs/grpo_vo_2b_v2_<jobid>.out   # GRPO logs every 5 steps
+
+# Swallowed reward exceptions. NOTE: .out, not .err -- core/logging.py sinks to STDOUT,
+# so this grep finds nothing in the .err file no matter how broken the reward is.
+grep -c "Error in reward function\|Error in batch reward function" \
+     $VLM_DATA_ROOT/logs/grpo_vo_2b_v2_<jobid>.out      # must be 0
+
+wandb sync $HOME/scratch/wandb/offline-run-*            # optional, after the fact
 ```
 
 A GRPO curve straight out of the log:
 
 ```bash
-python - "$VLM_DATA_ROOT/logs/grpo_vo_<jobid>.out" <<'EOF'
+python - "$VLM_DATA_ROOT/logs/grpo_vo_2b_v2_<jobid>.out" <<'EOF'
 import ast, sys
 rows = [ast.literal_eval(l.strip()) for l in open(sys.argv[1], errors="ignore") if l.startswith("{'loss'")]
 for d in rows[::4] + rows[-1:]:
@@ -373,8 +381,11 @@ for f in $VLM_DATA_ROOT/results/inference/vo-*-v2*/evaluation_results/llm_judge_
 rubric={d['rubric_sha256'][:12]} {d['elapsed_seconds']}s\")" "$f"
 done
 
-# no silently-swallowed reward exceptions
-grep -l "Error in reward function" $VLM_DATA_ROOT/logs/grpo_vo_*.err
+# no silently-swallowed reward exceptions. .out, NOT .err -- core/logging.py's only sink is
+# sys.stdout, so the .err file never contains this string. Both spellings: _safe_reward and
+# _safe_batch_reward log differently, and neither names the component (both say
+# "compute_reward"), so identify it from the traceback's file path.
+grep -l "Error in reward function\|Error in batch reward function" $VLM_DATA_ROOT/logs/grpo_vo_*.out
 
 # every inference covered the whole split
 grep -h "structural_total_samples_count" $VLM_DATA_ROOT/results/inference/vo-*-v2*/evaluation_results/metrics.json

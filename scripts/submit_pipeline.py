@@ -261,8 +261,8 @@ def run(task: str, tiers, version: str, skip_preload: bool = False, gres=None,
             args=[task, tier, version],
             mem=MEM_CONFIG["baseline"].get(tier, "150G"),
             time=TIME_CONFIG["baseline"],
-            job_name=slurm_job_name(task, "baseline"),
-            log_stem=slurm_log_stem(task, "baseline"),
+            job_name=slurm_job_name(task, "baseline", tier, version),
+            log_stem=slurm_log_stem(task, "baseline", tier, version),
             gres=gres,
         )
 
@@ -274,8 +274,8 @@ def run(task: str, tiers, version: str, skip_preload: bool = False, gres=None,
             args=[task, tier, sft_variant] + ([sft_dataset] if sft_dataset else []),
             mem=MEM_CONFIG["sft"].get(tier, "150G"),
             time=TIME_CONFIG["sft"],
-            job_name=slurm_job_name(task, "sft"),
-            log_stem=slurm_log_stem(task, "sft"),
+            job_name=slurm_job_name(task, "sft", tier, version),
+            log_stem=slurm_log_stem(task, "sft", tier, version),
             gres=gres,
         )
 
@@ -287,8 +287,8 @@ def run(task: str, tiers, version: str, skip_preload: bool = False, gres=None,
             dependencies=[sft_job],
             mem=MEM_CONFIG["merge"].get(tier, "80G"),
             time=TIME_CONFIG["merge"],
-            job_name=slurm_job_name(task, "merge"),
-            log_stem=slurm_log_stem(task, "merge"),
+            job_name=slurm_job_name(task, "merge", tier, version),
+            log_stem=slurm_log_stem(task, "merge", tier, version),
             gres=gres,
         )
 
@@ -300,8 +300,8 @@ def run(task: str, tiers, version: str, skip_preload: bool = False, gres=None,
             dependencies=[merge_job],
             mem=MEM_CONFIG["grpo"].get(tier, "250G"),
             time=TIME_CONFIG["grpo"],
-            job_name=slurm_job_name(task, "grpo"),
-            log_stem=slurm_log_stem(task, "grpo"),
+            job_name=slurm_job_name(task, "grpo", tier, version),
+            log_stem=slurm_log_stem(task, "grpo", tier, version),
             gres=gres,
         )
 
