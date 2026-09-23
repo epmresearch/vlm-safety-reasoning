@@ -203,7 +203,27 @@ def load_processed_dataset(subdir: str = None) -> DatasetDict:
     return dataset
 
 
-def load_grpo_pool():
+GRPO_POOL_SUBDIR_DEFAULT = "datasets/grpo_pool"
+
+
+def resolve_grpo_pool_subdir(subdir: str = None) -> str:
+    """The GRPO pool directory that will actually be used, as a relative subdir.
+
+    Precedence: explicit ``subdir`` -> ``base.yaml``'s ``dataset.grpo_pool_subdir`` ->
+    :data:`GRPO_POOL_SUBDIR_DEFAULT`.
+
+    Split out of :func:`load_grpo_pool` for two reasons: the trainer records the
+    EFFECTIVE value in ``run_manifest.json`` (so a run's data provenance is recoverable
+    from disk without re-deriving the precedence chain), and the precedence itself is
+    then unit-testable without a dataset on disk.
+    """
+    if subdir:
+        return subdir          # short-circuit: do not parse base.yaml just to discard it
+    base_cfg = load_base_config()
+    return base_cfg["dataset"].get("grpo_pool_subdir", GRPO_POOL_SUBDIR_DEFAULT)
+
+
+def load_grpo_pool(subdir: str = None):
     """Loads the pre-built, balanced GRPO training pool.
 
     Built once, offline, by data/build_grpo_pool.py from the non-augmented
@@ -214,12 +234,37 @@ def load_grpo_pool():
     since GRPO trains for a single epoch (configs/grpo.yaml) and duplicate
     or near-duplicate prompts in one pass produce redundant reward groups.
 
+    Args:
+        subdir: Optional pool directory override, relative to the data root
+            (e.g. "datasets/grpo_pool_v3"). Resolution order is
+            **argument -> base.yaml's dataset.grpo_pool_subdir -> the literal
+            default**, so passing nothing reproduces the historical behaviour
+            byte-for-byte.
+
+            This parameter exists because the key alone did not work. `base.yaml`
+            has carried `dataset.grpo_pool_subdir` all along, but this function
+            read it from ``load_base_config()`` only -- never from the merged task
+            config -- so a task YAML setting it was **silently ignored**: the key
+            existed, looked overridable, and was not. A `violations_think` run
+            would have trained on the OLD pool while its manifest claimed the new
+            one. Same failure shape as every entry in CLAUDE.md's ghost-variable
+            table; mirrors ``load_processed_dataset``'s long-standing pattern.
+
+            Callers that pass it: ``models/grpo_trainer.py`` (from
+            ``cfg.get("grpo_pool_subdir")``, itself overridable by
+            ``--grpo_pool_subdir``) and ``scripts/validate_rewards.py``
+            (``--pool-stats``). ``scripts/preflight_grpo.py`` deliberately does NOT --
+            it validates reward assembly and prompt length against
+            ``load_processed_dataset()``, never the pool, so a missing or malformed
+            pool is not caught there; it surfaces as this function's
+            ``FileNotFoundError`` at the start of GRPO.
+
     Returns:
         A flat (non-split) HF Dataset — every row in it is already selected
         for GRPO training, no further filtering/oversampling needed.
     """
-    base_cfg = load_base_config()
-    pool_path = get_drive_path(base_cfg["dataset"].get("grpo_pool_subdir", "datasets/grpo_pool"))
+    resolved = resolve_grpo_pool_subdir(subdir)
+    pool_path = get_drive_path(resolved)
 
     if not Path(pool_path).exists():
         raise FileNotFoundError(

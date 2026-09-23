@@ -19,6 +19,7 @@ import json
 
 import pytest
 
+from core.constants import VALID_TASKS
 from rewards.unified_reward import (
     REWARD_COMPONENTS,
     ALL_REWARD_COMPONENTS,
@@ -205,7 +206,7 @@ class TestRepetitionPenalty:
         """User decision: the repetition penalty should be OFF in production.
         Every task YAML's `repetition_penalty: 1.0` must genuinely disable it
         -- reading the REAL merged config, no monkeypatch."""
-        for task in ("unified", "violations_only", "object_only", "caption_only"):
+        for task in VALID_TASKS:
             rep = _apply_repetition_penalty([1.0], [self._repeated()], task)
             assert rep == [pytest.approx(1.0)], (
                 f"task {task!r} still applies a repetition penalty in production; "

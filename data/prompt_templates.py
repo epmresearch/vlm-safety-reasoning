@@ -184,6 +184,71 @@ VIOLATIONS_ONLY_PROMPT = (
     "\n```"
 )
 
+# violations_think: the same inspection task as VIOLATIONS_ONLY_PROMPT, with a short
+# reasoning block required BEFORE the JSON.
+#
+# Composed from the SAME _SAFETY_RULES and _VIOLATION_INSTRUCTIONS fragments as
+# violations_only, deliberately. A rule-wording difference between the two would
+# confound the v3-vs-v4 comparison those arms exist to make, and would also desync
+# evaluation/metrics_llm_judge.py, which reads its Relevance rule text from
+# SAFETY_RULE_TEXTS -- judging an explanation against wording the model never saw
+# scores the prompt, not the model.
+#
+# The template below shows the think block AND the JSON, so the instructions and the
+# worked example cannot disagree. The block's shape follows what
+# data/preprocessor.py::_build_violations_think_target_json emits: the description, then
+# one line per rule in rule_1..rule_4 order, on every image including safe ones.
+#
+# WHY THE EXAMPLE IS ON RULE_2, not rule_1. The template has to illustrate a violated
+# line somewhere, and this file's own header records why rule_1 is the wrong place: an
+# earlier prompt's inline example reason "was necessarily a rule 1 example, and rule 1 is
+# already the dominant class, so it pushed the model toward the very over-flagging the
+# rest of the prompt works against". Showing it here in BOTH the block and the JSON would
+# double that exposure relative to VIOLATIONS_ONLY_PROMPT, which shows it once. rule_2 is
+# the opposite case -- 0.8% of un-augmented train, 3.4% of the GRPO pool, and one of the
+# rules v2 measured as under-detected -- so a nudge there runs with the recall-weighted
+# reward (violation_fbeta: 2.0, p* = 0.298) instead of against it.
+#
+# Showing `null` first also matches the real frequency: 86% of images are safe, so `null`
+# is the form the model writes most often.
+#
+# VIOLATIONS_ONLY_PROMPT is deliberately NOT changed to match -- it is v2's frozen prompt,
+# pinned by sha256 in tests/test_evaluation/test_llm_judge.py.
+#
+# ONE shape the prompt deliberately does NOT mention: a violated rule with no box, which
+# core/think_format.py::build_think_body renders as a bare `-> yes` with no count. That
+# shape is legal in ground truth (the review UI lets a human assert a rule without
+# drawing a box, so a verified MOCS row can carry a reason and no geometry), and the
+# builder has to handle every shape GT can legally take. But the PROMPT describes what we
+# want the model to DO, and a box-less violation scores 0 on reward_violation_grounding --
+# 0.317 of the weight. Telling the model it may report no box is an invitation to forfeit
+# that, so the instruction asks for a count unconditionally and the rare box-less target
+# teaches itself from the data.
+VIOLATIONS_THINK_PROMPT = (
+    "Inspect this construction site image for safety rule violations. Reason in a <think> "
+    "block first, then output a single JSON code block.\n\n"
+    "Judge the image against these four safety rules:\n"
+    + _SAFETY_RULES
+    + _VIOLATION_INSTRUCTIONS +
+    "\nIn the <think> block, describe the scene first, then write one line for each rule, "
+    "rule_1 to rule_4, on every image. For a violated rule write the same sentence you "
+    "will put in the JSON, then ' -> yes (n)' where n is how many boxes you will report "
+    "for it. For a rule that is not violated write exactly 'no'.\n"
+    "\nRespond exactly in this format:\n"
+    "<think>\n"
+    "a short description of the scene\n"
+    "rule_1: no\n"
+    "rule_2: who or what is at fault and what the breach is -> yes (1)\n"
+    "rule_3: no\n"
+    "rule_4: no\n"
+    "</think>\n"
+    "```json\n"
+    '{"rule_1_violation":null,'
+    '"rule_2_violation":{"bounding_box":[[xmin, ymin, xmax, ymax]],"reason":"..."},'
+    '"rule_3_violation":null,"rule_4_violation":null}'
+    "\n```"
+)
+
 OBJECT_ONLY_PROMPT = (
     "Locate the three target objects in this construction site image. Output strictly a "
     "single JSON code block.\n\n"
@@ -218,6 +283,7 @@ CAPTION_ONLY_PROMPT = (
 PROMPT_REGISTRY = {
     "UNIFIED_INSPECTION_PROMPT": UNIFIED_INSPECTION_PROMPT,
     "VIOLATIONS_ONLY_PROMPT": VIOLATIONS_ONLY_PROMPT,
+    "VIOLATIONS_THINK_PROMPT": VIOLATIONS_THINK_PROMPT,
     "OBJECT_ONLY_PROMPT": OBJECT_ONLY_PROMPT,
     "CAPTION_ONLY_PROMPT": CAPTION_ONLY_PROMPT,
 }

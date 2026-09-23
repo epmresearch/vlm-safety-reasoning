@@ -127,7 +127,7 @@ def sorted_columns(cols) -> List[Tuple[str, str, str, str]]:
 # Metric family derivation -- prefix-based, self-maintaining
 # ---------------------------------------------------------------------------
 
-FAMILY_ORDER = ["structural", "captioning", "grounding", "violation", "reasoning", "other"]
+FAMILY_ORDER = ["structural", "captioning", "grounding", "violation", "reasoning", "think", "other"]
 
 
 def metric_family(key: str) -> str:
@@ -142,6 +142,12 @@ def metric_family(key: str) -> str:
         return "reasoning"
     if key.startswith("violation_"):
         return "violation"
+    # <think>-block diagnostics (violations_think only). A distinct family rather than
+    # a "structural" sub-prefix: structural_* describes the JSON payload's validity,
+    # and lumping the two together would put a block-presence rate next to a schema
+    # adherence rate as if they measured the same contract.
+    if key.startswith("think_"):
+        return "think"
     return "other"
 
 
@@ -216,6 +222,16 @@ DEMOTED_HEADLINE_KEYS = {
     ],
 }
 
+BOUNDED_HEADLINE_KEYS["think"] = [
+    # All three are [0,1] rates. Read them in this order: a low present_rate means the
+    # model stopped emitting blocks at all; a low closed_rate means completions are
+    # being truncated mid-block; a low agreement_rate is the interesting failure -- the
+    # stated reasoning does not describe the answer the model then gave.
+    "think_block_present_rate",
+    "think_block_closed_rate",
+    "think_verdict_json_agreement_rate",
+]
+
 UNBOUNDED_HEADLINE_KEYS = {
     "captioning": ["captioning_ciderd"],
     "reasoning": [
@@ -257,6 +273,11 @@ SUPPORT_KEYS = {
         # pull the judge means down.
         + ["reasoning_llm_judge_scored_count_micro", "reasoning_llm_judge_unparsed_count_micro"]
         + [f"reasoning_llm_judge_scored_count_rule_{i}" for i in (1, 2, 3, 4)]
+    ),
+    "think": (
+        ["think_block_present_count", "think_verdict_json_comparable_count",
+         "think_total_samples_count"]
+        + [f"think_verdict_json_comparable_count_rule_{i}" for i in (1, 2, 3, 4)]
     ),
     "violation": (
         ["violation_gt_positive_image_count", "violation_pred_positive_image_count"]

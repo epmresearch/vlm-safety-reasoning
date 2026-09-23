@@ -80,7 +80,7 @@ def test_b1_sft_learning_rate_is_flat_across_tiers():
     )
 
     from core.config import load_config
-    for task in ("unified", "violations_only", "object_only", "caption_only"):
+    for task in VALID_TASKS:
         lr = load_config(task=task, training_kind="sft").get("learning_rate")
         assert lr == 1.0e-4, f"{task}: expected flat 1.0e-4, got {lr}"
 
@@ -717,7 +717,7 @@ def test_b9_grpo_config_pins_loss_type_mask_truncated_and_drop_last():
     """
     from core.config import load_config
 
-    for task in ("unified", "violations_only", "object_only", "caption_only"):
+    for task in VALID_TASKS:
         cfg = load_config(task=task, training_kind="grpo")
         assert cfg.get("loss_type") == "dapo", (
             f"{task}: loss_type must be pinned in configs/grpo.yaml, not left to "
@@ -811,7 +811,7 @@ def test_b11_grpo_config_pins_scale_rewards_and_seed():
     """
     from core.config import load_config
 
-    for task in ("unified", "violations_only", "object_only", "caption_only"):
+    for task in VALID_TASKS:
         cfg = load_config(task=task, training_kind="grpo")
         assert cfg.get("scale_rewards") == "group", (
             f"{task}: scale_rewards must be pinned 'group' in configs/grpo.yaml -- "
@@ -1043,7 +1043,7 @@ def test_v2_final_checkpoint_is_the_handoff_end_to_end():
     # naming.py is what the analysis layer resolves through; it must agree with
     # the directory hpc_sft.sh actually writes.
     from core.naming import results_dir_names, variant_name
-    for task in ("unified", "violations_only", "object_only", "caption_only"):
+    for task in VALID_TASKS:
         names = results_dir_names(task, "8b", "v1")
         assert names["sft"] == f"{variant_name(task, 'sft', '8b', 'v1')}_final"
 
@@ -1196,3 +1196,233 @@ def test_v2_augmentation_multipliers_unchanged():
     m = re.search(r"^RULE_MULTIPLIERS\s*=\s*(\{[^}]*\})", src, re.M)
     assert m, "RULE_MULTIPLIERS assignment not found"
     assert ast.literal_eval(m.group(1)) == {4: 16, 2: 12, 3: 6}
+
+# ---------------------------------------------------------------------------
+# v3 -- the violations_think arm (PLAN_V3_THINK.md)
+#
+# Every test here pins the SAME promise: the arm is purely additive. violations_only
+# v2 must stay byte-reproducible, and a v4 arm (v2's settings on the new data, no
+# think block) must be expressible without editing any file v2 also resolves through.
+# ---------------------------------------------------------------------------
+
+V2_REWARD_SURFACE = {
+    "reward_weights": {
+        "reward_format": 0.05,
+        "reward_violation_id": 0.422,
+        "reward_violation_grounding": 0.317,
+        "reward_reasoning": 0.211,
+    },
+    "violation_tn_constant": 0.30,
+    "require_violation_substance": True,
+    "max_completion_length": 1024,
+    "max_new_tokens": 1024,
+    "inference_max_seq_length": 3200,
+    "repetition_penalty": 1.0,
+}
+
+
+@pytest.mark.parametrize("kind", ["sft", "grpo"])
+def test_v3_violations_only_config_is_untouched(kind):
+    """v2's resolved config must be exactly what it always was.
+
+    The two dataset-routing keys must be ABSENT, not set to a default: their absence is
+    what makes violations_only resolve through base.yaml, and adding them to
+    configs/tasks/violations_only.yaml (rather than passing them per-submission) would
+    silently change v2 as well as v4.
+    """
+    from core.config import load_config
+    cfg = load_config(task="violations_only", training_kind=kind)
+    assert "sft_dataset_subdir" not in cfg
+    assert "grpo_pool_subdir" not in cfg
+    for key, expected in V2_REWARD_SURFACE.items():
+        assert cfg.get(key) == expected, f"v2 {key} moved: {cfg.get(key)!r} != {expected!r}"
+
+
+def test_v3_default_dataset_paths_are_unchanged():
+    """With no override anywhere, both loaders must resolve exactly as before."""
+    from core.config import load_base_config
+    from data.loader import GRPO_POOL_SUBDIR_DEFAULT, resolve_grpo_pool_subdir
+    assert GRPO_POOL_SUBDIR_DEFAULT == "datasets/grpo_pool"
+    assert resolve_grpo_pool_subdir(None) == "datasets/grpo_pool"
+    # The long-standing naming trap: processed_subdir points at AUGMENTED.
+    assert load_base_config()["dataset"]["processed_subdir"] == "datasets/augmented"
+
+
+def test_v3_grpo_pool_override_precedence():
+    from data.loader import resolve_grpo_pool_subdir
+    assert resolve_grpo_pool_subdir("datasets/grpo_pool_v3") == "datasets/grpo_pool_v3"
+    assert resolve_grpo_pool_subdir(None) == "datasets/grpo_pool"
+    assert resolve_grpo_pool_subdir("") == "datasets/grpo_pool", "empty means unset"
+
+
+def test_v3_load_grpo_pool_takes_a_subdir():
+    """The ghost-variable fix. base.yaml has carried dataset.grpo_pool_subdir all
+    along, but load_grpo_pool read it from load_base_config() only -- never from the
+    merged task config -- so a task YAML setting it was SILENTLY IGNORED. A
+    violations_think run would have trained on the v2 pool while its manifest claimed
+    the v3 one.
+    """
+    import inspect
+    from data.loader import load_grpo_pool
+    assert "subdir" in inspect.signature(load_grpo_pool).parameters
+
+
+def test_v3_grpo_trainer_passes_the_pool_subdir_through():
+    import ast
+    tree = ast.parse((REPO / "models" / "grpo_trainer.py").read_text(encoding="utf-8"))
+    calls = [
+        n for n in ast.walk(tree)
+        if isinstance(n, ast.Call) and getattr(n.func, "id", None) == "load_grpo_pool"
+    ]
+    assert calls, "load_grpo_pool is never called"
+    assert all(any(k.arg == "subdir" for k in c.keywords) for c in calls), (
+        "load_grpo_pool must be called with subdir=, or the task YAML's "
+        "grpo_pool_subdir is inert again"
+    )
+    # run_grpo must accept the CLI override too. Checked via AST, not inspect:
+    # models/grpo_trainer.py cannot be imported on a dev box (it pulls in wandb, and
+    # further down unsloth), which is the same reason the whole module is HPC-only.
+    run_grpo_def = next(
+        (n for n in ast.walk(tree)
+         if isinstance(n, ast.FunctionDef) and n.name == "run_grpo"), None
+    )
+    assert run_grpo_def is not None, "run_grpo is gone"
+    params = [a.arg for a in run_grpo_def.args.args + run_grpo_def.args.kwonlyargs]
+    assert "grpo_pool_subdir" in params
+
+
+def test_v3_entry_points_expose_the_data_overrides():
+    """Without these flags the v4 arm cannot exist without editing v2's task YAML."""
+    src_sft = (REPO / "experiments" / "run_sft.py").read_text(encoding="utf-8")
+    src_grpo = (REPO / "experiments" / "run_grpo.py").read_text(encoding="utf-8")
+    assert "--sft_dataset_subdir" in src_sft
+    assert "--grpo_pool_subdir" in src_grpo
+    # The CLI flag must WIN over the task YAML, not the other way round.
+    assert "args.sft_dataset_subdir or sft_cfg.get(\"sft_dataset_subdir\")" in src_sft
+
+
+@pytest.mark.parametrize("script,var,flag", [
+    ("hpc_sft.sh", "SFT_DATASET_SUBDIR", "--sft_dataset_subdir"),
+    ("hpc_grpo.sh", "GRPO_POOL_SUBDIR", "--grpo_pool_subdir"),
+])
+def test_v3_phase_scripts_forward_the_override_only_when_set(script, var, flag):
+    """An ARRAY, not ${VAR:+...}: an empty array expands to zero arguments, whereas a
+    conditional string expansion can inject an empty argument that argparse then reads
+    as a stray positional."""
+    src = (SCRIPTS / script).read_text(encoding="utf-8")
+    assert f"{var}=$" in src, f"{script} does not read the optional positional"
+    assert f'if [ -n "${var}" ]; then' in src, f"{script} must forward it only when set"
+    assert flag in src
+    assert "ARGS=()" in src, f"{script} must use an array, not string interpolation"
+
+
+def test_v3_submitter_appends_overrides_only_when_given(monkeypatch):
+    """The whole v2-reproducibility claim in one assertion: an unflagged submission must
+    pass the SAME positionals it always has.
+
+    submit_job is monkeypatched, so this never reaches sbatch -- unlike
+    test_submitter_can_override_gres_for_every_stage, which shells out for real and is
+    why the full suite must never be run on an ARC login node.
+    """
+    import scripts.submit_pipeline as sp
+
+    recorded = []
+
+    def fake_submit_job(script_path, args, **kwargs):
+        recorded.append((pathlib.Path(script_path).name, list(args)))
+        return "JOB"
+
+    monkeypatch.setattr(sp, "submit_job", fake_submit_job)
+
+    # (a) no overrides -> the historical argument lists, unchanged
+    sp.run("violations_only", ["2b"], "v2", skip_preload=True)
+    by_script = dict(recorded)
+    assert by_script["hpc_sft.sh"] == ["violations_only", "2b", "vo-sft-2b-v2"]
+    assert by_script["hpc_grpo.sh"] == [
+        "violations_only", "2b", "vo-grpo-2b-v2", "merged-vo-sft-2b-v2"
+    ]
+    assert by_script["hpc_baseline.sh"] == ["violations_only", "2b", "v2"]
+
+    # (b) with overrides -> appended, and ONLY to the two stages that read data
+    recorded.clear()
+    sp.run("violations_only", ["4b"], "v4", skip_preload=True,
+           sft_dataset="datasets/augmented_v3", grpo_pool="datasets/grpo_pool_v3")
+    by_script = dict(recorded)
+    assert by_script["hpc_sft.sh"][-1] == "datasets/augmented_v3"
+    assert by_script["hpc_grpo.sh"][-1] == "datasets/grpo_pool_v3"
+    # baseline scores the test split (always the default root) and merge touches no
+    # dataset at all, so neither may grow an argument.
+    assert by_script["hpc_baseline.sh"] == ["violations_only", "4b", "v4"]
+    assert by_script["hpc_merge_sft.sh"] == [
+        "violations_only", "4b", "vo-sft-4b-v4", "merged-vo-sft-4b-v4"
+    ]
+
+
+def test_v3_think_task_is_registered_and_isolated():
+    from core.naming import (baseline_run_name, merged_checkpoint_name,
+                             results_dir_names, variant_name)
+    from core.tasks import TASK_REGISTRY, task_capabilities
+
+    spec = TASK_REGISTRY["violations_think"]
+    assert spec.prefix == "vt"
+    assert task_capabilities("violations_think") == task_capabilities("violations_only")
+
+    # No generated name may collide across the three arms that will coexist on disk.
+    # baseline_run_name is deliberately NOT added alongside results_dir_names: the
+    # baseline's results directory IS its run name, so counting both would report a
+    # designed identity as a collision.
+    names = []
+    for task, version in (("violations_only", "v2"), ("violations_only", "v4"),
+                          ("violations_think", "v3")):
+        for tier in ("2b", "4b", "8b"):
+            names += [variant_name(task, "sft", tier, version),
+                      variant_name(task, "grpo", tier, version),
+                      merged_checkpoint_name(task, tier, version)]
+            names += list(results_dir_names(task, tier, version).values())
+            assert (results_dir_names(task, tier, version)["baseline"]
+                    == baseline_run_name(task, tier, version))
+    assert len(names) == len(set(names)), "v2/v3/v4 generated names collide"
+
+
+def test_v3_think_reward_surface_matches_violations_only():
+    """Identical rewards mean the SFT target text is provably the only variable."""
+    from core.config import load_config
+    a = load_config(task="violations_only", training_kind="grpo")
+    b = load_config(task="violations_think", training_kind="grpo")
+    for key in list(V2_REWARD_SURFACE) + ["reward_components"]:
+        assert a.get(key) == b.get(key), f"{key} differs between the two arms"
+
+
+def test_v3_think_task_routes_to_the_new_datasets():
+    from core.config import load_config
+    cfg = load_config(task="violations_think", training_kind="grpo")
+    assert cfg["sft_dataset_subdir"] == "datasets/augmented_v3"
+    assert cfg["grpo_pool_subdir"] == "datasets/grpo_pool_v3"
+
+
+def test_v3_think_column_name_is_not_a_yaml_key():
+    """Pins a decision, not behaviour: the SFT target builders are called as
+    builder(raw) and never see a config, so a `think_field:` key in the task YAML could
+    not reach the code that reads the column. It would read as configuration while
+    being inert -- the ghost-variable class of bug this repo has already paid for five
+    times. The column name lives in core/think_format.py::THINK_FIELD and nowhere else.
+    """
+    yaml_src = (REPO / "configs" / "tasks" / "violations_think.yaml").read_text(encoding="utf-8")
+    declared = [
+        l.split(":")[0].strip()
+        for l in yaml_src.splitlines()
+        if l.strip() and not l.strip().startswith("#") and ":" in l and not l.startswith(" ")
+    ]
+    assert "think_field" not in declared
+    from core.think_format import THINK_FIELD
+    assert THINK_FIELD == "thinking"
+
+
+def test_v3_only_the_think_task_asks_for_a_block():
+    """A block leaking into another task's prompt would change that task's output
+    contract without changing anything that measures it."""
+    from core.think_format import THINK_OPEN
+    from data.prompt_templates import get_prompt_for_task
+    for task in VALID_TASKS:
+        has_block = THINK_OPEN in get_prompt_for_task(task)
+        assert has_block == (task == "violations_think"), task

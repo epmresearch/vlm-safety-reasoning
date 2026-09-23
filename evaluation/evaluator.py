@@ -10,6 +10,7 @@ from evaluation.metrics_grounding import compute_grounding_metrics
 from evaluation.metrics_violations import compute_violation_metrics
 from evaluation.metrics_structural import compute_structural_metrics
 from evaluation.metrics_reasoning import batch_score_reasoning
+from evaluation.metrics_think import compute_think_metrics, task_expects_think_block
 from core.tasks import CAP_CAPTION, CAP_OBJECTS, CAP_VIOLATIONS, task_has
 from core.logging import get_logger
 
@@ -23,12 +24,19 @@ def run_full_evaluation(
     spice_only: bool = False,
     task: str = "unified",
     use_llm_judge: bool = False,
+    model_texts: List[str] = None,
 ) -> Dict[str, Any]:
     """
     Runs the complete evaluation pipeline.
     raw_predictions: list of raw string responses from the model.
     references: list of ground truth dicts from data.preprocessor.build_gt_dict.
     images: list of PIL Images (for CLIPScore).
+    model_texts: optional, aligned with raw_predictions — what the MODEL emitted,
+        before structural repair rewrote it. Only used by the think_* diagnostics,
+        which are skipped (keys absent, not zero) when it is None. It is a separate
+        argument because raw_predictions comes from the REPAIRED file by design, and
+        repair replaces raw_output with re-serialized JSON for every record it fixed,
+        stripping the <think> block along with it.
     task: any task registered in core/tasks.py. Which metric families run is
         decided by that task's capabilities, NOT by a task-name comparison:
         captioning needs a `caption` field, grounding needs the object classes,
@@ -164,6 +172,34 @@ def run_full_evaluation(
                 )
     
     # Combine all results
+    # 7. <think>-block diagnostics — only for a task whose prompt asks for a block.
+    #
+    # Gated on the PROMPT, not on a task name (core/tasks.py forbids task-name
+    # literals) and not on whether blocks happen to appear: for violations_think the
+    # keys are therefore always present, so an all-zero result reads as "the model
+    # stopped emitting blocks" rather than "the metric never ran". For every other task
+    # the keys are absent entirely, never zero.
+    think_metrics = {}
+    if not spice_only and task_expects_think_block(task):
+        if model_texts is None:
+            # Deliberately SKIPPED rather than computed from raw_predictions. On the
+            # repaired file, `raw_output` is the re-serialized JSON for every record
+            # that repair fixed (structural_repair.py:1526) and the model's original
+            # text for every record it did not -- so a fallback would produce a
+            # plausible-looking block-presence rate that is partly measuring the repair
+            # stage. This repo has already paid for one metric that silently described
+            # post-repair output (structural_json_validity_rate); absent keys are the
+            # honest alternative.
+            logger.warning(
+                "Task %r expects a <think> block but model_texts was not provided; "
+                "skipping think_* metrics. Pass the pre-repair text "
+                "(original_raw_output, falling back to raw_output) to measure them.",
+                task,
+            )
+        else:
+            logger.info("Computing <think>-block diagnostics...")
+            think_metrics = compute_think_metrics(model_texts, parsed_preds)
+
     all_metrics = {}
     all_metrics.update(structural_metrics)
     all_metrics.update(caption_metrics)
@@ -171,6 +207,7 @@ def run_full_evaluation(
     all_metrics.update(violation_metrics)
     all_metrics.update(reasoning_metrics)
     all_metrics.update(judge_metrics)
+    all_metrics.update(think_metrics)
     
     logger.info(f"Evaluation complete. {len(failures)} schema failures logged.")
     

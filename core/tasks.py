@@ -95,6 +95,19 @@ TASK_REGISTRY: Dict[str, TaskSpec] = {
         capabilities=frozenset({CAP_VIOLATIONS}),
         output_format=FORMAT_FENCED_JSON,
     ),
+    # violations_only with a <think> block prepended to a BYTE-IDENTICAL JSON
+    # payload. Registered as its own task rather than as a flag on
+    # violations_only so that v2 stays reproducible: every writable path is
+    # namespaced by this prefix, so vt-*-v3 cannot collide with vo-*-v2 (proved
+    # by tests/test_core/test_name_isolation.py). Same capability set, same
+    # schema, same reward components at the same weights -- the SFT target text
+    # is the only thing that differs. See PLAN_V3_THINK.md.
+    "violations_think": TaskSpec(
+        name="violations_think",
+        prefix="vt",
+        capabilities=frozenset({CAP_VIOLATIONS}),
+        output_format=FORMAT_FENCED_JSON,
+    ),
     "object_only": TaskSpec(
         name="object_only",
         prefix="oo",

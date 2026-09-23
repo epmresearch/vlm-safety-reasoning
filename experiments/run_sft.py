@@ -41,6 +41,16 @@ def main():
              "input dataset subdir.",
     )
     parser.add_argument("--no-resume", action="store_true")
+    # Optional data-routing override. Resolution: this flag -> the task YAML's
+    # `sft_dataset_subdir` -> base.yaml's processed_subdir (which, note the long-standing
+    # naming trap, points at datasets/AUGMENTED). Unset reproduces the historical path
+    # byte-for-byte, which is what keeps a v2 re-run identical. This is how the v4 arm
+    # trains violations_only on a NEW dataset without editing
+    # configs/tasks/violations_only.yaml -- editing that file would change v2 too.
+    parser.add_argument(
+        "--sft_dataset_subdir", default=None,
+        help="Override the SFT input dataset directory, relative to VLM_DATA_ROOT "
+             "(e.g. datasets/augmented_v3). Beats the task YAML and base.yaml.")
     args = parser.parse_args()
 
     from core.logging import attach_file_logger
@@ -74,12 +84,27 @@ def main():
     sft_cfg = load_config(task=args.task, training_kind="sft")
 
     # Loaded AFTER the config so a task YAML can redirect the SFT input split.
-    sft_subdir = sft_cfg.get("sft_dataset_subdir")
-    if sft_subdir:
+    # --sft_dataset_subdir beats the task YAML, so one task can be trained against a
+    # different dataset per submission without any config file changing.
+    sft_subdir = args.sft_dataset_subdir or sft_cfg.get("sft_dataset_subdir")
+    if args.sft_dataset_subdir:
+        logger.info(
+            f"--sft_dataset_subdir overrides the SFT input dataset to "
+            f"{args.sft_dataset_subdir!r} (task YAML said "
+            f"{sft_cfg.get('sft_dataset_subdir')!r})."
+        )
+    elif sft_subdir:
         logger.info(
             f"Task '{args.task}' overrides the SFT input dataset to {sft_subdir!r} "
             "(see configs/tasks/%s.yaml)." % args.task
         )
+    # Write the EFFECTIVE value back into the merged config, which the trainer dumps to
+    # run_config.json -- otherwise a CLI override would train on one dataset while the
+    # on-disk record named another. Only when set, so a task with no override (every v2
+    # task) produces a byte-identical manifest to before.
+    if sft_subdir:
+        sft_cfg["sft_dataset_subdir"] = sft_subdir
+
     logger.info("Loading fully processed and sorted dataset splits...")
     splits = load_processed_dataset(subdir=sft_subdir)
 

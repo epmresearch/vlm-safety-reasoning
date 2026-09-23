@@ -31,6 +31,8 @@ from data.preprocessor import (
     raw_sample_to_conversation_for_task,
     to_grpo_prompt_for_task,
 )
+from core.think_format import THINK_FIELD, build_think_body, violations_from_row
+from evaluation.metrics_think import task_expects_think_block
 from data.schemas import get_output_schema
 from evaluation.output_parser import parse_output_for_task
 
@@ -38,7 +40,14 @@ TASKS = list(TASK_REGISTRY)
 
 
 def _raw(image_id="0001234"):
-    return {
+    """One raw row carrying every field any registered task reads.
+
+    The `thinking` column is DERIVED from this row's own labels rather than written
+    out by hand: violations_think's target builder validates the block against the
+    labels and refuses a mismatch, so a hand-typed block would have to be kept in sync
+    with this fixture by hand -- exactly the drift the validation exists to prevent.
+    """
+    row = {
         "image_id": image_id,
         "image_caption": "A construction site with an excavator.",
         "illumination": "normal lighting",
@@ -56,6 +65,8 @@ def _raw(image_id="0001234"):
         "rebar": [],
         "worker_with_white_hard_hat": [[0.85, 0.2, 0.95, 0.6]],
     }
+    row[THINK_FIELD] = build_think_body(row["image_caption"], violations_from_row(row))
+    return row
 
 
 def _img():
@@ -96,6 +107,14 @@ def test_sft_target_matches_the_task_wire_format(task, split):
     if is_plain_text_task(task):
         assert "```" not in target
         assert not target.lstrip().startswith("{")
+    elif task_expects_think_block(task):
+        # A fenced-JSON task whose target carries a <think> preamble. The fence is
+        # still the payload and still terminates the target -- the block sits outside
+        # it, which is why output_parser.py::strip_fences (re.search, DOTALL) reaches
+        # the JSON unchanged and the schema can be shared with violations_only.
+        assert target.startswith("<think>")
+        assert "</think>\n```json" in target
+        assert target.rstrip().endswith("```")
     else:
         assert target.startswith("```json")
         assert target.rstrip().endswith("```")

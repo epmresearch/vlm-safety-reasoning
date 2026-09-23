@@ -29,10 +29,14 @@ from data.prompt_templates import PROMPT_REGISTRY, get_prompt_for_task
 from data.schemas import SCHEMA_REGISTRY, get_output_schema
 
 
-def test_all_four_pipelines_registered():
+def test_all_pipelines_registered():
     assert set(TASK_REGISTRY) == {
         "unified",
         "violations_only",
+        # violations_only with a <think> block in front of a byte-identical JSON
+        # payload; registered as its own task so v2 stays reproducible. See
+        # PLAN_V3_THINK.md.
+        "violations_think",
         "object_only",
         "caption_only",
     }
@@ -95,12 +99,17 @@ def test_capability_assignments():
 def test_tasks_with_capability():
     assert set(tasks_with(CAP_CAPTION)) == {"unified", "caption_only"}
     assert set(tasks_with(CAP_OBJECTS)) == {"unified", "object_only"}
-    assert set(tasks_with(CAP_VIOLATIONS)) == {"unified", "violations_only"}
+    assert set(tasks_with(CAP_VIOLATIONS)) == {
+        "unified", "violations_only", "violations_think"}
 
 
 def test_output_formats():
     assert task_output_format("unified") == FORMAT_FENCED_JSON
     assert task_output_format("violations_only") == FORMAT_FENCED_JSON
+    # The think block sits OUTSIDE the fence and is stripped by
+    # output_parser.py::strip_fences before any validation, so the wire format is
+    # still fenced JSON -- which is why the schema can be shared with violations_only.
+    assert task_output_format("violations_think") == FORMAT_FENCED_JSON
     assert task_output_format("object_only") == FORMAT_FENCED_JSON
     assert task_output_format("caption_only") == FORMAT_PLAIN_TEXT
     assert is_plain_text_task("caption_only")

@@ -11,6 +11,7 @@ import json
 import pathlib
 
 import pytest
+from core.constants import VALID_TASKS
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 SCRIPTS = REPO / "scripts"
@@ -51,7 +52,7 @@ def test_bug08_eval_log_name_is_run_scoped():
 # BUG-11 — image_id must reach the ground-truth dict
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("task", ["unified", "violations_only", "object_only", "caption_only"])
+@pytest.mark.parametrize("task", list(VALID_TASKS))
 def test_bug11_gt_carries_image_id(task):
     """Without this, evaluator.py labels every failure "unknown_0", "unknown_1", …
     and json_parse_failures.json cannot be traced to a source image."""
@@ -346,7 +347,7 @@ def test_bug28_unified_declares_its_grpo_budgets():
     assert "max_prompt_length" in load_config(task="unified", training_kind="grpo")
 
 
-@pytest.mark.parametrize("task", ["unified", "violations_only", "object_only", "caption_only"])
+@pytest.mark.parametrize("task", list(VALID_TASKS))
 def test_all_tasks_pin_their_own_token_budgets(task):
     from core.config import load_task_config
     cfg = load_task_config(task)

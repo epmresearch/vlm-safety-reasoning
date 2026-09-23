@@ -20,7 +20,8 @@
 
 # ---------------------------------------------------------------------------
 # GENERIC, TASK-PARAMETERIZED. One script serves every task pipeline
-# (unified / violations_only / object_only / caption_only); the task is the
+# (unified / violations_only / violations_think / object_only /
+# caption_only); the task is the
 # first positional argument and is threaded to every Python call explicitly.
 #
 # The --job-name and --output/--error directives above are per-task DEFAULTS.

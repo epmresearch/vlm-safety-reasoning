@@ -1,0 +1,84 @@
+task_name: "violations_think"
+prompt_key: "VIOLATIONS_THINK_PROMPT"
+
+# violations_only, plus a <think> block in front of a BYTE-IDENTICAL JSON payload.
+#
+# Registered as its own task rather than as a flag on violations_only so that v2 stays
+# reproducible: every writable path is namespaced by this task's prefix (vt), so
+# vt-*-v3 cannot collide with vo-*-v2. Proved by
+# tests/test_core/test_name_isolation.py, which enumerates every writable name across
+# all tasks x tiers x versions and asserts the set has no duplicates.
+#
+# EVERYTHING REWARD-RELATED BELOW IS COPIED UNCHANGED FROM violations_only.yaml, on
+# purpose. Identical weights, identical TN constant, identical substance gate, and (via
+# a shared ground-truth builder) an identical GT dict -- so the SFT target text is
+# provably the only variable between this arm and violations_only. Changing any of them
+# here would silently turn the v3-vs-v4 comparison into a two-variable experiment.
+#
+# There is deliberately NO `think_field:` key. The SFT target builders in
+# data/preprocessor.py::_TARGET_BUILDERS are called as builder(raw) and never see a
+# config, so such a key could not reach the code that reads the column -- it would look
+# like configuration while being inert, which is exactly the ghost-variable class of
+# bug documented in CLAUDE.md. The column name lives in
+# core/think_format.py::THINK_FIELD and nowhere else.
+#
+# See PLAN_V3_THINK.md for the full arm design.
+
+# --- Dataset routing -------------------------------------------------------------
+# Top-level keys, matching the existing convention: experiments/run_sft.py reads
+# `sft_dataset_subdir` off the merged config (object_only/caption_only already use it),
+# and models/grpo_trainer.py reads `grpo_pool_subdir` the same way. Both are overridable
+# per-submission from the CLI, which is how the v4 arm runs violations_only against this
+# same data without editing violations_only.yaml.
+#
+# augmented_v3 carries ConstructionSite + verified MOCS rows, pixel-augmented, WITH the
+# `thinking` column. Its test split must be byte-identical to datasets/augmented's --
+# inference never applies this override (experiments/run_inference.py loads the default
+# root for every task), so all arms score on the same 3,004 images.
+sft_dataset_subdir: "datasets/augmented_v3"
+grpo_pool_subdir: "datasets/grpo_pool_v3"
+
+# --- Reward surface: unchanged from violations_only ------------------------------
+reward_components:
+  - reward_format
+  - reward_violation_id
+  - reward_violation_grounding
+  - reward_reasoning
+
+# Weights as set 2026-09-10 for violations_only: reward_format cut 0.10 -> 0.05 (its std
+# was measured at exactly 0.0000 at every logged GRPO step post-SFT, so it contributes
+# no advantage), with the freed 0.05 redistributed proportionally so each remaining
+# component keeps its share of the non-format mass to within 0.3%.
+reward_weights:
+  reward_format: 0.05
+  reward_violation_id: 0.422
+  reward_violation_grounding: 0.317
+  reward_reasoning: 0.211
+
+# A predicted violation must carry substance (a non-empty reason or at least one box)
+# to earn identification credit, while still counting as a false alarm on a safe image
+# via presence alone.
+require_violation_substance: true
+
+# 0.30 puts the assert/abstain break-even at p* = 0.298 under this task's weights and
+# its measured E[IoU] ~ 0.45 / E[reason] ~ 0.50 -- a recall-favouring operating point,
+# which is the intended posture for safety inspection and matches violation_fbeta: 2.0.
+# Applied to all three violation TN sites together, per CLAUDE.md invariant #6.
+#
+# NOTE: p* is solved against a ~50/50 violation/safe pool. grpo_pool_v3 must hold that
+# ratio, or the operating point moves silently -- re-run
+# `scripts/validate_rewards.py --task violations_think --probe --pool-stats` against the
+# new pool before training, and do NOT "fix" a failure by editing this constant.
+violation_tn_constant: 0.30
+
+# --- Token budgets: unchanged from violations_only -------------------------------
+# The block measures ~60 words (mean) / ~187 worst case, i.e. ~90 / ~280 tokens, which
+# fits inside the existing 1024-token completion budget alongside the ~300-token
+# worst-case JSON. Confirm with `scripts/validate_rewards.py --census` before training;
+# if it ever does not fit, REBALANCE max_prompt_length (measured worst case is 1519
+# against a 2304 cap) rather than raising max_seq_length, which would change the model
+# load window and make the arm non-comparable to v2 on cost.
+max_new_tokens: 1024
+max_completion_length: 1024
+inference_max_seq_length: 3200
+repetition_penalty: 1.0

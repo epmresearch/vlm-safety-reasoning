@@ -216,6 +216,16 @@ def main():
     logger.info(f"Loaded {len(records)} prediction records.")
 
     raw_predictions = [r["raw_output"] for r in records]
+
+    # What the MODEL actually emitted, for the think_* diagnostics only.
+    #
+    # `raw_output` is NOT that on a repaired file: structural_repair.py:1526 replaces it
+    # with re-serialized JSON for every record whose status is "fixed_valid" and stashes
+    # the model's own text in `original_raw_output`. Records it left alone (valid_raw,
+    # invalid_json, invalid_schema) keep the original in `raw_output` and carry no
+    # `original_raw_output` key at all -- so this fallback recovers the true model text
+    # in every case, and reduces to `raw_output` when scoring an unrepaired file.
+    model_texts = [r.get("original_raw_output", r.get("raw_output", "")) for r in records]
     references = [build_gt_dict(r["sample"], task=args.task) for r in records]
 
     # --- Load dataset and build image_id -> PIL image map ---
@@ -258,6 +268,7 @@ def main():
         raw_predictions, references, images=images,
         skip_spice=args.skip_spice, spice_only=args.spice_only,
         task=args.task, use_llm_judge=args.use_llm_judge,
+        model_texts=model_texts,
     )
 
     metrics_path = output_dir / "metrics.json"

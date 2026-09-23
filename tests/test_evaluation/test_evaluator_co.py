@@ -5,6 +5,7 @@ from PIL import Image
 
 from evaluation.evaluator import run_full_evaluation
 from evaluation.metrics_structural import compute_structural_metrics
+from core.constants import VALID_TASKS
 from evaluation.output_parser import (
     is_clean_prose,
     parse_output_for_task,
@@ -61,7 +62,8 @@ def test_parse_output_for_task_json_tasks_are_unchanged():
     from evaluation.output_parser import parse_model_output
 
     raw = '```json\n{"rule_1_violation": null}\n```'
-    for task in ("unified", "violations_only", "object_only"):
+    from core.tasks import is_plain_text_task
+    for task in (t for t in VALID_TASKS if not is_plain_text_task(t)):
         assert parse_output_for_task(raw, task=task) == parse_model_output(raw)
 
 

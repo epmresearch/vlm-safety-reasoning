@@ -42,6 +42,7 @@ def run_grpo(
     max_samples: Optional[int] = None,
     adapter_path: Optional[str] = None,
     base_model_override: Optional[str] = None,
+    grpo_pool_subdir: Optional[str] = None,
 ) -> str:
     """Run GRPO training for the unified safety inspection task.
 
@@ -56,6 +57,10 @@ def run_grpo(
                              instead of downloading from HuggingFace. Use this
                              with a merged SFT model so that TRL's KL reference
                              correctly points to the SFT policy, not the raw base.
+        grpo_pool_subdir: Optional GRPO pool directory override, relative to the
+                          data root. Beats the task YAML's `grpo_pool_subdir`,
+                          which beats base.yaml. Passing nothing keeps the
+                          historical path exactly.
 
     Returns:
         Path to the saved checkpoint directory.
@@ -174,8 +179,21 @@ def run_grpo(
     # data/build_grpo_pool.py's docstring). No silent fallback: if the pool
     # is missing, fail loudly rather than quietly training on the wrong data.
     # -----------------------------------------------------------------------
-    from data.loader import load_grpo_pool
-    train_split = load_grpo_pool()
+    #
+    # Pool DIRECTORY resolution: explicit argument (the --grpo_pool_subdir CLI flag,
+    # which is how the v4 arm points violations_only at a new pool without editing its
+    # YAML) -> this task's `grpo_pool_subdir` -> base.yaml -> the literal default. With
+    # none of them set the path is byte-identical to the historical one, which is what
+    # keeps v2 re-runnable.
+    from data.loader import load_grpo_pool, resolve_grpo_pool_subdir
+    pool_subdir = grpo_pool_subdir or cfg.get("grpo_pool_subdir")
+    # Recorded in run_manifest.json below, so a run's data provenance is readable off
+    # disk without re-deriving the precedence chain by hand.
+    resolved_pool_subdir = resolve_grpo_pool_subdir(pool_subdir)
+    logger.info(f"GRPO pool directory: {resolved_pool_subdir!r}"
+                + (f" (overridden; task YAML said {cfg.get('grpo_pool_subdir')!r})"
+                   if grpo_pool_subdir else ""))
+    train_split = load_grpo_pool(subdir=resolved_pool_subdir)
     logger.info(f"GRPO pool loaded: {len(train_split)} samples (already balanced)")
 
     from data.preprocessor import build_grpo_dataset_for_task
@@ -222,6 +240,12 @@ def run_grpo(
         "git_is_dirty": _git_dirty,
         "reward_components": [f.__name__ for f in _funcs],
         "reward_weights": _weights,
+        # The pool that was actually trained on, fully resolved (CLI flag -> task YAML
+        # -> base.yaml -> default). `grpo_cfg` below carries only the task-YAML value,
+        # so without this an override would leave no trace on disk.
+        "grpo_pool_subdir_arg": grpo_pool_subdir,
+        "resolved_grpo_pool_subdir": resolved_pool_subdir,
+        "grpo_pool_rows": len(train_split),
         "prompts": {"SYSTEM_PROMPT": _SYS, "TASK_PROMPT": _gp(task)},
         "grpo_cfg": cfg,
         "sft_cfg": sft_cfg,

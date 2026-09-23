@@ -23,6 +23,7 @@ from data.prompt_templates import SYSTEM_PROMPT, UNIFIED_INSPECTION_PROMPT  # no
 from data.box_utils import normalize_boxes, clean_boxes, scale_01_to_1000
 from core.constants import GROUNDING_CLASSES, RULES
 from core.logging import get_logger
+from core.think_format import THINK_FIELD, render_think_block, think_row_problems
 
 logger = get_logger(__name__)
 
@@ -299,6 +300,37 @@ def build_violations_only_ground_truth(raw: Dict[str, Any]) -> Dict[str, Any]:
     return gt
 
 
+# ---------------------------------------------------------------------------
+# violations_think -- violations_only with a <think> block in front
+# ---------------------------------------------------------------------------
+
+def _build_violations_think_target_json(raw: Dict[str, Any]) -> str:
+    """SFT target for violations_think: a ``<think>`` block + the violations_only JSON.
+
+    The JSON half DELEGATES to ``_build_violations_only_target_json``, verbatim. That is
+    load-bearing, not tidiness: it makes the payload byte-identical to what
+    violations_only trains on, so the v3-vs-v4 comparison has exactly one variable (the
+    block), and a future change to the JSON cannot desync the two arms. Pinned by
+    ``tests/test_core/test_blocker_fixes.py::test_v3_think_target_ends_with_vo_target``.
+
+    The block body comes PRE-BAKED from the dataset's ``thinking`` column and is
+    validated on the way through. A block whose verdict contradicts its own label would
+    train the model to invert evidence, and nothing downstream -- no reward, no metric,
+    no repair stage -- could detect it, so this raises rather than warns. Run
+    ``scripts/validate_think_dataset.py`` first to see every offending row at once
+    instead of discovering them one SFT job at a time.
+    """
+    problems = think_row_problems(raw)
+    if problems:
+        raise ValueError(
+            f"Bad think block for image_id={raw.get('image_id', '?')!r}: "
+            + "; ".join(problems)
+            + ". Run scripts/validate_think_dataset.py for a full report."
+        )
+    body = raw[THINK_FIELD]
+    return render_think_block(body) + _build_violations_only_target_json(raw)
+
+
 def _build_object_only_target_json(raw: Dict[str, Any]) -> str:
     """Builds the minimized fenced-JSON SFT target for object_only.
 
@@ -375,6 +407,7 @@ def build_caption_only_ground_truth(raw: Dict[str, Any]) -> Dict[str, Any]:
 _TARGET_BUILDERS = {
     "unified": _build_target_json,
     "violations_only": _build_violations_only_target_json,
+    "violations_think": _build_violations_think_target_json,
     "object_only": _build_object_only_target_json,
     "caption_only": _build_caption_only_target,
 }
@@ -382,6 +415,11 @@ _TARGET_BUILDERS = {
 _GT_BUILDERS = {
     "unified": build_ground_truth_dict,
     "violations_only": build_violations_only_ground_truth,
+    # Same GT builder OBJECT as violations_only, not a copy: identical ground truth
+    # means identical reward and metric behaviour, so the SFT target text is provably
+    # the only difference between the two arms. GRPO and evaluation both route through
+    # here, and neither needs -- or sees -- the think block.
+    "violations_think": build_violations_only_ground_truth,
     "object_only": build_object_only_ground_truth,
     "caption_only": build_caption_only_ground_truth,
 }

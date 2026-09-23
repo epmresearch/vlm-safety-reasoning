@@ -69,10 +69,20 @@ def main():
             cache[key] = load_processed_dataset(subdir=subdir)
         return cache[key]
 
+    skipped = []
     for task in args.tasks:
         task_cfg = load_task_config(task)
         subdir = task_cfg.get("sft_dataset_subdir")
-        splits = _splits_for(subdir)
+        # FAIL SOFT, per task. --tasks defaults to every registered task, and a task
+        # whose dataset has not been built yet (violations_think points at
+        # datasets/augmented_v3) would otherwise abort the whole export partway
+        # through -- silently dropping every task after it in registry order.
+        try:
+            splits = _splits_for(subdir)
+        except FileNotFoundError as exc:
+            print(f"SKIP {task}: {exc}"[:200] + "\n")
+            skipped.append(task)
+            continue
 
         print("=" * 72)
         print(f"TASK: {task}"
@@ -145,6 +155,9 @@ def main():
     print("  every task       valid=N/N. Any failure means the task cannot parse its")
     print("                   own SFT target, which breaks every downstream stage.")
     print("=" * 72)
+
+    if skipped:
+        print(f"Skipped (dataset not built yet): {', '.join(skipped)}")
 
 
 if __name__ == "__main__":

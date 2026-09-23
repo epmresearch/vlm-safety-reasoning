@@ -135,6 +135,12 @@ class CaptionOnlyOutput(BaseModel):
 SCHEMA_REGISTRY = {
     "unified": UnifiedOutput,
     "violations_only": ViolationsOnlyOutput,
+    # violations_think reuses violations_only's schema OBJECT, not a copy of it.
+    # Its wire format below the fence is byte-identical -- the <think> block sits
+    # outside the JSON and is stripped by output_parser.py::strip_fences before any
+    # validation happens -- so a separate class could only ever drift. Pinned by an
+    # identity assertion in tests/test_core/test_blocker_fixes.py.
+    "violations_think": ViolationsOnlyOutput,
     "object_only": ObjectOnlyOutput,
     "caption_only": CaptionOnlyOutput,
 }

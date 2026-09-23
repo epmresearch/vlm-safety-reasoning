@@ -37,6 +37,15 @@ def main():
     parser.add_argument("--base_model_override", default=None, help="If set, loads THIS path as the base model instead of the HF model (use with merged SFT model for correct KL reference)")
     parser.add_argument("--allow_unmerged_reference", action="store_true", help="Bypass the merged-base-model safety check and proceed without --base_model_override. NOT recommended: TRL's KL reference will be the raw pretrained base, not your SFT policy (the original reference-model bug). Use only for an intentional ablation.")
     parser.add_argument("--task", required=True, choices=VALID_TASKS, help="Task to run. Must be registered in core/tasks.py::TASK_REGISTRY.")
+    # Optional data-routing override. Resolution: this flag -> the task YAML's
+    # `grpo_pool_subdir` -> base.yaml -> the literal default. Unset reproduces the
+    # historical path byte-for-byte, which is what keeps a v2 re-run identical. This is
+    # how the v4 arm trains violations_only on a NEW pool without editing
+    # configs/tasks/violations_only.yaml (which would change v2's resolution too).
+    parser.add_argument(
+        "--grpo_pool_subdir", default=None,
+        help="Override the GRPO pool directory, relative to VLM_DATA_ROOT "
+             "(e.g. datasets/grpo_pool_v3). Beats the task YAML and base.yaml.")
     args = parser.parse_args()
 
     # Set up unique txt log file in the logs directory
@@ -90,6 +99,7 @@ def main():
         max_samples=args.max_samples,
         adapter_path=adapter_path,
         base_model_override=args.base_model_override,
+        grpo_pool_subdir=args.grpo_pool_subdir,
     )
 
     logger.info(f"GRPO run complete. Final checkpoint saved at {checkpoint_dir}")

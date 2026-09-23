@@ -189,10 +189,32 @@ def build_parser(task_default=None):
              "already warm for every requested tier; the pre-download exists to stop "
              "concurrent SLURM jobs racing on HF cache locks.",
     )
+    # --- Optional data routing ---------------------------------------------------
+    # Both default to None, in which case NOTHING is appended to the phase scripts'
+    # argument lists and each stage resolves its dataset exactly as it always has
+    # (task YAML -> base.yaml -> literal default). That is what keeps a v2 re-run
+    # byte-identical.
+    #
+    # They exist so one task can be pointed at a different dataset per submission. The
+    # v4 arm -- violations_only's exact settings on the new data, no think block -- is
+    # precisely this, and it must NOT be done by editing configs/tasks/violations_only.yaml,
+    # because that file is also what v2 resolves through.
+    parser.add_argument(
+        "--sft-dataset", default=None, metavar="SUBDIR",
+        help="Override the SFT input dataset directory for this submission, relative "
+             "to VLM_DATA_ROOT (e.g. datasets/augmented_v3). Affects the SFT stage "
+             "only; baseline/merge/GRPO do not read it.",
+    )
+    parser.add_argument(
+        "--grpo-pool", default=None, metavar="SUBDIR",
+        help="Override the GRPO pool directory for this submission, relative to "
+             "VLM_DATA_ROOT (e.g. datasets/grpo_pool_v3). Affects the GRPO stage only.",
+    )
     return parser
 
 
-def run(task: str, tiers, version: str, skip_preload: bool = False, gres=None):
+def run(task: str, tiers, version: str, skip_preload: bool = False, gres=None,
+        sft_dataset: str = None, grpo_pool: str = None):
     # run_inference.py reverse-engineers the merged-SFT base from the variant name using
     # the regex -(v\d+)(?:_[^-]*)?$. A free-form tag like "v5b" or "2025-08" yields an
     # empty version, a wrong merged path, and a SystemExit — but only AFTER GRPO training
@@ -245,9 +267,11 @@ def run(task: str, tiers, version: str, skip_preload: bool = False, gres=None):
         )
 
         # 2. SFT + Evaluation (no dependencies, runs in parallel with Baseline)
+        # The dataset override is appended ONLY when given, so an unflagged submission
+        # passes the same three positionals it always has.
         sft_job = submit_job(
             script_path=PHASE_SCRIPTS["sft"],
-            args=[task, tier, sft_variant],
+            args=[task, tier, sft_variant] + ([sft_dataset] if sft_dataset else []),
             mem=MEM_CONFIG["sft"].get(tier, "150G"),
             time=TIME_CONFIG["sft"],
             job_name=slurm_job_name(task, "sft"),
@@ -271,7 +295,8 @@ def run(task: str, tiers, version: str, skip_preload: bool = False, gres=None):
         # 4. GRPO + Evaluation (depends on Merge finishing successfully)
         grpo_job = submit_job(
             script_path=PHASE_SCRIPTS["grpo"],
-            args=[task, tier, grpo_variant, merged_variant],
+            args=[task, tier, grpo_variant, merged_variant]
+                 + ([grpo_pool] if grpo_pool else []),
             dependencies=[merge_job],
             mem=MEM_CONFIG["grpo"].get(tier, "250G"),
             time=TIME_CONFIG["grpo"],
@@ -289,7 +314,7 @@ def run(task: str, tiers, version: str, skip_preload: bool = False, gres=None):
 def main(task_default=None, argv=None):
     args = build_parser(task_default).parse_args(argv)
     run(args.task, args.tiers, args.version, skip_preload=args.skip_preload,
-        gres=args.gres)
+        gres=args.gres, sft_dataset=args.sft_dataset, grpo_pool=args.grpo_pool)
 
 
 if __name__ == "__main__":

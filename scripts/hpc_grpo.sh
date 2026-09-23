@@ -43,7 +43,8 @@
 
 # ---------------------------------------------------------------------------
 # GENERIC, TASK-PARAMETERIZED. One script serves every task pipeline
-# (unified / violations_only / object_only / caption_only); the task is the
+# (unified / violations_only / violations_think / object_only /
+# caption_only); the task is the
 # first positional argument and is threaded to every Python call explicitly.
 #
 # The --job-name and --output/--error directives above are per-task DEFAULTS.
@@ -65,9 +66,21 @@ TASK=$1
 TIER=$2
 GRPO_VARIANT=$3
 MERGED_VARIANT_NAME=$4
+# OPTIONAL 5th positional: override the GRPO pool directory, relative to
+# VLM_DATA_ROOT. Empty/absent => run_grpo.py resolves it from the task YAML, then
+# base.yaml, exactly as before. Used by the v4 arm to run violations_only against
+# datasets/grpo_pool_v3.
+GRPO_POOL_SUBDIR=$5
 if [ -z "$TASK" ] || [ -z "$TIER" ] || [ -z "$GRPO_VARIANT" ] || [ -z "$MERGED_VARIANT_NAME" ]; then
-    echo "Error: Arguments missing (Usage: hpc_grpo.sh <task> <tier> <grpo_variant> <merged_variant_name>)"
+    echo "Error: Arguments missing (Usage: hpc_grpo.sh <task> <tier> <grpo_variant> <merged_variant_name> [grpo_pool_subdir])"
     exit 1
+fi
+
+# See hpc_sft.sh for why this is an array and not a conditional string expansion.
+GRPO_POOL_ARGS=()
+if [ -n "$GRPO_POOL_SUBDIR" ]; then
+    GRPO_POOL_ARGS=(--grpo_pool_subdir "$GRPO_POOL_SUBDIR")
+    echo "GRPO pool override: $GRPO_POOL_SUBDIR"
 fi
 
 echo "Job started: $(date)"
@@ -136,7 +149,8 @@ if [ -d "${MERGED_BASE}" ] && [ -f "${MERGED_BASE}/config.json" ]; then
         --tier ${TIER} \
         --variant ${GRPO_VARIANT} \
         --task "$TASK" \
-        --base_model_override "${MERGED_BASE}"
+        --base_model_override "${MERGED_BASE}" \
+        "${GRPO_POOL_ARGS[@]}"
 else
     echo "ERROR: Merged model not found at ${MERGED_BASE}!"
     echo "Run scripts/hpc_merge_sft.sh first, or check that the merge job completed successfully."

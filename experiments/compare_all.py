@@ -95,7 +95,12 @@ def print_headline_tables(lut, columns):
         caps = get_task_spec(task).capabilities
         rows = []
         headers = ["metric"] + [column_label(*c) for c in cols]
-        for fam in ("structural", "captioning", "grounding", "violation", "reasoning"):
+        # FAMILY_ORDER, not a hardcoded tuple: a hardcoded list means a new metric
+        # family reaches the CSVs (the index is long-format and derives the family
+        # from the key prefix) but never appears in the terminal table -- which is
+        # exactly how the think_* keys were silently missing from this view.
+        # "other" is included and harmless: HEADLINE_KEYS has no entry for it.
+        for fam in FAMILY_ORDER:
             for key in HEADLINE_KEYS.get(fam, []):
                 vals = [lut.get((c[0], c[1], c[2], c[3], key)) for c in cols]
                 if all(v is None for v in vals):
@@ -138,7 +143,7 @@ def print_support_tables(lut, columns):
         if task not in by_task:
             continue
         cols = sorted_columns(by_task[task])
-        for fam in ("violation", "reasoning"):
+        for fam in FAMILY_ORDER:          # see print_headline_tables
             rows = []
             for key in SUPPORT_KEYS.get(fam, []):
                 vals = [lut.get((c[0], c[1], c[2], c[3], key)) for c in cols]

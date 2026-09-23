@@ -6,13 +6,24 @@ will silently break if you change it. For anything else, see the documentation m
 
 ---
 
-## Read this first — project status (2026-09-17)
+## Read this first — project status (2026-09-23)
 
 **Nothing is running on the cluster.** The last SLURM job finished 2026-09-15T20:37 (`48521188`, the 8B GRPO
 job of the v2 `violations_only` run). Nothing needs babysitting; `squeue -u $USER` is empty.
 
-The last pushed commit is `5ba9455` ("update reports for v2"). Run `git status --short && git log --oneline -3`
-before assuming anything about the tree — documentation is edited more often than code here.
+> ### ⚠️ The working tree is dirty, and it matters
+>
+> Last commit is `3809e34` ("final" — the MOCS review UI). **26 modified + 10 new files are
+> uncommitted**: the whole `violations_think` arm, plus changes to shared code every task runs
+> through (`core/tasks.py`, `data/preprocessor.py`, `evaluation/evaluator.py`,
+> `experiments/results_lib.py`, `compare_all.py`, `submit_pipeline.py`, `validate_rewards.py`, all
+> four `hpc_*.sh`). Any job submitted now runs *on top of* those changes and records
+> `git_is_dirty: true` — the same problem as all nine v2 manifests (`README_v2.md` §13 P0-4).
+>
+> Always run `git status --short && git log --oneline -3` before assuming anything about the tree.
+
+**Session context and the next job live in [`HANDOFF.md`](HANDOFF.md)** — what the last session did,
+what is settled, and the audit brief that precedes the next submission.
 
 | Task | v1 | v2 | notes |
 |---|---|---|---|
@@ -20,6 +31,12 @@ before assuming anything about the tree — documentation is edited more often t
 | `unified` | SFT started at all three tiers (`datasets/stats/oversample_manifest_*_unified-sft-*-v1.json` exist); **no indexed inference/eval results** | not started | |
 | `object_only` (`oo`) | never run | never run | code complete, tested, never submitted |
 | `caption_only` (`co`) | never run | never run | code complete, tested. Two 4-job `co-*-v1` chains were submitted **by accident** on 2026-09-14 (`48501131`–`48501137`) — see [the pytest-on-ARC hazard](#tests); all cancelled, every artifact deleted and verified gone |
+| `violations_think` (`vt`) | — | — | **new 2026-09-21**, never run. Code complete, tested and independently audited; blocked on `datasets/augmented_v3` + `datasets/grpo_pool_v3`, which do not exist yet. See [`V3_THINK_IMPLEMENTATION.md`](V3_THINK_IMPLEMENTATION.md) |
+
+**Next up: `object_only` and `caption_only` at 2b/4b/8b, `--version v1`** — 24 jobs, the first end-to-end
+runs either has ever had. Neither needs the MOCS harvest (MOCS carries none of the three object classes and
+its captions are teacher output, not ground truth), so they are data-complete today. Audit brief in
+[`HANDOFF.md`](HANDOFF.md) §6.
 
 **The v2 `violations_only` run is complete, analysed, and reported.** All numbers, confidence intervals,
 paired significance tests, per-rule breakdowns, the comparison against the dataset paper's Tables 7 and 8, the
@@ -76,6 +93,15 @@ yourself copying a paragraph between two of these, it is in the wrong file.
 | [`OPERATIONS.md`](OPERATIONS.md) | the ARC/SLURM runbook: setup, submitting, monitoring, failure recovery, artifact cleanup, result extraction | yes |
 | `figures_v2/` | the 15 figures `README_v2.md` embeds | yes |
 
+Three **temporary** documents also exist. Each says so at the top and each is meant to be deleted once its
+work has landed — do not let them become a fifth and sixth source of truth:
+
+| File | Owns | Delete when |
+|---|---|---|
+| [`HANDOFF.md`](HANDOFF.md) | session state, what is settled, the current audit brief | the oo/co runs land |
+| [`PLAN_V3_THINK.md`](PLAN_V3_THINK.md) | the `violations_think` design | the arm has run |
+| [`V3_THINK_IMPLEMENTATION.md`](V3_THINK_IMPLEMENTATION.md) | what was built for it, and what was deliberately skipped | the arm has run |
+
 **`docs/` is git-ignored in its entirety** (`.gitignore:23`). It holds a large local-only working archive —
 `docs/audit/`, `docs/Diagnosis/`, `docs/Jobs/` (including the full v1→v2 conversation transcripts),
 `docs/logs/`. Nothing there is authoritative and none of it reaches a clone. **Never put a doc a future agent
@@ -91,16 +117,23 @@ Research project fine-tuning Qwen3-VL (2B/4B/8B via Unsloth) for construction sa
 
 **This repo runs a family of parallel pipelines, not one pipeline.** Each *task* is a full, independent
 baseline→SFT→merge→GRPO→eval pipeline over the same images and the same base model, differing only in what the
-model is asked to output. All four are live:
+model is asked to output. All five are live:
 
 | Task | Prefix | Output | Wire format | Capabilities |
 |---|---|---|---|---|
 | `unified` | `unified` | caption + 3 object classes + 4 rule violations | fenced JSON | caption, objects, violations |
 | `violations_only` | `vo` | 4 rule violations only | fenced JSON | violations |
+| `violations_think` | `vt` | a `<think>` block, then the **byte-identical** `violations_only` JSON | fenced JSON (with a preamble) | violations |
 | `object_only` | `oo` | 3 object classes only, boxes `[0,1000]` | fenced JSON | objects |
 | `caption_only` | `co` | one scene description | **bare prose** (no JSON, no fence) | caption |
 
-Three of the four emit **one flat JSON object** per image. `caption_only` is the exception: the caption *is* the
+**`violations_think` is `violations_only` plus a reasoning preamble, and nothing else.** Same Instruct
+weights, same schema OBJECT, same ground-truth builder, same four reward components at the same weights;
+its target builder delegates the JSON half to `_build_violations_only_target_json` verbatim. It is a
+separate task purely so `vo-*-v2` stays byte-reproducible. Not started as of 2026-09-21 — see
+[`PLAN_V3_THINK.md`](PLAN_V3_THINK.md) and [`V3_THINK_IMPLEMENTATION.md`](V3_THINK_IMPLEMENTATION.md).
+
+Four of the five emit **one flat JSON object** per image. `caption_only` is the exception: the caption *is* the
 entire output, so wrapping it in JSON would add a formatting confound to the exact quantity being measured. Its
 completion is bare prose, parsed by `evaluation/output_parser.py::parse_output_for_task`, which wraps it into
 `{"caption": ...}` so every downstream layer stays dict-shaped.
@@ -149,16 +182,16 @@ SLURM CRLF errors — don't defeat it from Windows.
 
 | Path | What |
 |---|---|
-| `core/` | `tasks.py` (the task registry — the single place a task is registered), `naming.py` (every generated name), `config.py` (the merge chain), `constants.py` (`RULES`), `callbacks.py`, `run_manifest.py`, `logging.py`, `io.py`, `wandb_utils.py` |
+| `core/` | `tasks.py` (the task registry — the single place a task is registered), `naming.py` (every generated name), `config.py` (the merge chain), `constants.py` (`RULES`), `think_format.py` (the `<think>`-block wire format + its row validator), `callbacks.py`, `run_manifest.py`, `logging.py`, `io.py`, `wandb_utils.py` |
 | `configs/` | `base.yaml` → `model_registry.yaml` → `{sft,grpo}.yaml` → `tasks/<task>.yaml`, merged last-wins |
 | `data/` | `preprocessor.py` (SFT targets + GT dicts + GRPO prompts), `prompt_templates.py`, `schemas.py`, `loader.py`, `samplers.py`, `oversampling.py`, `box_utils.py`, `augment_rare_classes.py`, `build_grpo_pool.py` |
 | `models/` | `model_loader.py` (loading + LoRA resolution + pixel bounds), `sft_trainer.py`, `grpo_trainer.py`, `inference.py` |
 | `rewards/` | `unified_reward.py` (the registry + assembler), `reward_{format,caption,grounding,violation_id,violation_grounding,reasoning}.py`, `reward_utils.py` (predicates + `reward_constant`) |
-| `evaluation/` | `evaluator.py` (orchestrator), `metrics_{structural,violations,reasoning,grounding,captioning,llm_judge}.py`, `output_parser.py` |
+| `evaluation/` | `evaluator.py` (orchestrator), `metrics_{structural,violations,reasoning,grounding,captioning,llm_judge,think}.py`, `output_parser.py` |
 | `preprocessing/structural_repair.py` | the repair stage between inference and evaluation |
 | `experiments/` | entry points `run_{sft,grpo,inference,evaluation}.py`; the analysis toolset `build_results_index.py` + `compare_all.py` + `results_lib.py` + `results_charts.py`; `extract_qualitative.py` |
-| `scripts/` | `submit_pipeline.py` + four `submit_*_pipeline.py` shims; four `hpc_{baseline,sft,merge_sft,grpo}.sh` phase scripts; `merge_sft_adapter.py`, `validate_rewards.py`, `preflight_grpo.py`, `fetch_results.py`, `dataset_report.py`, `setup_arc.sh`, `augment_data.sh` |
-| `tests/` | 686 tests. `test_core/test_blocker_fixes.py` is the pre-flight/regression suite (B1–B14 plus the `test_v2_*` block that pins every v2 decision) |
+| `scripts/` | `submit_pipeline.py` + five `submit_*_pipeline.py` shims; four `hpc_{baseline,sft,merge_sft,grpo}.sh` phase scripts; `merge_sft_adapter.py`, `validate_rewards.py`, `validate_think_dataset.py`, `preflight_grpo.py`, `fetch_results.py`, `dataset_report.py`, `setup_arc.sh`, `augment_data.sh` |
+| `tests/` | 798 tests (797 pass, 1 skipped). `test_core/test_blocker_fixes.py` is the pre-flight/regression suite (B1–B14 plus the `test_v2_*` block that pins every v2 decision and `test_v3_*`, which pins that the violations_think arm is purely additive) |
 | `results_index/` | **git-ignored.** Local analysis workspace: `v2_dump/` (the downloaded v2 run dump), `analysis_v2/` (the local `compare_all` output: CSVs + `significance.csv` + 120 charts), `results_folder_vo/` + `logs_folder_err_out_vo/` + `all_vo/` (v1 archive), `index.json` |
 | `figures_v2/` | the 15 report figures, tracked so `README_v2.md` renders on GitHub |
 | `docs/` | **git-ignored** local working archive — see the documentation map above |
@@ -201,7 +234,7 @@ exact inverse and still accepts the legacy `_best` suffix for `sft` only.
 ### Tests
 
 ```powershell
-python -m pytest tests/ -v                                       # all 686, no GPU needed (~80 s)
+python -m pytest tests/ -v                                       # all 798, no GPU needed (~50 s)
 python -m pytest tests/test_core -v                               # task registry + name-isolation proof
 python -m pytest tests/test_core/test_blocker_fixes.py -v         # blockers B1-B14 + the test_v2_* decisions
 python -m pytest tests/ -k "_oo or _co" -v                        # just the two newer pipelines
@@ -643,6 +676,7 @@ two of this repo's ghost-variable bugs (both now fixed, both listed below).
 | `configs/grpo.yaml`'s "108 steps" comment assumes floor-division (`dataloader_drop_last`) | Was absent from the entire GRPO config chain (SFT sets it; GRPO didn't) — `TrainingArguments` defaults it to `False` | **Fixed 2026-09-05.** `dataloader_drop_last: true` now explicit in `configs/grpo.yaml`, confirmed via the pinned `trl==0.23.0` source that `GRPOTrainer.get_train_dataloader` passes it straight to a standard `DataLoader` |
 | `base.yaml`'s `seed: 42` | Already reached the merged GRPO config for free (the merge chain always starts with `load_base_config()`), but `models/grpo_trainer.py` never read `cfg["seed"]` back out into `GRPOConfig(seed=...)` | **Fixed 2026-09-05.** `seed=cfg.get("seed", 42)` now threaded through — no new `configs/grpo.yaml` key needed, the value was already there |
 | `loss_type` for GRPO | Was never set — TRL 0.23.0 defaults to `"dapo"` (global-token-count loss normalization) | **Fixed 2026-09-05, pinned at `"dapo"`** — already TRL's own recommended default and already what was running; declaring it explicitly just stops a future TRL upgrade from silently changing it. `"dapo"` specifically eliminates the length-bias problem this repo would otherwise have, since completions range from a handful of tokens (`object_only`'s box lists) to ~1000 (`unified`'s full JSON) |
+| `dataset.grpo_pool_subdir` in `base.yaml` | Read by `data/loader.py::load_grpo_pool` from `load_base_config()` **only**, never from the merged task config — so a task YAML setting it was silently ignored. The key existed, looked overridable, and was not: a `violations_think` run would have trained on the v2 pool while its `run_manifest.json` claimed the v3 one. | **Fixed 2026-09-21.** `load_grpo_pool(subdir=None)` mirrors `load_processed_dataset`'s long-standing pattern; `grpo_trainer.py` passes `cfg.get("grpo_pool_subdir")`, and the fully resolved value is written to `run_manifest.json` as `resolved_grpo_pool_subdir`. Precedence: CLI → task YAML → `base.yaml` → literal default, so passing nothing reproduces the old path exactly |
 | `mask_truncated_completions` for GRPO | Was never set — defaulted `False`, so a rollout that hit `max_completion_length` still contributed full per-token loss despite having no real stopping decision | **Fixed 2026-09-05, turned ON** (a real behaviour change from the TRL default) — TRL's own docs cite the DAPO paper calling this "a good practice for training stability," and it directly addresses this repo's documented truncation risk (worst case 3328 tokens against `max_seq_length: 3600`, only 272 margin) |
 
 **Why SFT's learning rate is flat across tiers.** A 5× LR spread would confound the tier-scale comparison the
@@ -758,7 +792,7 @@ Worst case 3328 against `max_seq_length: 3600` — 272 tokens of margin.
 | Dimension | Mechanism |
 |---|---|
 | Registration, prefix, capabilities, wire format | `core/tasks.py::TASK_REGISTRY` |
-| Prompt | `prompt_key` in task YAML → `data/prompt_templates.py::PROMPT_REGISTRY` (the YAML key is descriptive text only — the registry is keyed by task *name*, not by this string; nothing enforces the two stay in sync) |
+| Prompt | `prompt_key` in task YAML → `data/prompt_templates.py::PROMPT_REGISTRY`. **That key is load-bearing**: `get_prompt_for_task` reads `task_cfg["prompt_key"]` and looks the string up in the registry, so a typo is a `ValueError` at first use. (Earlier text here called it "descriptive text only" and claimed the registry was keyed by task *name* — wrong, corrected 2026-09-21.) |
 | Raw-completion parsing | `evaluation/output_parser.py::parse_output_for_task` (JSON vs bare prose) |
 | SFT target / GRPO ground truth | `data/preprocessor.py::build_target_json` / `build_gt_dict` — dispatch tables, raise on unknown task |
 | Output validation schema | `data/schemas.py::SCHEMA_REGISTRY` |
@@ -826,13 +860,13 @@ indices with no overlap and no omission, so every index still appears exactly on
 
 For `--version v1`, tier `8b`:
 
-| Artifact | unified | violations_only | object_only | caption_only |
-|---|---|---|---|---|
-| SFT variant | `unified-sft-8b-v1` | `vo-sft-8b-v1` | `oo-sft-8b-v1` | `co-sft-8b-v1` |
-| Merged KL base | `merged-unified-sft-8b-v1` | `merged-vo-sft-8b-v1` | `merged-oo-sft-8b-v1` | `merged-co-sft-8b-v1` |
-| GRPO variant | `unified-grpo-8b-v1` | `vo-grpo-8b-v1` | `oo-grpo-8b-v1` | `co-grpo-8b-v1` |
-| Baseline results dir | `unified-baseline-8b-v1` | `vo-baseline-8b-v1` | `oo-baseline-8b-v1` | `co-baseline-8b-v1` |
-| SLURM job / log stem | `vlm-sft-unified` / `sft_unified` | `vlm-sft-vo` / `sft_vo` | `vlm-sft-oo` / `sft_oo` | `vlm-sft-co` / `sft_co` |
+| Artifact | unified | violations_only | violations_think | object_only | caption_only |
+|---|---|---|---|---|---|
+| SFT variant | `unified-sft-8b-v1` | `vo-sft-8b-v1` | `vt-sft-8b-v1` | `oo-sft-8b-v1` | `co-sft-8b-v1` |
+| Merged KL base | `merged-unified-sft-8b-v1` | `merged-vo-sft-8b-v1` | `merged-vt-sft-8b-v1` | `merged-oo-sft-8b-v1` | `merged-co-sft-8b-v1` |
+| GRPO variant | `unified-grpo-8b-v1` | `vo-grpo-8b-v1` | `vt-grpo-8b-v1` | `oo-grpo-8b-v1` | `co-grpo-8b-v1` |
+| Baseline results dir | `unified-baseline-8b-v1` | `vo-baseline-8b-v1` | `vt-baseline-8b-v1` | `oo-baseline-8b-v1` | `co-baseline-8b-v1` |
+| SLURM job / log stem | `vlm-sft-unified` / `sft_unified` | `vlm-sft-vo` / `sft_vo` | `vlm-sft-vt` / `sft_vt` | `vlm-sft-oo` / `sft_oo` | `vlm-sft-co` / `sft_co` |
 
 `merged_checkpoint_name()` produces byte-identical strings in `submit_pipeline.py`, `hpc_merge_sft.sh`,
 `hpc_grpo.sh` and `run_inference.py`'s reverse-engineering regex — confirmed by direct round-trip test for all

@@ -391,7 +391,7 @@ def probe(task, prevalence, rule_prevalence, safe_rate):
 # Check 2 — token census
 # ---------------------------------------------------------------------------
 
-def census(task, tokenizer_name=None, limit=None):
+def census(task, tokenizer_name=None, limit=None, sft_subdir=None):
     print(f"\n{YELLOW}TOKEN CENSUS — {task}{RESET}")
     from core.config import load_config
     from data.prompt_templates import SYSTEM_PROMPT, get_prompt_for_task
@@ -402,7 +402,8 @@ def census(task, tokenizer_name=None, limit=None):
 
     try:
         from data.loader import load_processed_dataset
-        splits = load_processed_dataset(subdir=sft_cfg.get("sft_dataset_subdir"))
+        splits = load_processed_dataset(
+            subdir=sft_subdir or sft_cfg.get("sft_dataset_subdir"))
     except Exception as e:
         _info(f"dataset unavailable ({type(e).__name__}) — census skipped")
         return []
@@ -500,10 +501,17 @@ def census(task, tokenizer_name=None, limit=None):
 # Pool statistics
 # ---------------------------------------------------------------------------
 
-def pool_stats():
-    """Recompute class and rule prevalence from the real GRPO pool."""
+def pool_stats(subdir: str = None):
+    """Recompute class and rule prevalence from the real GRPO pool.
+
+    Args:
+        subdir: optional pool directory override, relative to the data root. Needed
+            because violation_tn_constant's break-even p* is solved against a ~50/50
+            violation/safe pool: validating a NEW pool against the OLD pool's
+            prevalences would pass while the real operating point had moved.
+    """
     from data.loader import load_grpo_pool
-    pool = load_grpo_pool()
+    pool = load_grpo_pool(subdir=subdir)
     n = len(pool)
     cls_counts = {c: 0 for c in GROUNDING_CLASSES}
     rule_counts = {r: 0 for r in RULES}
@@ -535,7 +543,7 @@ def pool_stats():
             safe / n)
 
 
-def sft_stats(task: str, batch_size: int = 32):
+def sft_stats(task: str, batch_size: int = 32, sft_subdir: str = None):
     """Measures rare-class incidence on the task's REAL SFT split and reports how often a
     batch would contain none of each class.
 
@@ -551,7 +559,7 @@ def sft_stats(task: str, batch_size: int = 32):
     print("")
     print(f"{YELLOW}SFT RARE-CLASS INCIDENCE — {task}{RESET}")
     cfg = load_task_config(task)
-    subdir = cfg.get("sft_dataset_subdir")
+    subdir = sft_subdir or cfg.get("sft_dataset_subdir")
     try:
         train = load_processed_dataset(subdir=subdir)["train"]
     except Exception as e:
@@ -601,6 +609,14 @@ def main():
     ap.add_argument("--sft-stats", action="store_true",
                     help="Measure rare-class incidence on the real SFT split (needs the "
                          "dataset; run on ARC). Reporting only.")
+    ap.add_argument("--sft-dataset-subdir", default=None,
+                    help="SFT dataset directory for --census / --sft-stats, relative "
+                         "to VLM_DATA_ROOT (e.g. datasets/augmented_v3). Beats the "
+                         "task YAML, matching run_sft.py's --sft_dataset_subdir.")
+    ap.add_argument("--grpo-pool-subdir", default=None,
+                    help="Pool directory for --pool-stats, relative to VLM_DATA_ROOT "
+                         "(e.g. datasets/grpo_pool_v3). Defaults to the first --task's "
+                         "grpo_pool_subdir, then base.yaml.")
     args = ap.parse_args()
 
     tasks = args.task or list(VALID_TASKS)
@@ -610,8 +626,17 @@ def main():
 
     prevalence, rule_prev, safe_rate = DEFAULT_POOL_PREVALENCE, DEFAULT_RULE_PREVALENCE, DEFAULT_SAFE_RATE
     if args.pool_stats:
+        pool_subdir = args.grpo_pool_subdir
+        if not pool_subdir:
+            # Fall back to the first requested task's own pool, so
+            # `--task violations_think --pool-stats` validates grpo_pool_v3 rather than
+            # silently measuring the v2 pool and passing against the wrong prevalences.
+            from core.config import load_config as _lc
+            pool_subdir = _lc(task=tasks[0], training_kind="grpo").get("grpo_pool_subdir")
+        if pool_subdir:
+            _info(f"pool stats from {pool_subdir!r}")
         try:
-            prevalence, rule_prev, safe_rate = pool_stats()
+            prevalence, rule_prev, safe_rate = pool_stats(subdir=pool_subdir)
         except Exception as e:
             _info(f"pool unavailable ({type(e).__name__}) — using measured defaults")
 
@@ -620,9 +645,10 @@ def main():
         if run_probe:
             failures += probe(t, prevalence, rule_prev, safe_rate)
         if run_census:
-            failures += census(t, args.tokenizer, args.limit)
+            failures += census(t, args.tokenizer, args.limit,
+                               sft_subdir=args.sft_dataset_subdir)
         if args.sft_stats:
-            failures += sft_stats(t)
+            failures += sft_stats(t, sft_subdir=args.sft_dataset_subdir)
 
     print("\n" + "=" * 74)
     if failures:

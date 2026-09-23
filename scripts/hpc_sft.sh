@@ -20,7 +20,8 @@
 
 # ---------------------------------------------------------------------------
 # GENERIC, TASK-PARAMETERIZED. One script serves every task pipeline
-# (unified / violations_only / object_only / caption_only); the task is the
+# (unified / violations_only / violations_think / object_only /
+# caption_only); the task is the
 # first positional argument and is threaded to every Python call explicitly.
 #
 # The --job-name and --output/--error directives above are per-task DEFAULTS.
@@ -41,9 +42,24 @@ set -eo pipefail
 TASK=$1
 TIER=$2
 VARIANT=$3
+# OPTIONAL 4th positional: override the SFT input dataset directory, relative to
+# VLM_DATA_ROOT. Empty/absent => run_sft.py resolves it from the task YAML, then
+# base.yaml, exactly as before -- so every existing submission stays byte-identical.
+# Used by the v4 arm to train violations_only on datasets/augmented_v3 without
+# editing configs/tasks/violations_only.yaml, which would change v2 as well.
+SFT_DATASET_SUBDIR=$4
 if [ -z "$TASK" ] || [ -z "$TIER" ] || [ -z "$VARIANT" ]; then
-    echo "Error: Arguments missing (Usage: hpc_sft.sh <task> <tier> <variant>, e.g. object_only 2b oo-sft-2b-v1)"
+    echo "Error: Arguments missing (Usage: hpc_sft.sh <task> <tier> <variant> [sft_dataset_subdir], e.g. object_only 2b oo-sft-2b-v1)"
     exit 1
+fi
+
+# An ARRAY, not ${VAR:+...} string interpolation: an empty array expands to zero
+# arguments, whereas a conditional string expansion can inject an empty argument
+# that argparse then reads as a stray positional.
+SFT_DATA_ARGS=()
+if [ -n "$SFT_DATASET_SUBDIR" ]; then
+    SFT_DATA_ARGS=(--sft_dataset_subdir "$SFT_DATASET_SUBDIR")
+    echo "SFT dataset override: $SFT_DATASET_SUBDIR"
 fi
 
 echo "Job started: $(date)"
@@ -102,7 +118,8 @@ echo "======================================================================"
 python -m experiments.run_sft \
     --tier ${TIER} \
     --variant ${VARIANT} \
-    --task "$TASK"
+    --task "$TASK" \
+    "${SFT_DATA_ARGS[@]}"
 
 echo "======================================================================"
 echo "[STEP 2/4] Running Inference on the FINAL SFT Checkpoint"
