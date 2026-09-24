@@ -49,13 +49,40 @@ module load gcc/13.3.0 python/3.12.5
 source $HOME/envs/vlm_grpo/bin/activate
 export VLM_DATA_ROOT="$HOME/vlm-finetuning-project1"    # NOT set by the login shell
 
-python scripts/submit_pipeline.py --task object_only  --tiers 2b 4b 8b --version v1 --skip-preload
-python scripts/submit_pipeline.py --task caption_only --tiers 2b 4b 8b --version v1 --skip-preload
+TIMES="--time-baseline 04:00:00 --time-sft 06:00:00 --time-merge 01:00:00 --time-grpo 16:00:00"
+python scripts/submit_pipeline.py --task object_only  --tiers 2b 4b 8b --version v1 --skip-preload $TIMES
+python scripts/submit_pipeline.py --task caption_only --tiers 2b 4b 8b --version v1 --skip-preload $TIMES
 ```
 
 `--skip-preload` is right **because pre-flight confirmed the base models are cached** — it also
 sidesteps F4. It is not a blanket recommendation; without a warm cache the preload exists to stop
 concurrent jobs racing on HF cache locks.
+
+### Walltime: why these `--time-*` values
+
+**They cut the reservation from 297 to 162 GPU-hours (−45%).** `TIME_CONFIG`'s defaults are sized for
+`unified` (512 SFT steps, 1024-token completions, six reward components) and are deliberately left
+alone — lowering them would silently under-request for that task. Sizing comes from the v2 `vo`
+measurements, which are a *larger* job than either of these:
+
+| Stage | default | vo v2 measured max | est. `oo` / `co` max | **override** | margin | cost of a wall kill |
+|---|---|---|---|---|---|---|
+| baseline | 12:00 | 1:19 | ~1:00 / ~1:15 | **04:00:00** | 3.2× | low — independent job |
+| sft | 12:00 | 2:02 | ~2:00 / ~2:10 | **06:00:00** | 2.8× | **high — `afterok` chain-killer** |
+| merge | 1:30 | 0:04 | ~0:03 | **01:00:00** | 15× | **high — chain-killer** |
+| grpo | 24:00 | 11:27 | ~8:15 / **~13:00** | **16:00:00** | 1.2× on `co`-8b | lowest — auto-resumes, nothing downstream |
+
+SFT and merge keep generous margin because a kill there takes merge *and* GRPO with it. GRPO runs
+tightest because it is the cheapest failure: `grpo_trainer.py:261-266` auto-resumes from
+`save_steps: 20`, so the response to a timeout is to re-submit the identical job.
+
+**Do not set GRPO below 16 h.** `co`-8b is the binding case: decomposing vo's 11:27 (≈10:39 training +
+≈0:48 inference/eval) gives ~1.39 s per rollout at ~70 tokens, and `co`'s ~85-token completions put it
+at **~12:50–13:20**. A 12 h wall would land on top of it.
+
+`resolve_times` validates every value against the partition `MaxTime` of 24:00:00 *before* anything is
+submitted (preserving B13), and rejects bare-minute spellings — SLURM reads `12` as twelve **minutes**,
+which would kill every job a few minutes in.
 
 Eyeball the `Scheduling ... for Qwen3-VL-<T>` header lines for a tier typo before walking away:
 `--tiers` has no `choices=` (F9), so `8B` is accepted and only fails after the queue wait.
@@ -461,7 +488,9 @@ The on-ARC `--census` (§1) independently confirms both: `oo` worst 1846, `co` w
 | grpo | `gpu-h100` | `gpu:h100:1` | 8 | 250G | **24:00:00** | 5:24 / 9:22 / **11:27** |
 
 `MEM_CONFIG` (`submit_pipeline.py:50-55`) and `TIME_CONFIG` (`:57-78`) match each script's own
-`#SBATCH` exactly. No `--gres` is passed (no escape hatch used), so the in-file `gpu:h100:1` governs.
+`#SBATCH` exactly. **As of 2026-09-23 the four `--time-<stage>` flags override `TIME_CONFIG` per
+submission** (validated against the 24 h partition MaxTime); the oo/co runs use
+4 / 6 / 1 / 16 h, cutting the reservation from 297 to 162 GPU-h. See §2. No `--gres` is passed (no escape hatch used), so the in-file `gpu:h100:1` governs.
 24:00:00 is **at**, not over, `gpu-h100`'s real `MaxTime` of `1-00:00:00`, so nothing is silently
 unsubmittable. `--partition` and `--cpus-per-task` are never overridden.
 

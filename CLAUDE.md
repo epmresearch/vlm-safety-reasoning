@@ -316,6 +316,18 @@ in `~/scratch/hf_cache` — defeating the preload's purpose (the cache-lock race
 happens) and burning home-directory quota. **Check `ls ~/.cache/huggingface/hub` vs `ls ~/scratch/hf_cache/hub`
 on the login node after a preload** before trusting it worked.
 
+**Per-stage walltime is overridable per submission** (added 2026-09-23):
+`--time-baseline/--time-sft/--time-merge/--time-grpo`, each `HH:MM:SS` or `D-HH:MM:SS`, validated
+against the partition's 24 h `MaxTime` before anything is submitted — so an override cannot
+re-introduce B13 (an over-limit `--time` is rejected by `sbatch` at submission, which for the GRPO
+stage looks nothing like a training failure). Bare-minute spellings are rejected on purpose: SLURM
+reads `12` as twelve *minutes*. `TIME_CONFIG`'s defaults stay sized for the LARGEST task (`unified`);
+smaller tasks should trim via the flags rather than by lowering the defaults. The `object_only` /
+`caption_only` v1 runs use `4 / 6 / 1 / 16` h, which cuts the reservation from 297 to 162 GPU-h
+against ~62 expected — reservation size costs nothing in billing but does hurt backfill priority.
+Give SFT and merge generous margin (they are `afterok` chain-killers); GRPO can run tighter because
+nothing depends on it and it auto-resumes from `save_steps: 20`.
+
 There are only **four** phase scripts, all task-parameterized — `scripts/hpc_{baseline,sft,merge_sft,grpo}.sh`,
 taking the task as their first positional argument. Because `#SBATCH` directives cannot read arguments, the
 submitter passes `--job-name`, `--output`, `--error`, `--mem`, `--time` and (for GRPO only, and only as an

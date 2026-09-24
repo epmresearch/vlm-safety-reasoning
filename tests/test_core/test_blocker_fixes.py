@@ -1426,3 +1426,81 @@ def test_v3_only_the_think_task_asks_for_a_block():
     for task in VALID_TASKS:
         has_block = THINK_OPEN in get_prompt_for_task(task)
         assert has_block == (task == "violations_think"), task
+
+
+# ---------------------------------------------------------------------------
+# Per-stage walltime overrides (--time-<stage>), added 2026-09-23
+# ---------------------------------------------------------------------------
+# TIME_CONFIG is sized for the LARGEST task (unified). Smaller tasks over-reserve
+# badly -- object_only/caption_only were requesting 297 GPU-h against ~62 expected,
+# which costs nothing in billing but pushes every job behind shorter ones in
+# backfill. The overrides must NOT be able to re-introduce B13 (an over-limit
+# --time is rejected by sbatch AT SUBMISSION, so the GRPO job -- last in the chain
+# -- simply never gets scheduled, looking nothing like a training failure).
+
+def test_time_overrides_default_to_time_config():
+    from scripts.submit_pipeline import TIME_CONFIG, resolve_times
+    assert resolve_times({s: None for s in TIME_CONFIG}) == TIME_CONFIG
+
+
+def test_time_overrides_are_applied_per_stage():
+    from scripts.submit_pipeline import TIME_CONFIG, resolve_times
+    got = resolve_times({"baseline": "04:00:00", "sft": None,
+                         "merge": None, "grpo": "16:00:00"})
+    assert got["baseline"] == "04:00:00"
+    assert got["grpo"] == "16:00:00"
+    assert got["sft"] == TIME_CONFIG["sft"]      # untouched
+    assert got["merge"] == TIME_CONFIG["merge"]
+
+
+def test_time_override_cannot_exceed_partition_max_time():
+    """B13, preserved through the new flag."""
+    from scripts.submit_pipeline import resolve_times
+    with pytest.raises(SystemExit, match="MaxTime"):
+        resolve_times({"grpo": "48:00:00"})
+    with pytest.raises(SystemExit, match="MaxTime"):
+        resolve_times({"grpo": "2-00:00:00"})
+    # Exactly at the limit is fine -- that is what TIME_CONFIG already ships.
+    assert resolve_times({"grpo": "24:00:00"})["grpo"] == "24:00:00"
+
+
+@pytest.mark.parametrize("bad", ["12", "90", "12:00", "abc", "", "-01:00:00", "1:2:3:4"])
+def test_time_override_rejects_ambiguous_or_malformed_values(bad):
+    """'12' is the dangerous one: SLURM reads a bare number as MINUTES, so a job
+    meant to run 12 hours would be killed 12 minutes in."""
+    from scripts.submit_pipeline import resolve_times
+    with pytest.raises(SystemExit):
+        resolve_times({"grpo": bad})
+
+
+def test_parse_slurm_time_arithmetic():
+    from scripts.submit_pipeline import parse_slurm_time
+    assert parse_slurm_time("16:00:00") == 16 * 3600
+    assert parse_slurm_time("01:30:00") == 5400
+    assert parse_slurm_time("1-00:00:00") == 86400
+    assert parse_slurm_time("00:00:30") == 30
+
+
+def test_time_override_reaches_the_sbatch_command_line(monkeypatch):
+    """End to end: the value must land on the sbatch line, since that is what
+    beats each hpc_*.sh's own in-file #SBATCH --time directive."""
+    import scripts.submit_pipeline as sp
+
+    seen = []
+
+    def _fake_submit(script_path, args, dependencies=None, mem=None, time=None,
+                     job_name=None, log_stem=None, gres=None):
+        seen.append((log_stem, time))
+        return "JOBID"
+
+    monkeypatch.setattr(sp, "submit_job", _fake_submit)
+    sp.main(argv=["--task", "object_only", "--tiers", "2b", "--version", "v1",
+                  "--skip-preload", "--time-baseline", "04:00:00",
+                  "--time-sft", "06:00:00", "--time-merge", "01:00:00",
+                  "--time-grpo", "16:00:00"])
+    assert dict(seen) == {
+        "base_oo_2b_v1": "04:00:00",
+        "sft_oo_2b_v1": "06:00:00",
+        "merge_sft_oo_2b_v1": "01:00:00",
+        "grpo_oo_2b_v1": "16:00:00",
+    }

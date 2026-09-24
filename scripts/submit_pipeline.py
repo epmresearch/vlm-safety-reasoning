@@ -77,6 +77,59 @@ TIME_CONFIG = {
     "grpo": "24:00:00",
 }
 
+# gpu-h100's real MaxTime, confirmed via `scontrol show partition gpu-h100`. sbatch
+# rejects an over-limit --time AT SUBMISSION, not at runtime, so an over-long request
+# fails in a way that looks nothing like a training failure (see the note above).
+# Enforced here so a --time-* override cannot re-introduce that bug.
+PARTITION_MAX_SECONDS = 24 * 3600
+
+_SLURM_TIME_RE = re.compile(r"^(?:(\d+)-)?(\d{1,3}):(\d{2}):(\d{2})$")
+
+
+def parse_slurm_time(value: str) -> int:
+    """Seconds for a SLURM ``[D-]HH:MM:SS`` walltime string.
+
+    Deliberately accepts only that one spelling. SLURM itself also takes ``MM``,
+    ``MM:SS`` and ``D-HH``, but allowing them here means a typo like ``12`` (which
+    SLURM reads as twelve MINUTES, not twelve hours) would be accepted silently and
+    kill every job a few minutes in. One format, validated up front.
+    """
+    m = _SLURM_TIME_RE.match(value.strip())
+    if not m:
+        raise SystemExit(
+            f"--time value {value!r} must be HH:MM:SS or D-HH:MM:SS (e.g. 16:00:00, "
+            "1-00:00:00). Bare minutes are rejected on purpose: SLURM would read "
+            "'12' as 12 minutes."
+        )
+    days, hours, minutes, seconds = m.groups()
+    return (int(days or 0) * 86400) + (int(hours) * 3600) + (int(minutes) * 60) + int(seconds)
+
+
+def resolve_times(overrides: dict) -> dict:
+    """TIME_CONFIG with any --time-<stage> overrides applied, each validated.
+
+    The defaults stay sized for the LARGEST task (`unified`: 512 SFT steps,
+    1024-token completions, six reward components). Shorter tasks should trim via
+    these flags per submission rather than by lowering the defaults, which would
+    silently under-request for `unified`.
+    """
+    times = dict(TIME_CONFIG)
+    for stage, value in overrides.items():
+        if value is None:
+            continue
+        seconds = parse_slurm_time(value)
+        if seconds > PARTITION_MAX_SECONDS:
+            raise SystemExit(
+                f"--time-{stage} {value!r} exceeds the gpu-h100 partition MaxTime of "
+                f"24:00:00. sbatch would reject it at submission, and for the GRPO "
+                f"stage that failure looks nothing like a training failure."
+            )
+        if seconds <= 0:
+            raise SystemExit(f"--time-{stage} {value!r} must be greater than zero.")
+        times[stage] = value
+    return times
+
+
 PHASE_SCRIPTS = {
     "baseline": "scripts/hpc_baseline.sh",
     "sft": "scripts/hpc_sft.sh",
@@ -210,11 +263,29 @@ def build_parser(task_default=None):
         help="Override the GRPO pool directory for this submission, relative to "
              "VLM_DATA_ROOT (e.g. datasets/grpo_pool_v3). Affects the GRPO stage only.",
     )
+    # --- Per-stage walltime overrides -------------------------------------------
+    # TIME_CONFIG is sized for the LARGEST task (unified). A smaller task requesting
+    # those defaults reserves far more than it uses, which costs nothing in billing
+    # but hurts backfill priority -- a 24h request queues behind everything a 6h one
+    # would slot into. Override per submission rather than lowering the defaults.
+    #
+    # Sizing data, measured on the violations_only v2 runs (2b/4b/8b):
+    #   baseline 1:19 / 1:19 / 0:48    sft   1:09 / 1:46 / 2:02
+    #   merge    0:01 / 0:04 / 0:02    grpo  5:24 / 9:21 / 11:27
+    # Give SFT and MERGE generous margin: they are afterok chain-killers, so a wall
+    # kill there takes merge and GRPO with it. GRPO can run tighter -- nothing
+    # depends on it and models/grpo_trainer.py auto-resumes from save_steps: 20.
+    for _stage, _default in TIME_CONFIG.items():
+        parser.add_argument(
+            f"--time-{_stage}", default=None, metavar="HH:MM:SS",
+            help=f"Walltime for the {_stage} stage (default {_default}). "
+                 "Must be HH:MM:SS or D-HH:MM:SS and <= the partition MaxTime of 24:00:00.",
+        )
     return parser
 
 
 def run(task: str, tiers, version: str, skip_preload: bool = False, gres=None,
-        sft_dataset: str = None, grpo_pool: str = None):
+        sft_dataset: str = None, grpo_pool: str = None, times: dict = None):
     # run_inference.py reverse-engineers the merged-SFT base from the variant name using
     # the regex -(v\d+)(?:_[^-]*)?$. A free-form tag like "v5b" or "2025-08" yields an
     # empty version, a wrong merged path, and a SystemExit — but only AFTER GRPO training
@@ -226,6 +297,11 @@ def run(task: str, tiers, version: str, skip_preload: bool = False, gres=None,
         )
 
     prefix = task_prefix(task)
+    times = times or dict(TIME_CONFIG)
+    if times != TIME_CONFIG:
+        print("Walltime overrides in effect: " + ", ".join(
+            f"{s}={times[s]}" + ("" if times[s] == TIME_CONFIG[s] else f" (default {TIME_CONFIG[s]})")
+            for s in TIME_CONFIG))
 
     # SLURM cannot create the log directory itself: if it is missing, the job fails at
     # launch with no output anywhere to explain why.
@@ -260,7 +336,7 @@ def run(task: str, tiers, version: str, skip_preload: bool = False, gres=None,
             script_path=PHASE_SCRIPTS["baseline"],
             args=[task, tier, version],
             mem=MEM_CONFIG["baseline"].get(tier, "150G"),
-            time=TIME_CONFIG["baseline"],
+            time=times["baseline"],
             job_name=slurm_job_name(task, "baseline", tier, version),
             log_stem=slurm_log_stem(task, "baseline", tier, version),
             gres=gres,
@@ -273,7 +349,7 @@ def run(task: str, tiers, version: str, skip_preload: bool = False, gres=None,
             script_path=PHASE_SCRIPTS["sft"],
             args=[task, tier, sft_variant] + ([sft_dataset] if sft_dataset else []),
             mem=MEM_CONFIG["sft"].get(tier, "150G"),
-            time=TIME_CONFIG["sft"],
+            time=times["sft"],
             job_name=slurm_job_name(task, "sft", tier, version),
             log_stem=slurm_log_stem(task, "sft", tier, version),
             gres=gres,
@@ -286,7 +362,7 @@ def run(task: str, tiers, version: str, skip_preload: bool = False, gres=None,
             args=[task, tier, sft_variant, merged_variant],
             dependencies=[sft_job],
             mem=MEM_CONFIG["merge"].get(tier, "80G"),
-            time=TIME_CONFIG["merge"],
+            time=times["merge"],
             job_name=slurm_job_name(task, "merge", tier, version),
             log_stem=slurm_log_stem(task, "merge", tier, version),
             gres=gres,
@@ -299,7 +375,7 @@ def run(task: str, tiers, version: str, skip_preload: bool = False, gres=None,
                  + ([grpo_pool] if grpo_pool else []),
             dependencies=[merge_job],
             mem=MEM_CONFIG["grpo"].get(tier, "250G"),
-            time=TIME_CONFIG["grpo"],
+            time=times["grpo"],
             job_name=slurm_job_name(task, "grpo", tier, version),
             log_stem=slurm_log_stem(task, "grpo", tier, version),
             gres=gres,
@@ -313,8 +389,12 @@ def run(task: str, tiers, version: str, skip_preload: bool = False, gres=None,
 
 def main(task_default=None, argv=None):
     args = build_parser(task_default).parse_args(argv)
+    # Validated and clamped to the partition MaxTime BEFORE anything is submitted --
+    # a bad --time value must not surface as a half-submitted pipeline.
+    times = resolve_times({s: getattr(args, f"time_{s}") for s in TIME_CONFIG})
     run(args.task, args.tiers, args.version, skip_preload=args.skip_preload,
-        gres=args.gres, sft_dataset=args.sft_dataset, grpo_pool=args.grpo_pool)
+        gres=args.gres, sft_dataset=args.sft_dataset, grpo_pool=args.grpo_pool,
+        times=times)
 
 
 if __name__ == "__main__":
