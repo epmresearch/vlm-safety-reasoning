@@ -123,8 +123,12 @@ def canonical_reason(text: Any) -> str:
     The period is stripped only in the block, so ``... hard hat -> yes (1)`` reads
     cleanly. It stays intact in the JSON payload below, because ``reward_reasoning``
     and the LLM judge score against the exact GT string.
+
+    Whitespace is collapsed for the same reason the caption's is -- a reason carrying
+    a newline would split into two block lines that no longer parse as one verdict.
+    See :func:`collapse_whitespace`.
     """
-    return str(text or "").strip().rstrip(".").strip()
+    return collapse_whitespace(text).rstrip(".").strip()
 
 
 def problem_bucket(problem: str) -> str:
@@ -148,30 +152,45 @@ def problem_bucket(problem: str) -> str:
     return s.split(":")[0].strip()[:70]
 
 
-def _reject_unusable_text(text: Any, label: str) -> str:
-    """Returns ``text`` stripped, or raises if it cannot appear inside a block.
+def collapse_whitespace(text: Any) -> str:
+    """Every run of whitespace -- newlines included -- becomes one space, then strip.
 
-    The four rejected shapes are exactly the ones ``think_row_problems`` refuses, so
-    ``build_think_body`` can never emit a body its own validator would reject:
+    This is NOT a content edit. The block is one line per element, so a caption or
+    reason carrying a newline cannot be written into it verbatim; collapsing the
+    whitespace changes no word, drops no clause and invents nothing, which keeps the
+    arm's "every token is ground truth" property intact.
+
+    It replaces an earlier, over-strict choice to REJECT such a row outright. On the
+    real ConstructionSite train split that cost 19 perfectly good images whose only
+    sin was a line break in the caption -- free prose that nothing scores, and that
+    ``parse_think_body`` already space-joins when it reads a multi-line description
+    back. Dropping real training data to preserve a formatting rule the parser does
+    not even enforce was the wrong trade.
+
+    ``think_row_problems`` compares the block's caption against this same function's
+    output, so the two cannot disagree.
+    """
+    return " ".join(str(text or "").split())
+
+
+def _reject_unusable_text(text: Any, label: str) -> str:
+    """Returns ``text`` with whitespace collapsed, or raises if it cannot be used.
+
+    Three rejected shapes remain -- exactly the ones ``think_row_problems`` refuses,
+    so ``build_think_body`` can never emit a body its own validator would reject:
 
       * blank              -- there would be no line to write
-      * a newline          -- the CANONICAL body is one line per element, and a reason
-                              carrying a newline would split into two lines that no
-                              longer parse as one verdict. (A newline in the caption is
-                              harmless at INFERENCE -- parse_think_body accepts a
-                              multi-line description -- but the baked dataset still has
-                              to be deterministic.)
       * a brace            -- trained in, it teaches the model to emit ``{`` inside the
                               block, where structural_repair's no-fence fallback
                               (``_extract_outermost_braces``) could pick the block up
                               instead of the real JSON payload
       * a code fence       -- it would break fence extraction outright
+
+    A newline is NOT rejected any more; it is collapsed. See :func:`collapse_whitespace`.
     """
-    s = str(text or "").strip()
+    s = collapse_whitespace(text)
     if not s:
         raise ValueError(f"{label} is blank; the think block needs it")
-    if "\n" in s:
-        raise ValueError(f"{label} contains a newline; each block line must be one line")
     if "{" in s or "}" in s:
         raise ValueError(f"{label} contains a brace, which cannot appear inside the block")
     if "```" in s:
@@ -388,11 +407,11 @@ def think_row_problems(raw: Dict[str, Any]) -> List[str]:
     difference (a trailing period data prep did not strip) passes while a genuinely
     different sentence fails.
 
-    The CAPTION comparison is deliberately VERBATIM (a plain ``!=`` on the stripped
-    strings). The block's first line is meant to be ``image_caption`` copied, not
-    paraphrased or re-punctuated, and unlike a reason there is no formatting convention
-    to normalise away -- so any difference at all means the two fields disagree about
-    what the image shows.
+    The CAPTION comparison is verbatim UP TO WHITESPACE (``collapse_whitespace`` on
+    both sides). The block's first line is meant to be ``image_caption`` copied, not
+    paraphrased or re-punctuated, so any difference in the words at all means the two
+    fields disagree about what the image shows -- but a line break is a formatting
+    artifact, not a disagreement, and the block is one line per element.
 
     Exact byte-identity of the whole body against ``build_think_body`` is a separate,
     opt-in check: the validator's ``--strict``.
@@ -418,7 +437,10 @@ def think_row_problems(raw: Dict[str, Any]) -> List[str]:
     parsed = parse_think_body(body)
     problems.extend(parsed.problems)
 
-    expected_caption = str(raw.get("image_caption") or "").strip()
+    # Collapsed, not raw: parse_think_body space-joins a multi-line description when
+    # it reads one back, and build_think_body collapses on the way in, so the raw
+    # value with its newline intact is the one string that could never match.
+    expected_caption = collapse_whitespace(raw.get("image_caption"))
     if not expected_caption:
         problems.append("image_caption is blank")
     elif parsed.caption and parsed.caption != expected_caption:

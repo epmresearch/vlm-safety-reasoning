@@ -482,7 +482,8 @@ def test_losing_too_much_of_the_harvest_aborts_even_below_the_corpus_threshold(d
     images.mkdir()
     entries = [_review_entry(f"mocs_000000{i}", images) for i in range(1, 9)]
     # 1 of 8 = 12.5% of the harvest, but only ~2% of the corpus -- under --max-drop-rate.
-    entries[0]["image_caption"] = "a caption\nwith a newline"
+    # A brace, not a newline: a newline is collapsed now, not refused.
+    entries[0]["image_caption"] = "a caption with a {brace}"
     review = _make_review(data_root, entries)
     with pytest.raises(SystemExit, match="verified MOCS rows"):
         build_v3.main(["--review", str(review), "--mocs-review-images", str(images)])

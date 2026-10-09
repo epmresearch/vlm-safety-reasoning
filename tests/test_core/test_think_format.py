@@ -102,11 +102,48 @@ def test_build_refuses_a_reasonless_violation():
         build_think_body(CAPTION, violations_from_row(row))
 
 
-def test_build_refuses_a_blank_or_multiline_caption():
+def test_build_refuses_a_blank_caption():
     with pytest.raises(ValueError, match="blank"):
         build_think_body("   ", violations_from_row({}))
-    with pytest.raises(ValueError, match="one line"):
-        build_think_body("two\nlines", violations_from_row({}))
+
+
+def test_a_multiline_caption_is_COLLAPSED_not_refused():
+    """A line break in free prose is a formatting artifact, not bad data. Refusing it
+    cost 19 real ConstructionSite training images on the first v3 build, for a rule
+    parse_think_body does not even enforce -- it space-joins a multi-line description
+    when it reads one back. No word is changed and nothing is invented."""
+    body = build_think_body("two\nlines", violations_from_row({}))
+    lines = body.split("\n")
+    assert lines[0] == "two lines"
+    assert len(lines) == 5
+
+    # tabs and runs of spaces collapse the same way
+    assert build_think_body("a\t\tb   c", violations_from_row({})).split("\n")[0] == "a b c"
+
+    # and the row still passes its own validator with the RAW newline still sitting in
+    # the dataset column -- that pairing is what actually has to hold
+    row = {"image_caption": "two\nlines", "thinking": body,
+           **{f"rule_{i}_violation": None for i in (1, 2, 3, 4)}}
+    assert think_row_problems(row) == []
+
+
+def test_a_multiline_reason_is_collapsed_too():
+    row = {"image_caption": "A site.",
+           "rule_1_violation": {"bounding_box": [[0.1, 0.1, 0.4, 0.8]],
+                                "reason": "no hard\nhat"},
+           **{f"rule_{i}_violation": None for i in (2, 3, 4)}}
+    body = build_think_body(row["image_caption"], violations_from_row(row))
+    assert "rule_1: no hard hat -> yes (1)" in body
+    assert think_row_problems({**row, "thinking": body}) == []
+
+
+def test_braces_and_fences_are_still_refused():
+    """These genuinely cannot appear: a brace can divert structural repair's no-fence
+    fallback onto the block, a fence breaks fence extraction outright."""
+    with pytest.raises(ValueError, match="brace"):
+        build_think_body("a {b} c", violations_from_row({}))
+    with pytest.raises(ValueError, match="fence"):
+        build_think_body("a ``` c", violations_from_row({}))
 
 
 def test_render_wraps_with_tags_and_a_trailing_newline():
