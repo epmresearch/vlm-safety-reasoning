@@ -340,8 +340,16 @@ machine at fault.** If you cannot see who or what is to blame, the answer is *no
 
 ## 5. Step 1 - the caption  (key `C`)
 
-One sentence describing the photo. **yes** if it matches what you see, **no** if it is wrong
-or describes a different scene. Required on every photo.
+A sentence or two describing the photo. **yes** if it matches what you see, **no** if it is
+wrong or describes a different scene. Required on every photo.
+
+**You can edit it.** The caption is a text box - click in and fix the wrong part instead of
+retyping the whole thing. As soon as you change it the app records *no* for you (the model's
+version was not right) and **your text is the one that gets used**. `reset` puts the model's
+sentence back.
+
+A caption marked *no* and left unedited means the photo has **no usable caption** - the rules
+still count, but that part is lost. If it is only slightly wrong, fix it.
 
 ## 6. Step 2 - the four rules  (keys `1` `2` `3` `4`)
 
@@ -375,18 +383,33 @@ and the app stops you finishing a photo while anything is blank.
 
 Use it and Discard both save and jump to the next photo automatically.
 
-## 8. Boxes and reasons
+## 8. Boxes
 
-The model's boxes are often wrong. If a rule really is broken but its box is on the wrong
-thing, choose that rule under **"draw a better box for"** below the photo and drag a new box.
-Drawing a box also sets that rule to *yes*. Click one of your dashed boxes to delete it.
+The model's boxes are often wrong.
+
+**To delete a box** - the model's solid ones as well as your own dashed ones - just click it,
+with **"draw a better box for"** set to *(off)*. Where boxes overlap, the **smallest** one
+under the cursor is the one that goes. `restore model` brings back every model box you
+deleted on this photo; `clear mine` removes the ones you drew. Nothing is lost permanently -
+the file still records what the model originally proposed.
+
+**To draw a better one**, pick the rule under **"draw a better box for"** and drag. Drawing a
+box also sets that rule to *yes*.
+
+So when the model boxed the wrong object: **delete its box, then draw the right one.** Adding
+yours without deleting theirs leaves two boxes for one violation.
+
 Where a green **MOCS** box exists, prefer it - a human drew it.
 
-If you turn **on** a rule the model did not propose, a **reason** box appears in that card.
-Please fill it: one sentence naming who or what is at fault and what the breach is, e.g.
-*"The worker on the left is on foot without a hard hat."* Without it the finding has no
-explanation attached. For a rule the model *did* propose, leave the box empty unless its
-sentence is wrong.
+## 8b. Reasons
+
+Say *yes* to a rule and a **reason** box opens, **already filled in with the model's
+sentence**. Edit it rather than rewriting it - most are mostly right and name the wrong
+person or the wrong place. `reset reason` puts the model's wording back.
+
+For a rule the model did **not** propose the box starts empty and you write it: one sentence
+naming who or what is at fault and what the breach is, e.g. *"The worker on the left is on
+foot without a hard hat."* Without it the finding has no explanation attached.
 
 ## 9. Keyboard
 

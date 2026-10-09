@@ -94,22 +94,46 @@ SYSTEM_PROMPT = (
 #     judge's Relevance criterion ("whether the explanation adheres to the specific
 #     safety rule"). Judging an explanation against wording the model never saw
 #     would score the prompt, not the model.
+#
+# REWRITTEN 2026-10-08. The previous wording named only each rule's TRIGGER and omitted
+# its qualifying conditions, which is the wrong half: measured on the ground truth, a
+# trigger is visible far more often than its rule is broken (a person on foot -> rule_1
+# 13% of the time; a worker on a scaffold -> rule_2 10%; an excavation -> rule_3 6%; a
+# person near an excavator -> rule_4 7%), and v2's dominant error was over-flagging.
+#
+# Kept deliberately TERSE. This is a fine-tuning prompt, not a zero-shot one: 7,021 SFT
+# targets teach the conventions far more strongly than prose can, so the prompt only has
+# to make each rule unambiguous and state the output contract. Exclusion lists, worked
+# examples and calibration advice were drafted and then cut -- they belong in
+# mocs_annotation/REVIEW_RUBRIC.md, which is where a human annotator reads them. Every
+# token here is also paid 8x per GRPO rollout at prefill, so length is not free.
+#
+# Sources, in the dataset's own order of authority (REVIEW_RUBRIC.md): the HuggingFace
+# card for LouisChen15/ConstructionSite, the paper (Chen & Zou, Data-Centric Engineering
+# 2026, doi:10.1017/dce.2026.10044), and the annotator's measured practice over all
+# 10,013 images -- which is BROADER than the card in one place (rule_3 also covers
+# above-ground slab edges) and NARROWER in another (rule_2 never fires on machine plant,
+# 0 of 84).
+#
 SAFETY_RULE_TEXTS = {
     "rule_1": (
-        "   - Rule 1 - basic PPE: a person on foot is missing basic PPE, e.g. no hard hat, "
-        "or clothing that leaves the shoulders or legs uncovered.\n"
+        "   - Rule 1 - basic PPE: a person ON FOOT is missing a hard hat, clothing "
+        "covering the shoulders and legs, shoes covering the toes, a hi-vis vest AT "
+        "NIGHT, or eye protection WHILE cutting, welding, grinding or drilling.\n"
     ),
     "rule_2": (
-        "   - Rule 2 - safety harness: a person working at height (on a scaffold, roof, "
-        "beam, ladder or other elevated structure) is not wearing a safety harness.\n"
+        "   - Rule 2 - safety harness: a person working at height on a scaffold, roof, "
+        "formwork, frame, beam or ladder has no harness AND the working edge has no "
+        "guardrail, toe board or netting. Never a person on machine plant.\n"
     ),
     "rule_3": (
-        "   - Rule 3 - edge protection: an open excavation, trench, pit or floor edge has no "
-        "guard rail, barrier or warning marking.\n"
+        "   - Rule 3 - edge protection: an excavation, trench, pit or slab edge has "
+        "nothing at the top - no guardrail, fence, barrier or warning tape. Judged on "
+        "the site alone; nobody need be near it.\n"
     ),
     "rule_4": (
-        "   - Rule 4 - blind spot: a person is standing within the operating radius or "
-        "blind spot of an excavator or other heavy machine.\n"
+        "   - Rule 4 - blind spot: a person is inside the operation radius and blind "
+        "spot of an EXCAVATOR that is in operation or has an operator inside.\n"
     ),
 }
 
@@ -126,16 +150,25 @@ def safety_rule_description(rule: str) -> str:
 # difference between them would confound the multi-task vs single-task comparison.
 _SAFETY_RULES = "".join(SAFETY_RULE_TEXTS[r] for r in ("rule_1", "rule_2", "rule_3", "rule_4"))
 
+# The BOX-COUNT clause was rewritten 2026-10-08. It used to say "list more than one box
+# if more than one instance violates the same rule" for all four rules -- right for
+# rules 1 and 2, flatly wrong for 3 and 4. Measured boxes per violated image: 1.66,
+# 1.74, 1.16, 1.01 -- and in the TEST split, the key every number is scored against,
+# rules 3 and 4 are EXACTLY 1.00 (63/63 and 24/24), including four rule_4 reasons that
+# name two or three people and still carry a single box. (reward_violation_grounding
+# scores mask-union IoU, so the count is never scored directly; what the clause changes
+# is the REGION the model learns to cover, and per-person boxes under-cover a group box.)
 _VIOLATION_INSTRUCTIONS = (
-    "   Report a rule only when you can point to the specific person, edge or machine in "
-    "this image that violates it. If you cannot see such a violation, output null for "
-    "that rule. Rules are independent: any number of them may be violated, or none.\n"
+    "   Every condition of a rule must hold, and you must be able to point to the "
+    "person, edge or machine at fault. If you cannot tell, output null. Rules are "
+    "independent: any number may be violated, or none.\n"
     "   For a violated rule output "
-    "{\"reason\":\"...\", \"bounding_box\":[[xmin, ymin, xmax, ymax]]}, where each box "
-    "encloses one person, edge or machine that violates it and is scaled 0-1000. List "
-    "more than one box if more than one instance violates the same rule.\n"
+    "{\"reason\":\"...\", \"bounding_box\":[[xmin, ymin, xmax, ymax]]}, boxes scaled "
+    "0-1000, one verdict per rule however many people. Rules 1 and 2 take one box per "
+    "person at fault; Rule 3 takes one box over the edge; Rule 4 takes one box over the "
+    "worker or group, never the excavator.\n"
     "   Write the reason as ONE sentence saying who or what is at fault, identified by "
-    "position or appearance, and what the breach is.\n"
+    "position or appearance, and naming the item or feature.\n"
 )
 
 # Shared by unified and object_only, for the same non-drift reason as the rules.

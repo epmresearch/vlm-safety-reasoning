@@ -93,14 +93,15 @@ yourself copying a paragraph between two of these, it is in the wrong file.
 | [`OPERATIONS.md`](OPERATIONS.md) | the ARC/SLURM runbook: setup, submitting, monitoring, failure recovery, artifact cleanup, result extraction | yes |
 | `figures_v2/` | the 15 figures `README_v2.md` embeds | yes |
 
-Three **temporary** documents also exist. Each says so at the top and each is meant to be deleted once its
-work has landed — do not let them become a fifth and sixth source of truth:
+**Temporary** documents also exist. Each says so at the top and each is meant to be deleted once its
+work has landed — do not let them become additional sources of truth:
 
 | File | Owns | Delete when |
 |---|---|---|
 | [`HANDOFF.md`](HANDOFF.md) | session state, what is settled, the current audit brief | the oo/co runs land |
 | [`PLAN_V3_THINK.md`](PLAN_V3_THINK.md) | the `violations_think` design | the arm has run |
 | [`V3_THINK_IMPLEMENTATION.md`](V3_THINK_IMPLEMENTATION.md) | what was built for it, and what was deliberately skipped | the arm has run |
+| [`V3_DATA_COMBINE.md`](V3_DATA_COMBINE.md) | how `datasets/augmented_v3` + `datasets/grpo_pool_v3` are built from the verified MOCS harvest, and the exact v4/v3 run plan | v3 and v4 have run |
 
 **`docs/` is git-ignored in its entirety** (`.gitignore:23`). It holds a large local-only working archive —
 `docs/audit/`, `docs/Diagnosis/`, `docs/Jobs/` (including the full v1→v2 conversation transcripts),
@@ -184,7 +185,7 @@ SLURM CRLF errors — don't defeat it from Windows.
 |---|---|
 | `core/` | `tasks.py` (the task registry — the single place a task is registered), `naming.py` (every generated name), `config.py` (the merge chain), `constants.py` (`RULES`), `think_format.py` (the `<think>`-block wire format + its row validator), `callbacks.py`, `run_manifest.py`, `logging.py`, `io.py`, `wandb_utils.py` |
 | `configs/` | `base.yaml` → `model_registry.yaml` → `{sft,grpo}.yaml` → `tasks/<task>.yaml`, merged last-wins |
-| `data/` | `preprocessor.py` (SFT targets + GT dicts + GRPO prompts), `prompt_templates.py`, `schemas.py`, `loader.py`, `samplers.py`, `oversampling.py`, `box_utils.py`, `augment_rare_classes.py`, `build_grpo_pool.py` |
+| `data/` | `preprocessor.py` (SFT targets + GT dicts + GRPO prompts), `prompt_templates.py`, `schemas.py`, `loader.py`, `samplers.py`, `oversampling.py`, `box_utils.py`, `augment_rare_classes.py`, `build_grpo_pool.py`, `mocs_rows.py` (the verified-MOCS review file → ConstructionSite rows, pure), `build_v3_datasets.py` (builds `augmented_v3` + `grpo_pool_v3`; see [`V3_DATA_COMBINE.md`](V3_DATA_COMBINE.md)) |
 | `models/` | `model_loader.py` (loading + LoRA resolution + pixel bounds), `sft_trainer.py`, `grpo_trainer.py`, `inference.py` |
 | `rewards/` | `unified_reward.py` (the registry + assembler), `reward_{format,caption,grounding,violation_id,violation_grounding,reasoning}.py`, `reward_utils.py` (predicates + `reward_constant`) |
 | `evaluation/` | `evaluator.py` (orchestrator), `metrics_{structural,violations,reasoning,grounding,captioning,llm_judge,think}.py`, `output_parser.py` |

@@ -397,8 +397,17 @@ def main():
             
             wandb.log(metrics_to_log)
             wandb.finish()
-        except ImportError:
-            logger.error("wandb is not installed. Please install it (pip install wandb) to use W&B logging.")
+        except Exception as e:
+            # Deliberately Exception, not ImportError. The comment above states the
+            # stake correctly -- this call sits inside the SFT/GRPO phase jobs, AFTER
+            # metrics.json is already on disk, and the phase scripts run under
+            # `set -eo pipefail`, so ANY exception here fails the job and `afterok`
+            # then kills merge and GRPO for a reason unrelated to the model. Catching
+            # only ImportError left every other failure mode (an offline-dir quota in
+            # $HOME/scratch, a malformed config value, a wandb internal error) able to
+            # take down a whole tier's chain after the work was finished.
+            logger.error(f"W&B logging failed ({type(e).__name__}: {e}). "
+                         "metrics.json is already written; continuing.")
 
     logger.info(f"Evaluation complete. All artifacts saved to: {output_dir}")
     logger.info(f"Total metrics tracked: {len(eval_results['metrics'])}")

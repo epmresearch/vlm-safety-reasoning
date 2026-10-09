@@ -254,6 +254,29 @@ def build_grpo_dataset(
     return ds
 
 
+class StrictTargetError(ValueError):
+    """A target that must ABORT the build, not be skipped with a warning.
+
+    Subclasses ValueError so existing ``pytest.raises(ValueError)`` expectations and
+    any caller catching ValueError keep working; what makes it special is only that
+    ``build_sft_dataset`` re-raises it by name instead of swallowing it.
+
+    ``build_sft_dataset`` wraps every row in ``except Exception`` and downgrades a
+    failure to ``logger.warning("Skipping sample ...")``. That is right for a corrupt
+    image, and exactly wrong for a target whose whole purpose is to refuse bad data
+    before any GPU time is spent: a swallowed refusal means the arm trains on a
+    silently smaller dataset, and because the rare mask is built on the PRE-build split
+    (``experiments/run_sft.py:175``) while the conversations are the POST-build list,
+    one skipped row makes the two lengths disagree and
+    ``models/sft_trainer.py:358-363`` then disables stratified rare-class sampling for
+    the ENTIRE run -- turning the sampler this task's rare rules depend on into a plain
+    shuffle, with nothing but a warning in a SLURM log to say so.
+
+    Raised by ``_build_violations_think_target_json`` and re-raised by
+    ``build_sft_dataset``.
+    """
+
+
 def _build_violations_only_target_json(raw: Dict[str, Any]) -> str:
     """Builds the minimized JSON target string wrapped in code fences for violations_only."""
     target_dict = {}
@@ -322,7 +345,11 @@ def _build_violations_think_target_json(raw: Dict[str, Any]) -> str:
     """
     problems = think_row_problems(raw)
     if problems:
-        raise ValueError(
+        # StrictTargetError, not ValueError: build_sft_dataset catches Exception per
+        # row and would otherwise downgrade this to "Skipping sample ..." -- defeating
+        # the entire point of raising here, and silently disabling the stratified
+        # sampler as a side effect. See StrictTargetError's docstring.
+        raise StrictTargetError(
             f"Bad think block for image_id={raw.get('image_id', '?')!r}: "
             + "; ".join(problems)
             + ". Run scripts/validate_think_dataset.py for a full report."
@@ -501,6 +528,12 @@ def build_sft_dataset(
             pil_image = sample["image"]
             conv = raw_sample_to_conversation_for_task(sample, pil_image, task)
             conversations.append(conv)
+        except StrictTargetError:
+            # NEVER swallowed. See the class docstring: skipping one of these both
+            # trains the arm on silently less data AND, via the row-count mismatch at
+            # models/sft_trainer.py:358-363, turns stratified rare-class sampling off
+            # for the whole run.
+            raise
         except Exception as e:
             skipped += 1
             logger.warning(

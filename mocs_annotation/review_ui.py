@@ -28,6 +28,23 @@ their own laptop, probably Windows, who should not have to install anything.
     Use it / Discard buttons fell below the fold on a 1366x768 laptop -- so the app
     read as though it had no decision buttons at all, which is exactly how it was
     reported.
+  * EVERYTHING THE MODEL WROTE IS EDITABLE IN PLACE, not replaceable only by
+    retyping. The caption is a textarea prefilled with the model's sentence; each
+    rule's reason is a textarea prefilled with the model's reason; model boxes are
+    deletable by clicking them. Before this, a caption that was 90% right cost the
+    whole row ("no" and nothing else), a reason naming the wrong worker had to be
+    rewritten from scratch, and a box on the wrong object could only be joined by a
+    second, correct one -- leaving two boxes for one violation. None of it mutates
+    the record in DATA: a deletion is an index in `delmodel`, an edit is a string in
+    `caption_text`/`reasons`, so every change is reversible and the saved file can
+    still report what the model actually proposed.
+  * THE SAVED FILE CARRIES THE FINISHED ROWS, not just the keystrokes. `verdicts` is
+    the reviewer state (what resumes a session); `dataset_rows` is the resolved
+    answer per accepted image, already in `datasets/processed` shape with boxes in
+    [0,1]. The app is the only place that knows which model box was deleted and
+    which sentence was rewritten, so it is the only place that can resolve them
+    correctly -- a later join against proposals_all.jsonl would have to re-derive it
+    from indices and would break the first time the corpus was rebuilt.
   * THE UI STATES WHAT IT IS RECORDING, rather than explaining it in a help page.
     Every rule shows, in words, the fact your yes/no just asserted ("false alarm --
     model was wrong"), and the pinned bar names what is still unanswered. Prose in
@@ -94,6 +111,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   .st.good{color:#8ef0b0;border-color:var(--ok);background:#123d22}
   .st.bad {color:#ffb3b3;border-color:var(--no);background:#3d1212}
   .st.add {color:#cfe0ff;border-color:var(--accent);background:#132844}
+  .st.edit{color:#cfe0ff;border-color:var(--accent);background:#132844}
   .rule{border:1px solid var(--line);border-radius:8px;padding:6px 7px;margin-bottom:5px;
         background:var(--panel2)}
   .rule.prop{border-left:4px solid var(--line)}
@@ -111,8 +129,16 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   .m{border-color:var(--maybe)} .m.on{background:var(--maybe);border-color:var(--maybe);color:#2a1a00}
   textarea{width:100%;min-height:46px;resize:vertical}
   .big{font-size:14px;padding:6px 11px;font-weight:600}
+  /* The caption is an EDITABLE textarea, not a read-only div. A caption that is
+     90% right used to cost the whole row -- "no" discarded it and there was no way
+     to fix the one wrong clause. Editing in place keeps the row. */
   .caption{background:var(--panel2);border:1px solid var(--line);border-radius:8px;
-           padding:7px;font-size:12.5px;max-height:120px;overflow-y:auto}
+           padding:7px;font-size:12.5px;width:100%;min-height:62px;resize:vertical;
+           color:var(--fg);font-family:inherit;line-height:1.45}
+  .caption.dirty{border-color:var(--accent)}
+  textarea.rsn{width:100%;min-height:40px;margin-top:6px;font-size:12.5px;
+               line-height:1.4;resize:vertical}
+  textarea.rsn.dirty{border-color:var(--accent)}
   #help,#gate{position:fixed;inset:0;background:rgba(0,0,0,.82);display:none;z-index:9;
         align-items:center;justify-content:center}
   #gate{background:rgba(10,11,14,.97);z-index:10}
@@ -172,6 +198,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         <option value="rule_3">rule_3</option><option value="rule_4">rule_4</option>
       </select>
       <button id="bClearBoxes" title="Remove every box you drew on this photo">clear mine</button>
+      <button id="bRestoreBoxes" title="Bring back every model box you deleted on this photo">restore model</button>
     </div>
   </div>
 
@@ -187,10 +214,12 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
     <div class="sec" id="secCap">
       <h3><span class="step">Step 1</span>Does the caption match this photo? <kbd>C</kbd></h3>
-      <div class="caption" id="cap"></div>
+      <textarea class="caption" id="cap" spellcheck="true"
+                title="The model's caption. Edit it here if it is wrong -- your text is what gets used."></textarea>
       <div class="row" style="margin-top:6px">
         <button class="y" data-cap="y" title="The caption describes this photo correctly">yes</button>
         <button class="n" data-cap="n" title="The caption is wrong, or describes a different scene">no</button>
+        <button id="bCapReset" title="Put the model's original caption back">reset</button>
         <span id="capSt" class="st"></span>
       </div>
     </div>
@@ -268,8 +297,16 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
      each once you get into a rhythm.</p>
 
   <h3>Step 1 &mdash; the caption <kbd>C</kbd></h3>
-  <p>One sentence describing the photo. <strong>yes</strong> if it matches what you see,
+  <p>A sentence or two describing the photo. <strong>yes</strong> if it matches what you see,
      <strong>no</strong> if it is wrong or describes a different scene.</p>
+  <p><strong>You can edit it.</strong> The caption box is a text field &mdash; click into it
+     and fix whatever is wrong rather than retyping the whole thing. The moment you change
+     it the app records <em>no</em> for you (the model&rsquo;s version was not right) and
+     <strong>your text is what gets used</strong>. <em>reset</em> puts the model&rsquo;s
+     sentence back.</p>
+  <p class="muted">A caption marked <em>no</em> and <strong>not</strong> rewritten leaves the
+     photo with no usable caption &mdash; the rules still count, but the caption is lost. If
+     it is only slightly wrong, it is worth the five seconds to fix it.</p>
 
   <h3>Step 2 &mdash; the four rules <kbd>1</kbd><kbd>2</kbd><kbd>3</kbd><kbd>4</kbd></h3>
   <p>For each rule: <strong>is it broken in this photo, yes or no?</strong> Look at the photo
@@ -333,18 +370,27 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         <td><strong>drawn by a human</strong>, from the source dataset. Trust it over the
             model's.</td></tr>
     <tr><td>solid colour</td><td>the model's guess &mdash; often on the wrong thing</td></tr>
-    <tr><td>dashed</td><td>a box <strong>you</strong> drew. Click it to delete it.</td></tr>
+    <tr><td>dashed</td><td>a box <strong>you</strong> drew</td></tr>
   </table>
-  <p>If a rule really is broken but the model's box is on the wrong object, pick that rule in
-     <em>&ldquo;draw a better box for&rdquo;</em> under the photo and drag a new box. Drawing a
-     box also sets that rule to <em>yes</em>.</p>
+  <p><strong>Click any box to delete it</strong> &mdash; the model&rsquo;s solid ones as well as
+     your own dashed ones &mdash; as long as <em>&ldquo;draw a better box for&rdquo;</em> is set
+     to <em>(off)</em>. Where boxes overlap, the <em>smallest</em> one under the cursor is the
+     one that goes. <em>restore model</em> brings back every model box you deleted on this
+     photo; <em>clear mine</em> removes the ones you drew.</p>
+  <p>If a rule really is broken but the model&rsquo;s box is on the wrong object: delete the
+     model&rsquo;s box, then pick that rule in <em>&ldquo;draw a better box for&rdquo;</em> and
+     drag the right one. Drawing a box also sets that rule to <em>yes</em>.</p>
+  <p class="muted">Deleting is reversible and nothing is lost &mdash; the file still records
+     what the model originally proposed.</p>
 
   <h3>Reasons</h3>
-  <p>If you turn <strong>on</strong> a rule the model did not propose, a reason box appears in
-     that card. Please write one sentence naming <em>who or what</em> is at fault and
-     <em>what</em> the breach is &mdash; e.g. &ldquo;The worker on the left is on foot without a
-     hard hat.&rdquo; For a rule the model <em>did</em> propose, leave it blank unless its
-     sentence is wrong.</p>
+  <p>Say <em>yes</em> to a rule and a <strong>reason box</strong> opens, already filled in with
+     the model&rsquo;s sentence. <strong>Edit it</strong> rather than rewriting it &mdash; most
+     are mostly right and name the wrong person or the wrong place. <em>reset reason</em> puts
+     the model&rsquo;s wording back.</p>
+  <p>For a rule the model did <strong>not</strong> propose, the box starts empty and you write
+     it: one sentence naming <em>who or what</em> is at fault and <em>what</em> the breach is
+     &mdash; e.g. &ldquo;The worker on the left is on foot without a hard hat.&rdquo;</p>
 
   <h3>Keyboard</h3>
   <table>
@@ -435,15 +481,30 @@ async function writeFile(){
              "). Choose it again, or pick a new one.");
   }
 }
+// `delmodel` holds, per rule, the INDICES of model boxes the reviewer deleted. The
+// record in DATA is never mutated: it is the model's output and stays the model's
+// output, so a deletion is reversible and the saved file can still report what the
+// model actually proposed. `caption_text` is the reviewer's edited caption.
 function vd(id){ const o = state[id] || (state[id] = {rules:{}, boxes:{}, reasons:{}});
-                 o.rules=o.rules||{}; o.boxes=o.boxes||{}; o.reasons=o.reasons||{}; return o; }
+                 o.rules=o.rules||{}; o.boxes=o.boxes||{}; o.reasons=o.reasons||{};
+                 o.delmodel=o.delmodel||{}; return o; }
 function decided(id){ return !!(state[id] && state[id].decision); }
+
+// Has the reviewer rewritten the caption? Whitespace-insensitive, so re-typing the
+// same words with a different trailing space is not an "edit".
+function capEdited(d, v){
+  if(v.caption_text==null) return false;
+  const t=v.caption_text.trim();
+  return !!t && t!==String(d.cap||"").trim();
+}
 
 // What is still unanswered on this image. ONE function, used by the pinned bar and
 // by the Use-it guard, so the warning can never disagree with what the bar showed.
-function missingOn(v){
+// An EDITED caption counts as judged: rewriting it is a stronger statement than
+// pressing "no", and demanding a button press on top of it only loses work.
+function missingOn(v, d){
   const m = RULES.filter(r=>!v.rules[r]);
-  if(!v.caption_ok) m.push("caption");
+  if(!v.caption_ok && !(d && capEdited(d,v))) m.push("caption");
   return m;
 }
 
@@ -494,9 +555,13 @@ function drawCanvas(){
     ctx.fillStyle=colour; ctx.fillRect(lx,ly,tw,th);
     ctx.fillStyle="#000"; ctx.fillText(label,lx+5,ly+th-6);
   }
+  const del=vd(d.id).delmodel||{};
   for(const r of RULES){
     if(!layers[r]) continue;
-    const v=d.r[r]; if(v&&v.p) for(const b of v.boxes||[]) box1(b,COL[r],r,false);
+    const v=d.r[r];
+    if(v&&v.p) (v.boxes||[]).forEach((b,i)=>{
+      if(!(del[r]||[]).includes(i)) box1(b,COL[r],r,false);
+    });
     for(const b of (vd(d.id).boxes[r]||[])) box1(b,COL[r],r+" (mine)",true);
   }
   if(layers.mocs) for(const b of (d.r4||[])) box1(b,COL.mocs,"MOCS r4",false);
@@ -506,17 +571,35 @@ function drawCanvas(){
 }
 let drag=null;
 function xy(e){ const r=cv.getBoundingClientRect(); return {x:e.clientX-r.left,y:e.clientY-r.top}; }
+// Click-to-delete, for BOTH kinds of box. The model's boxes are wrong often enough
+// that being able only to add a correction left the wrong box in the data next to
+// the right one -- two boxes for one worker, one of them on a bucket.
+//
+// SMALLEST BOX WINS. A rule_3 box covering half the frame sits on top of a rule_1
+// box round one worker; first-match-wins made the inner box unclickable, which reads
+// as "delete is broken". Collect every box under the cursor, take the smallest.
+// Within a tie the reviewer's own box wins, so your correction is never the thing
+// you cannot remove.
 cv.addEventListener("mousedown",e=>{
   const d=cur(); if(!d) return; const p=xy(e);
-  if(!drawRule.value){                       // click a dashed box to delete it
-    const mine=vd(d.id).boxes;
-    for(const r of RULES) for(let i=0;i<(mine[r]||[]).length;i++){
-      const b=mine[r][i];
-      if(p.x>=b[0]*cv.width&&p.x<=b[2]*cv.width&&p.y>=b[1]*cv.height&&p.y<=b[3]*cv.height){
-        mine[r].splice(i,1); save(); drawCanvas(); return;
-      }
+  if(!drawRule.value){
+    const v=vd(d.id), hits=[];
+    const inside=b=>p.x>=b[0]*cv.width&&p.x<=b[2]*cv.width&&
+                    p.y>=b[1]*cv.height&&p.y<=b[3]*cv.height;
+    const area=b=>(b[2]-b[0])*(b[3]-b[1]);
+    for(const r of RULES){
+      if(!layers[r]) continue;              // a hidden layer must not be clickable
+      (v.boxes[r]||[]).forEach((b,i)=>{ if(inside(b)) hits.push({kind:"mine",r,i,a:area(b)}); });
+      const mb=(d.r[r]&&d.r[r].p)?(d.r[r].boxes||[]):[];
+      mb.forEach((b,i)=>{ if(!(v.delmodel[r]||[]).includes(i) && inside(b))
+                            hits.push({kind:"model",r,i,a:area(b)+1e-9}); });
     }
-    return;
+    if(!hits.length) return;
+    hits.sort((x,y)=>x.a-y.a);
+    const h=hits[0];
+    if(h.kind==="mine") v.boxes[h.r].splice(h.i,1);
+    else (v.delmodel[h.r]=v.delmodel[h.r]||[]).push(h.i);
+    save(); render(); return;
   }
   drag={x0:p.x,y0:p.y,x:p.x,y:p.y};
 });
@@ -549,6 +632,16 @@ function ruleStatus(proposed, val){
   return         val==="y" ? ["add", "you added it — model missed it"]
                            : ["good","agreed — not broken"];
 }
+// The caption chip, split out of render() so typing can refresh it WITHOUT a
+// re-render -- a re-render rebuilds the textarea and steals the caret mid-word.
+// It also states the one outcome that silently loses a row: "wrong" with no rewrite.
+function capChip(d,v){
+  const cs = capEdited(d,v)     ? ["edit","edited — your caption will be used"]
+           : !v.caption_ok      ? ["todo","not judged yet"]
+           : v.caption_ok==="y" ? ["good","caption is correct"]
+                                : ["bad", "wrong, and not rewritten — no usable caption"];
+  capSt.className="st "+cs[0]; capSt.textContent=cs[1];
+}
 function render(){
   const d=cur();
   prog.textContent = view.length
@@ -559,16 +652,16 @@ function render(){
   const v=vd(d.id);
   rid.textContent=d.id; rsrc.textContent=d.src; rrun.textContent=d.run;
   rq.textContent="queues: "+(d.q||[]).join(", ");
-  cap.textContent=d.cap||"(no caption)";
+  // Never clobber the box the reviewer is typing in: render() also fires on a rule
+  // toggle, and overwriting .value mid-sentence would move the caret to the end.
+  if(document.activeElement!==cap) cap.value = (v.caption_text!=null ? v.caption_text : (d.cap||""));
+  cap.classList.toggle("dirty", capEdited(d,v));
   cats.textContent="MOCS categories: "+((d.cats||[]).join(", ")||"none (the test split carries no MOCS annotations)");
   r4hint.textContent=(d.r4&&d.r4.length)
       ? "green box = human-drawn worker+machine region — prefer it for rule_4"
       : "no human-drawn box for this photo";
   document.querySelectorAll("[data-cap]").forEach(b=>b.classList.toggle("on",v.caption_ok===b.dataset.cap));
-  const cs = !v.caption_ok      ? ["todo","not judged yet"]
-           : v.caption_ok==="y" ? ["good","caption is correct"]
-                                : ["bad", "caption is wrong"];
-  capSt.className="st "+cs[0]; capSt.textContent=cs[1];
+  capChip(d,v);
   document.querySelectorAll(".dec").forEach(b=>b.classList.toggle("on",v.decision===b.dataset.dec));
   bHard.classList.toggle("on",!!v.hard);
   notes.value=v.notes||"";
@@ -576,7 +669,15 @@ function render(){
   rules.innerHTML = RULES.map(r=>{
     const p=!!(d.r[r]&&d.r[r].p), val=v.rules[r]||"";
     const mine=(v.boxes[r]||[]).length;
+    const nDel=(v.delmodel[r]||[]).length;
+    const nMod=((d.r[r]&&d.r[r].boxes)||[]).length;
     const st=ruleStatus(p,val);
+    // PREFILLED with the model's sentence, so a reason that is 90% right is edited
+    // rather than retyped. `undefined` means untouched -> show the model's; "" means
+    // the reviewer deliberately cleared it.
+    const modelReason=(d.r[r]&&d.r[r].reason)||"";
+    const rtxt = v.reasons[r]!==undefined ? v.reasons[r] : modelReason;
+    const rdirty = rtxt.trim()!==modelReason.trim();
     return `<div class="rule ${p?'prop':''} ${val?'':'unset'}" data-r="${r}">
       <div class="hd"><span class="sw" style="background:${COL[r]}"></span>
         <span class="nm">${r}</span>
@@ -588,13 +689,15 @@ function render(){
                 title="${r} is NOT broken in this photo">no</button>
       </div>
       <div><span class="st ${st[0]}">${st[1]}</span></div>
-      ${p?`<div class="reason">${esc(d.r[r].reason||"")}</div>
-           <div class="muted">${(d.r[r].boxes||[]).length} model box(es)${mine?` · ${mine} of yours`:""}</div>`
-         :`<div class="muted" style="margin-top:4px">${mine?`${mine} box(es) you drew`:"the model did not mention this rule"}</div>`}
-      ${val==="y"?`<input class="rsn" data-r="${r}" value="${esc(v.reasons[r]||"")}"
-          style="width:100%;margin-top:6px" placeholder="${p
-            ? "reason wrong? write a better one (optional)"
-            : "REASON PLEASE — one sentence: who/what is at fault, and what the breach is"}">`:""}
+      ${p&&val!=="y"?`<div class="reason">${esc(modelReason)}</div>`:""}
+      <div class="muted" style="margin-top:4px">${p
+          ? `${nMod-nDel} of ${nMod} model box(es)${nDel?` · ${nDel} deleted`:""}${mine?` · ${mine} of yours`:""}`
+          : (mine?`${mine} box(es) you drew`:"the model did not mention this rule")}</div>
+      ${val==="y"?`<textarea class="rsn${rdirty?" dirty":""}" data-r="${r}" rows="2"
+          placeholder="${p ? "edit this sentence if it is wrong"
+            : "REASON PLEASE — one sentence: who/what is at fault, and what the breach is"}"
+          >${esc(rtxt)}</textarea>
+        ${p&&rdirty?`<button class="rrst" data-r="${r}" style="margin-top:4px">reset reason</button>`:""}`:""}
     </div>`;
   }).join("");
   rules.querySelectorAll(".rv").forEach(b=>b.onclick=()=>{
@@ -602,12 +705,19 @@ function render(){
     save(); render();
   });
   // oninput only SAVES -- it must not re-render, or the field loses focus mid-word.
+  // The dirty outline is toggled directly for the same reason.
   rules.querySelectorAll(".rsn").forEach(el=>el.oninput=()=>{
-    vd(d.id).reasons[el.dataset.r]=el.value; save();
+    const r=el.dataset.r;
+    vd(d.id).reasons[r]=el.value;
+    el.classList.toggle("dirty", el.value.trim()!==(((d.r[r]&&d.r[r].reason)||"").trim()));
+    save();
+  });
+  rules.querySelectorAll(".rrst").forEach(b=>b.onclick=()=>{
+    delete vd(d.id).reasons[b.dataset.r]; save(); render();
   });
 
   // The pinned bar always names what is left, in the same words the guard will use.
-  const miss=missingOn(v);
+  const miss=missingOn(v,d);
   if(miss.length){
     todoChip.className="st todo";
     todoChip.textContent="still to judge: "+miss.join(", ");
@@ -636,7 +746,7 @@ function setDec(x){
   // an unjudged caption cannot be used as a training target at all. Discard needs
   // neither, and if the reviewer watches the orange bar this never fires.
   if(x==="accept" && v.decision!==x){
-    const miss = missingOn(v);
+    const miss = missingOn(v,d);
     if(miss.length && !confirm(
         "Not judged yet: "+miss.join(", ")+".\n\n"+
         "An unjudged rule is recorded as NOT broken, and an unjudged caption cannot "+
@@ -658,6 +768,24 @@ bHard.onclick=()=>{ const v=vd(cur().id); v.hard=!v.hard; save(); render(); };
 notes.oninput=()=>{ vd(cur().id).notes=notes.value; save(); };
 bPrev.onclick=()=>step(-1); bNext.onclick=()=>step(1); bNextTodo.onclick=nextTodo;
 bClearBoxes.onclick=()=>{ vd(cur().id).boxes={}; save(); render(); };
+bRestoreBoxes.onclick=()=>{ vd(cur().id).delmodel={}; save(); render(); };
+
+// Editing the caption is itself the verdict on the model's: if you had to rewrite it,
+// the model's was not right. Setting "n" here saves a keystroke and, more importantly,
+// stops an edited row being recorded as "model caption correct" -- which would corrupt
+// the teacher-precision estimate the `sample` queue exists to produce. The reviewer can
+// still override with the buttons afterwards.
+cap.oninput=()=>{
+  const d=cur(); if(!d) return; const v=vd(d.id);
+  v.caption_text=cap.value;
+  if(capEdited(d,v) && v.caption_ok!=="n") v.caption_ok="n";
+  if(!capEdited(d,v) && v.caption_text.trim()==="") v.caption_ok=v.caption_ok||"";
+  cap.classList.toggle("dirty", capEdited(d,v));
+  document.querySelectorAll("[data-cap]").forEach(b=>b.classList.toggle("on",v.caption_ok===b.dataset.cap));
+  capChip(d,v); save();
+};
+bCapReset.onclick=()=>{ const d=cur(); if(!d) return;
+  delete vd(d.id).caption_text; save(); render(); };
 document.querySelectorAll(".lay").forEach(b=>b.onclick=()=>{
   layers[b.dataset.r]=!layers[b.dataset.r]; b.classList.toggle("on"); drawCanvas(); });
 drawRule.onchange=()=>{ cv.style.cursor = drawRule.value?"crosshair":"pointer"; };
@@ -699,18 +827,130 @@ function b1000(b){ return "["+b.map(c=>Math.round(c*1000)).join(", ")+"]"; }
 // and hard are included: judging only the caption, or only flagging a photo as hard,
 // is still work, and the earlier version silently dropped both.
 function touched(v){
-  return !!(v && (v.decision || v.notes || v.hard || v.caption_ok
+  return !!(v && (v.decision || v.notes || v.hard || v.caption_ok || v.caption_text!=null
                   || Object.keys(v.rules||{}).length
                   || Object.keys(v.boxes||{}).length
-                  || Object.keys(v.reasons||{}).length));
+                  || Object.keys(v.reasons||{}).length
+                  || Object.keys(v.delmodel||{}).length));
+}
+
+// ------------------------------------------------- resolving a reviewed record
+//
+// These three functions are the WHOLE contract between this app and the combine
+// step. They collapse "what the model said" + "what the reviewer did to it" into
+// one answer per field, in the shape and the SCALE the training pipeline already
+// uses:
+//
+//   bounding_box : xyxy in [0,1]  -- ConstructionSite ground-truth scale, verbatim.
+//                  NOT [0,1000]. data/preprocessor.py scales GT up to 1000 itself
+//                  when it builds the SFT target; handing it 1000 would double-scale
+//                  and `scale_1000_to_01` on an already-[0,1] box collapses every
+//                  box to a point and silently zeroes every IoU.
+//   rule_N        : null, or {bounding_box, reason} -- the exact shape
+//                  data/schemas.py::RuleViolation validates.
+//
+// Doing the resolution HERE, rather than in a later script, is deliberate: the app
+// is the only place that knows which model box was deleted and which sentence was
+// rewritten. A downstream join against proposals_all.jsonl would have to re-derive
+// all of it from indices, and would be wrong the first time the corpus was rebuilt.
+function finalCaption(d,v){
+  const orig=String(d.cap||"").trim();
+  const edited=capEdited(d,v);
+  const text=edited ? v.caption_text.trim() : (v.caption_ok==="y" ? orig : "");
+  return {text, edited, usable:!!text, model:orig, caption_ok:v.caption_ok||""};
+}
+// Defensive `||{}` on every sub-object: a results file written by an EARLIER build of
+// this app has no `delmodel`, and a record restored from it is not passed through vd()
+// until it is opened on screen. Reading v.delmodel[r] off such a record throws, and it
+// throws inside the save path -- so the first write after loading an old file would
+// fail and the chip would go red for no visible reason.
+function finalRule(d,v,r){
+  const rules=v.rules||{}, boxes=v.boxes||{}, reasons=v.reasons||{}, delmodel=v.delmodel||{};
+  if((rules[r]||"")!=="y") return null;            // "n" and unjudged both mean null
+  const del=delmodel[r]||[];
+  const kept=((d.r[r]&&d.r[r].boxes)||[]).filter((_,i)=>!del.includes(i));
+  const mine=boxes[r]||[];
+  const modelReason=((d.r[r]&&d.r[r].reason)||"").trim();
+  const reason=(reasons[r]!==undefined ? reasons[r] : modelReason).trim();
+  return {
+    bounding_box: kept.concat(mine).map(b=>b.map(c=>+Number(c).toFixed(4))),
+    reason,
+    provenance: {proposed_by_model:!!(d.r[r]&&d.r[r].p),
+                 reason_edited: reason!==modelReason,
+                 model_boxes_kept:kept.length, model_boxes_deleted:del.length,
+                 reviewer_boxes:mine.length}
+  };
+}
+// Only ACCEPTED records become rows. "discard" means the photograph is unusable and
+// "unsure" means undecided -- neither belongs in a training set, and both stay in
+// `verdicts` so the reviewer can come back to them.
+function datasetRows(){
+  const rows=[];
+  for(const d of DATA){
+    const v=state[d.id];
+    if(!v || v.decision!=="accept") continue;
+    const c=finalCaption(d,v);
+    const row={
+      new_image_id:d.id, mocs_image_id:d.mid, file_name:d.fn,
+      source:d.src, run:d.run, image_path_original:d.orig||"",
+      review_image:(d.img||"").split("/").pop(), width:d.w, height:d.h,
+      image_caption:c.text, caption_usable:c.usable,
+      caption_ok:c.caption_ok, caption_edited:c.edited, caption_model:c.model,
+      mocs_categories:d.cats||[]
+    };
+    const flagged=[];
+    for(const r of RULES){
+      const x=finalRule(d,v,r);
+      row[r+"_violation"]=x;
+      if(x) flagged.push(r);
+    }
+    row.flagged_rules=flagged;
+    row.hard=!!v.hard; row.notes=v.notes||""; row.reviewed_at=v.ts||"";
+    rows.push(row);
+  }
+  return rows;
+}
+// A violation asserted with neither a box nor a sentence survives schema validation
+// but carries nothing: data/schemas.py drops it, and _is_substantive_violation scores
+// it as a MISS on a real violation. Counting them here means the number is visible in
+// the file rather than discovered during the combine.
+function emptyAssertions(rows){
+  let n=0;
+  for(const row of rows) for(const r of RULES){
+    const x=row[r+"_violation"];
+    if(x && !x.reason && !x.bounding_box.length) n++;
+  }
+  return n;
 }
 function payloadJSON(){
   const out={};
   for(const d of DATA){ const v=state[d.id]; if(touched(v)) out[d.id]=v; }
-  return JSON.stringify({reviewer:reviewer||"reviewer",
-    saved_at:new Date().toISOString(), corpus_key:META.corpus_key,
-    n_decided:Object.values(state).filter(v=>v.decision).length,
-    n_touched:Object.keys(out).length, verdicts:out}, null, 1);
+  const rows=datasetRows();
+  const byRule={};
+  for(const r of RULES) byRule[r]=rows.filter(x=>x[r+"_violation"]).length;
+  return JSON.stringify({
+    schema:"mocs_review/2",
+    box_scale:"xyxy_0_1",
+    reviewer:reviewer||"reviewer",
+    saved_at:new Date().toISOString(),
+    corpus_key:META.corpus_key,
+    counts:{
+      decided:Object.values(state).filter(v=>v.decision).length,
+      touched:Object.keys(out).length,
+      accepted:rows.length,
+      discarded:Object.values(state).filter(v=>v.decision==="reject").length,
+      unsure:Object.values(state).filter(v=>v.decision==="unsure").length,
+      hard:rows.filter(x=>x.hard).length,
+      captions_usable:rows.filter(x=>x.caption_usable).length,
+      captions_edited:rows.filter(x=>x.caption_edited).length,
+      violations_by_rule:byRule,
+      empty_assertions:emptyAssertions(rows)
+    },
+    // The finished product: ready to map onto datasets/processed's column set.
+    dataset_rows:rows,
+    // The raw reviewer state, so re-opening this file resumes exactly where it left off.
+    verdicts:out
+  }, null, 1);
 }
 // Kept, unused by the app itself: it is the one place that documents, in code, the
 // exact column set a verdict maps onto -- which is what build_review.py's CSVs use
@@ -734,6 +974,8 @@ function buildRows(){
     row.verify_decision=v.decision||"";
     for(const r of RULES) row["verify_"+r]=(v.rules||{})[r]||"";
     row.verify_caption_ok=v.caption_ok||"";
+    row.verify_caption_text=finalCaption(d,v).text;
+    row.verify_deleted_model_boxes=JSON.stringify(v.delmodel||{});
     row.verify_corrected_reason=Object.entries(v.reasons||{})
         .filter(([,t])=>t&&t.trim()).map(([r,t])=>r+": "+t.trim()).join("; ");
     row.verify_corrected_reason_json=JSON.stringify(v.reasons||{});
@@ -780,7 +1022,9 @@ async function pickOpenFile(){
                 "\n  this: "+META.corpus_key+"\n\nOpen anyway?")) return;
     const ids=new Set(DATA.map(d=>d.id)); const v=j.verdicts||j;
     let n=0, skipped=0;
-    for(const k in v){ if(ids.has(k)){ state[k]=v[k]; n++; } else skipped++; }
+    // vd(k) normalises a record written by an older build -- it backfills the
+    // sub-objects this version expects, so nothing downstream has to test for them.
+    for(const k in v){ if(ids.has(k)){ state[k]=v[k]; vd(k); n++; } else skipped++; }
     fileHandle = h;                       // keep writing back to this SAME file
     reviewer = j.reviewer || reviewer;
     await writeFile();
