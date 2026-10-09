@@ -19,7 +19,7 @@ learning_rate: 1.0e-5   # was 2.0e-6 (and 2.0e-7 before that).
                         # MEASURED on the real vo v1 runs: KL to the SFT reference
                         # averaged 0.0003-0.0005 and PEAKED at 0.001 across all three
                         # tiers, with beta=0.04 -- i.e. the KL brake never engaged at
-                        # all, and grad_norm sat at 0.1-0.4 against max_grad_norm 0.3,
+                        # all, and grad_norm sat at 0.1-0.4 against the then-0.3 clip,
                         # so clipping rarely bound either. Cumulative LR mass over the
                         # run was ~1.1e-4 against SFT's ~2.1e-2: roughly 200x less, and
                         # ~350x after discounting the 41-48% of groups that had zero
@@ -48,7 +48,8 @@ learning_rate: 1.0e-5   # was 2.0e-6 (and 2.0e-7 before that).
                         # 108 steps is the binding constraint: a low LR is only "safe" if there
                         # is runway for it to accumulate, and there is not.
                         #
-                        # Safe because three brakes are already tight: max_grad_norm 0.3 caps the
+                        # Safe because the brakes are in place: max_grad_norm (1.0 as of
+                        # 2026-10-08, see below) caps the
                         # per-step update regardless of LR, beta 0.04 penalises KL drift from the
                         # merged SFT reference, and scale_rewards="group" normalises advantages
                         # so reward magnitude cannot inflate the step. 2e-6 is still the
@@ -106,7 +107,33 @@ lr_scheduler_type: "constant_with_warmup"   # was "cosine". Over a 108-step run 
                         # to anneal against here (2 epochs over a 1732-image pool, KL
                         # anchored to the SFT reference), so a flat LR after warmup keeps
                         # the whole budget productive.
-max_grad_norm: 0.3
+max_grad_norm: 1.0     # RAISED from 0.3 on 2026-10-08. README_v2.md §13 P1-1, and the
+                       # top recommendation v2 produced.
+                       #
+                       # 0.3 was not clipping outliers, it was clipping the MEDIAN step.
+                       # Measured across all three v2 GRPO runs: mean grad_norm 0.408 /
+                       # 0.375 / 0.423, with 17/21, 19/21 and 14/21 logged steps ABOVE
+                       # the 0.3 ceiling. So 67-90% of updates were scaled down by about
+                       # a quarter -- a disguised learning-rate cut, not a safety brake.
+                       # And it was the ONLY brake left doing anything: at the measured
+                       # KL of 0.003-0.005, beta 0.04 contributes ~1.6e-4 to the loss.
+                       #
+                       # 1.0 matches sft.yaml, which is stable at TEN TIMES this LR
+                       # (1.0e-4 vs 1.0e-5) -- so relative to the one configuration in
+                       # this repo known to be stable at this clip, GRPO is still the
+                       # conservative side. Outlier protection is retained: 8B's one
+                       # recorded excursion (grad_norm 2.34 at step 90) is still clipped,
+                       # by 2.3x instead of 7.8x.
+                       #
+                       # WHAT THIS DOES NOT FIX: the documented stall at step 40-70 is
+                       # frac_reward_zero_std 0.40-0.47 -- ~45% of groups produce no
+                       # gradient AT ALL because all 8 rollouts score identically. No
+                       # clip setting touches that; the levers there are num_generations
+                       # and pool curation.
+                       #
+                       # WATCH IT at 8B: if reward/mean collapses rather than climbing,
+                       # or kl stays above ~0.05 for more than a few consecutive logged
+                       # steps, this is the first thing to put back to 0.3.
 
 # --- GRPOConfig fields that used to be undeclared -- reachable only through TRL's ---
 # --- own default, so a TRL upgrade could silently change them out from under us. ---
