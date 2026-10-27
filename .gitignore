@@ -45,3 +45,6 @@ experiments/repair_audit*.py
 experiments/run_v345_analysis.py
 experiments/v345_*.py
 tests/test_experiments/
+
+figures_v2/
+evaluation_results_archive_v2/
