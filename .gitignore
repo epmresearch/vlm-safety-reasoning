@@ -32,3 +32,16 @@ evaluation_results_v2/
 evaluation_results_archive/
 evaluation_results_archive_v2/
 results_index/
+
+
+# local-only files
+*.md
+*.txt
+*.pptx
+figures_deck/
+make_presentation.py
+experiments/cross_arm_stats.py
+experiments/repair_audit*.py
+experiments/run_v345_analysis.py
+experiments/v345_*.py
+tests/test_experiments/
