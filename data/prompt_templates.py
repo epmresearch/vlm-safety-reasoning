@@ -95,45 +95,55 @@ SYSTEM_PROMPT = (
 #     safety rule"). Judging an explanation against wording the model never saw
 #     would score the prompt, not the model.
 #
-# REWRITTEN 2026-10-08. The previous wording named only each rule's TRIGGER and omitted
-# its qualifying conditions, which is the wrong half: measured on the ground truth, a
-# trigger is visible far more often than its rule is broken (a person on foot -> rule_1
-# 13% of the time; a worker on a scaffold -> rule_2 10%; an excavation -> rule_3 6%; a
-# person near an excavator -> rule_4 7%), and v2's dominant error was over-flagging.
+# REVERTED 2026-10-28 to the v2 wording (the text this file carried at a44603a, i.e.
+# immediately before f4a5ee0 "experiments after more data"). The 2026-10-08 rewrite
+# tightened each rule with its qualifying conditions, reasoning that v2's dominant error
+# was over-flagging. Measured on the zero-shot baselines, which isolate the prompt
+# perfectly -- same weights, no training, the prompt is the only variable -- that rewrite
+# bought micro F1 by suppressing the two rarest rules:
 #
-# Kept deliberately TERSE. This is a fine-tuning prompt, not a zero-shot one: 7,021 SFT
-# targets teach the conventions far more strongly than prose can, so the prompt only has
-# to make each rule unambiguous and state the output contract. Exclusion lists, worked
-# examples and calibration advice were drafted and then cut -- they belong in
-# mocs_annotation/REVIEW_RUBRIC.md, which is where a human annotator reads them. Every
-# token here is also paid 8x per GRPO rollout at prefill, so length is not free.
+#     4b baseline   v2 wording -> rewrite     8b baseline   v2 wording -> rewrite
+#       rule_3 R      68.3%    ->  50.8%        rule_3 R      42.9%    ->   6.3%
+#       rule_4 R      70.8%    ->  29.2%        rule_4 R      33.3%    ->   0.0%
+#       micro F1      .2275    ->  .2503        micro F1      .2815    ->  .2995
+#       MACRO F1      .1762    ->  .1797        MACRO F1      .2190    ->  .1605
 #
-# Sources, in the dataset's own order of authority (REVIEW_RUBRIC.md): the HuggingFace
-# card for LouisChen15/ConstructionSite, the paper (Chen & Zou, Data-Centric Engineering
-# 2026, doi:10.1017/dce.2026.10044), and the annotator's measured practice over all
-# 10,013 images -- which is BROADER than the card in one place (rule_3 also covers
-# above-ground slab edges) and NARROWER in another (rule_2 never fires on machine plant,
-# 0 of 84).
+# Not a format artifact: the 8b rewrite baseline has HIGHER raw validity than the v2 one
+# (2983 vs 2892 of 3004), so the model is emitting clean JSON and declining to flag.
+# Nor a better-calibrated definition: if narrowing matched the labels, precision would
+# rise, and it did not move (rule_3 9.2 -> 11.1, rule_4 7.9 -> 0.0). The conjunctions the
+# rewrite introduced -- rule_2's "no harness AND no guardrail", rule_4's "an EXCAVATOR in
+# operation or with an operator inside" -- are stricter than what the ground-truth labels
+# encode, so they tell the model to answer a question it is not scored on.
+#
+# Macro-F1 is the metric this project most needs to move, and macro lives on rules 2/3/4.
+# Reverting also restores rubric_sha256 28297153fe9d (see rubric_fingerprint below, which
+# reads this dict), making v6+ reasoning scores comparable with the nine vo-*-v2 runs.
+#
+# The rewrite's own rationale is kept here because it is sound in form and may yet be
+# right in a form that matches the labels: a trigger is visible far more often than its
+# rule is broken (13% / 10% / 6% / 7% for rules 1-4). If that is revisited, the fix is to
+# the labels or the eval, not to the prompt alone. Sources, in the dataset's own order of
+# authority (REVIEW_RUBRIC.md): the HuggingFace card for LouisChen15/ConstructionSite,
+# the paper (Chen & Zou, Data-Centric Engineering 2026, doi:10.1017/dce.2026.10044), and
+# the annotator's measured practice over all 10,013 images.
 #
 SAFETY_RULE_TEXTS = {
     "rule_1": (
-        "   - Rule 1 - basic PPE: a person ON FOOT is missing a hard hat, clothing "
-        "covering the shoulders and legs, shoes covering the toes, a hi-vis vest AT "
-        "NIGHT, or eye protection WHILE cutting, welding, grinding or drilling.\n"
+        "   - Rule 1 - basic PPE: a person on foot is missing basic PPE, e.g. no hard hat, "
+        "or clothing that leaves the shoulders or legs uncovered.\n"
     ),
     "rule_2": (
-        "   - Rule 2 - safety harness: a person working at height on a scaffold, roof, "
-        "formwork, frame, beam or ladder has no harness AND the working edge has no "
-        "guardrail, toe board or netting. Never a person on machine plant.\n"
+        "   - Rule 2 - safety harness: a person working at height (on a scaffold, roof, "
+        "beam, ladder or other elevated structure) is not wearing a safety harness.\n"
     ),
     "rule_3": (
-        "   - Rule 3 - edge protection: an excavation, trench, pit or slab edge has "
-        "nothing at the top - no guardrail, fence, barrier or warning tape. Judged on "
-        "the site alone; nobody need be near it.\n"
+        "   - Rule 3 - edge protection: an open excavation, trench, pit or floor edge has no "
+        "guard rail, barrier or warning marking.\n"
     ),
     "rule_4": (
-        "   - Rule 4 - blind spot: a person is inside the operation radius and blind "
-        "spot of an EXCAVATOR that is in operation or has an operator inside.\n"
+        "   - Rule 4 - blind spot: a person is standing within the operating radius or "
+        "blind spot of an excavator or other heavy machine.\n"
     ),
 }
 
@@ -150,25 +160,27 @@ def safety_rule_description(rule: str) -> str:
 # difference between them would confound the multi-task vs single-task comparison.
 _SAFETY_RULES = "".join(SAFETY_RULE_TEXTS[r] for r in ("rule_1", "rule_2", "rule_3", "rule_4"))
 
-# The BOX-COUNT clause was rewritten 2026-10-08. It used to say "list more than one box
-# if more than one instance violates the same rule" for all four rules -- right for
-# rules 1 and 2, flatly wrong for 3 and 4. Measured boxes per violated image: 1.66,
-# 1.74, 1.16, 1.01 -- and in the TEST split, the key every number is scored against,
-# rules 3 and 4 are EXACTLY 1.00 (63/63 and 24/24), including four rule_4 reasons that
-# name two or three people and still carry a single box. (reward_violation_grounding
-# scores mask-union IoU, so the count is never scored directly; what the clause changes
-# is the REGION the model learns to cover, and per-person boxes under-cover a group box.)
+# REVERTED 2026-10-28 together with SAFETY_RULE_TEXTS above; see the rationale there.
+# The 2026-10-08 rewrite narrowed the BOX-COUNT clause from "list more than one box if
+# more than one instance violates the same rule" to one verdict per rule, on the measured
+# ground that the TEST split carries EXACTLY 1.00 box per image for rule_3 and rule_4
+# (63/63 and 24/24) against 1.66 / 1.74 for rules 1 and 2. That observation is correct and
+# is NOT the reason for the revert -- it is reverted only because the two blocks move
+# together as one prompt, and v6 exists to reproduce v2 under a clean tree with a single
+# variable changed. reward_violation_grounding scores mask-union IoU, so box count is
+# never scored directly; the clause changes the REGION the model learns to cover. If the
+# box-count clause is reinstated on its own later, it is a separate, cleanly isolable
+# change from the rule wording.
 _VIOLATION_INSTRUCTIONS = (
-    "   Every condition of a rule must hold, and you must be able to point to the "
-    "person, edge or machine at fault. If you cannot tell, output null. Rules are "
-    "independent: any number may be violated, or none.\n"
+    "   Report a rule only when you can point to the specific person, edge or machine in "
+    "this image that violates it. If you cannot see such a violation, output null for "
+    "that rule. Rules are independent: any number of them may be violated, or none.\n"
     "   For a violated rule output "
-    "{\"reason\":\"...\", \"bounding_box\":[[xmin, ymin, xmax, ymax]]}, boxes scaled "
-    "0-1000, one verdict per rule however many people. Rules 1 and 2 take one box per "
-    "person at fault; Rule 3 takes one box over the edge; Rule 4 takes one box over the "
-    "worker or group, never the excavator.\n"
+    "{\"reason\":\"...\", \"bounding_box\":[[xmin, ymin, xmax, ymax]]}, where each box "
+    "encloses one person, edge or machine that violates it and is scaled 0-1000. List "
+    "more than one box if more than one instance violates the same rule.\n"
     "   Write the reason as ONE sentence saying who or what is at fault, identified by "
-    "position or appearance, and naming the item or feature.\n"
+    "position or appearance, and what the breach is.\n"
 )
 
 # Shared by unified and object_only, for the same non-drift reason as the rules.

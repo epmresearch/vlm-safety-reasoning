@@ -614,9 +614,30 @@ def contribution_matrices(pred, gt):
     return tp, fp, fn
 
 
+# Mirrors evaluation.metrics_violations.REPORTED_FBETA, which mirrors the reward's
+# own `violation_fbeta` (2.0). Declared here rather than imported ON PURPOSE: that
+# module imports pandas, and this one is deliberately stdlib-only so the comparison
+# toolset runs against a bare index.json on any interpreter. The two constants are
+# held equal by a test, not by an import -- see test_results_tooling.py.
+REPORTED_FBETA = 2.0
+
+
 def _f1(tp, fp, fn):
     den = 2 * tp + fp + fn
     return (2 * tp / den) if den else 0.0
+
+
+def _fbeta(tp, fp, fn, beta=REPORTED_FBETA):
+    """F-beta from counts. Same zero-guard convention as _f1 above.
+
+    (1+b^2)TP / ((1+b^2)TP + b^2*FN + FP) -- the count form, algebraically identical
+    to (1+b^2)PR / (b^2 P + R) but with no intermediate division, so a rule with zero
+    predictions cannot produce a 0/0 on the way to a defined answer.
+    """
+    b2 = beta * beta
+    num = (1.0 + b2) * tp
+    den = num + b2 * fn + fp
+    return (num / den) if den else 0.0
 
 
 def _metric_from_totals(tp_r, fp_r, fn_r, metric):
@@ -625,10 +646,24 @@ def _metric_from_totals(tp_r, fp_r, fn_r, metric):
         return _f1(sum(tp_r), sum(fp_r), sum(fn_r))
     if metric == "f1_macro":
         return sum(_f1(tp_r[b], fp_r[b], fn_r[b]) for b in range(N_RULE_BITS)) / N_RULE_BITS
+    if metric == "f2_micro":
+        return _fbeta(sum(tp_r), sum(fp_r), sum(fn_r))
+    if metric == "f2_macro":
+        return sum(_fbeta(tp_r[b], fp_r[b], fn_r[b]) for b in range(N_RULE_BITS)) / N_RULE_BITS
     raise ValueError(f"Unknown metric {metric!r}")
 
 
-BOOTSTRAP_METRICS = ("f1_micro", "f1_macro")
+# F2 joined F1 here on 2026-10-28, when evaluation/metrics_violations.py started
+# emitting it. The reward optimises F-beta with beta=2 (`violation_fbeta`), so F1 was
+# scoring the models on a different objective from the one they were trained on --
+# and without an entry HERE, F2 would appear in metrics.json with no confidence
+# interval and no paired significance test, which on rules carrying 24-63 positives
+# is not a claim anyone can defend. Every metric named here gets both, for free, from
+# the same resampled index sets (so F1 and F2 deltas stay paired with each other too).
+#
+# beta is imported from the metrics module rather than redeclared, so the bootstrap
+# can never silently disagree with the number in metrics.json.
+BOOTSTRAP_METRICS = ("f1_micro", "f1_macro", "f2_micro", "f2_macro")
 
 
 def bootstrap_indices(n: int, n_boot: int, seed: int = 0):

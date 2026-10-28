@@ -18,6 +18,14 @@ numpy>=1.26.0
 pandas>=2.2.0
 datasets>=2.20.0
 pillow>=10.0.0
+# Pixel-level augmentation (brightness/contrast/JPEG/gamma) for the rare-rule
+# oversampling in data/augment_rare_classes.py and data/build_v3_datasets.py.
+# Was missing from this file AND from scripts/setup_arc.sh until 2026-10-28, which
+# is why 27 tests in tests/test_data/test_build_v3_datasets.py failed on a fresh
+# checkout. Load-bearing: scripts/augment_data.sh has no `set -e` and prints
+# "completed successfully" unconditionally, so on a rebuilt venv the import error
+# would surface as a SILENTLY truncated datasets/augmented, not as a failed job.
+albumentations>=1.4.0
 pydantic>=2.7.0
 shapely
 

@@ -55,6 +55,7 @@ pip install \
     pandas \
     numpy \
     Pillow \
+    albumentations \
     PyYAML \
     qwen-vl-utils \
     scikit-learn \

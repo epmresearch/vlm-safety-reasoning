@@ -98,32 +98,38 @@ def test_training_prompts_are_pinned():
     an explanation against the wording the model actually saw), so a silent change here
     desynchronises training from evaluation.
 
-    HASHES UPDATED 2026-10-08, deliberately. The rule wording was rewritten to carry the
-    qualifying conditions from the dataset card and the ground truth's measured practice
-    -- the previous one-line-per-rule paraphrase named only each rule's trigger, and v2
-    measured the cost: a trigger is visible far more often than its rule is broken
-    (13% / 10% / 6% / 7% for rules 1-4), so the old prompt invited the over-flagging
-    that dominates this task's error. The box-count clause was also wrong for two rules:
-    it said "list more than one box if more than one instance violates", while GT is
-    exactly 1.00 box per image for rule_3 and rule_4 in the test split.
+    HASHES REVERTED 2026-10-28 to their v2 values. The 2026-10-08 rewrite is described in
+    data/prompt_templates.py; the short version is that it bought micro F1 by suppressing
+    rules 3 and 4, which is the wrong trade for a project whose weakest published metric
+    is macro-F1. Measured on the zero-shot baselines, where the prompt is the ONLY
+    variable (same weights, no training): at 8b the rewrite took rule_3 recall 42.9% ->
+    6.3% and rule_4 recall 33.3% -> 0.0%, and macro-F1 0.2190 -> 0.1605, while micro went
+    0.2815 -> 0.2995. Not a format artifact -- that run has HIGHER raw validity (2983 vs
+    2892 of 3004).
 
-    Kept TERSE on purpose: this is a fine-tuning prompt, and 7,021 SFT targets teach the
-    conventions far better than prose. At ~445 (vo) / ~566 (vt) text tokens it is only
-    ~15% longer than the wording it replaces, so every token budget stays at its v2
-    value -- no config change was needed.
+    Three of these four hashes are therefore the exact values this file pinned before
+    f4a5ee0, restored verbatim:
+        _SAFETY_RULES              aa12be6c...  (was 1fdabd89 under the rewrite)
+        VIOLATIONS_ONLY_PROMPT     d6aa99af...  (was c558d4ca)
+        UNIFIED_INSPECTION_PROMPT  125e312d...  (was 36af506c)
+    VIOLATIONS_THINK_PROMPT has no v2-era value -- that arm postdates v2 -- so its hash is
+    recomputed from the reverted fragments it shares with violations_only.
 
-    CONSEQUENCE, and it is not small: runs made with these prompts are NOT prompt-
-    comparable with `vo-*-v2`. See V3_DATA_COMBINE.md.
+    VERIFIED, not assumed: with these fragments, VIOLATIONS_ONLY_PROMPT and SYSTEM_PROMPT
+    are byte-identical to `configuration.prompts` recorded in the run_manifest.json of all
+    NINE vo-*-v2 runs, and evaluation.metrics_llm_judge.rubric_fingerprint() is back to
+    28297153fe9d..., the value every v2 run recorded. So v6+ runs are prompt-comparable
+    AND judge-comparable with v2, and no LLM-judge re-run is needed.
     """
     from data import prompt_templates as P
     assert hashlib.sha256(P._SAFETY_RULES.encode()).hexdigest() == \
-        "1fdabd89e6e3bf306588610f998ca7609591324ab03ee9a679743956afa8b9de"
+        "aa12be6ca92799f8b0e81a77d66c2d419136fff15bb87ddf574addbe0917c924"
     assert hashlib.sha256(P.VIOLATIONS_ONLY_PROMPT.encode()).hexdigest() == \
-        "c558d4ca2ca7524d7bb426cee20ef5ab9c4250c7c51baba26a0fe1355ffb03b8"
+        "d6aa99afc1664be675831a496c82ee8855c6a21e3028e389d3be5ecd89a677f1"
     assert hashlib.sha256(P.VIOLATIONS_THINK_PROMPT.encode()).hexdigest() == \
-        "4266d6bcfea3f0830e816cb1ad7f93d545c0d4b5688dce3985b0f94a5ebdeb0a"
+        "6b78d0046b50b6c0f5f8ed20f55deb648e4ffd9031d1ee637f628e83e6224346"
     assert hashlib.sha256(P.UNIFIED_INSPECTION_PROMPT.encode()).hexdigest() == \
-        "36af506cd24c42b34b2aa4f03f430f348ed551f37a881f4812a34d517b140529"
+        "125e312d268c1c77864485f58c0071c649f38f207571fe5d016f6d7723635df1"
     assert "".join(P.SAFETY_RULE_TEXTS[r] for r in RULES) == P._SAFETY_RULES
 
 
@@ -136,32 +142,65 @@ def test_the_two_violation_arms_share_their_rule_wording_and_output_contract():
         assert frag in P.VIOLATIONS_THINK_PROMPT
 
 
-def test_every_rule_names_its_qualifying_conditions_not_just_its_trigger():
-    """The regression this guards: a rule reduced back to a one-line trigger. Each of
-    these tokens marks a condition the ground truth actually turns on."""
+def test_rule_wording_is_v2s_and_carries_no_narrowing_conjunction():
+    """Guards the 2026-10-28 revert (see data/prompt_templates.py for the full evidence).
+
+    REPLACES two tests that pinned the opposite property -- that each rule named its
+    qualifying CONDITIONS rather than only its trigger, and that the box-count clause was
+    per-rule. Those pinned the 2026-10-08 rewrite, which the zero-shot baselines then
+    measured as a rare-rule suppressant: at 8b, rule_3 recall 42.9% -> 6.3%, rule_4
+    33.3% -> 0.0%, macro-F1 0.2190 -> 0.1605 (micro rose, because micro is rule_1-
+    dominated). The baselines isolate the prompt perfectly -- same weights, no training --
+    and it is not a format artifact, since that run has HIGHER raw validity (2983 vs 2892
+    of 3004). Precision barely moved while recall collapsed, which is what a definition
+    STRICTER than the labels looks like, not a better-calibrated one.
+
+    So the tokens asserted absent below are absent ON PURPOSE. The rewrite's underlying
+    observations are not disputed and are recorded in prompt_templates.py; reinstating any
+    of them is a deliberate act that must fail this test first.
+    """
     from data import prompt_templates as P
+
+    # The v2 triggers, restored.
     must_appear = {
-        "rule_1": ["ON FOOT", "AT NIGHT", "cutting, welding"],
-        "rule_2": ["at height", "no harness AND", "guardrail", "machine plant"],
-        "rule_3": ["nothing at the top", "site alone"],
-        "rule_4": ["EXCAVATOR", "operation radius", "blind spot", "in operation"],
+        "rule_1": ["a person on foot", "basic PPE", "hard hat"],
+        "rule_2": ["working at height", "is not wearing a safety harness"],
+        "rule_3": ["open excavation", "guard rail", "warning marking"],
+        "rule_4": ["operating radius", "blind spot", "other heavy machine"],
     }
     for rule, tokens in must_appear.items():
         text = P.SAFETY_RULE_TEXTS[rule].lower()
         for tok in tokens:
-            assert tok.lower() in text, f"{rule} no longer mentions {tok!r}"
+            assert tok.lower() in text, f"{rule} no longer says {tok!r}"
+
+    # The narrowing clauses the revert removed. Each suppressed a rule macro depends on.
+    must_not_appear = {
+        "rule_2": ["no harness AND", "machine plant"],   # conjunction stricter than labels
+        "rule_3": ["nothing at the top", "site alone"],
+        "rule_4": ["EXCAVATOR that is in operation"],    # excludes non-excavator plant
+    }
+    for rule, tokens in must_not_appear.items():
+        text = P.SAFETY_RULE_TEXTS[rule].lower()
+        for tok in tokens:
+            assert tok.lower() not in text, f"{rule} reintroduced the narrowing {tok!r}"
 
 
-def test_the_box_count_clause_is_per_rule_and_matches_ground_truth():
-    """GT box counts per violated image: rule_1 1.66, rule_2 1.74, rule_3 1.16, rule_4
-    1.01 -- and exactly 1.00 for rule_3 and rule_4 in the TEST split. A single global
-    "list more than one box" instruction is wrong for half the rules."""
+def test_the_box_count_clause_is_v2s_single_global_instruction():
+    """The v2 clause, restored with the rule wording -- the two move as one prompt.
+
+    NOT a claim that the global clause is right. Measured GT boxes per violated image are
+    1.66 / 1.74 / 1.16 / 1.01, and in the TEST split rule_3 and rule_4 are EXACTLY 1.00
+    (63/63, 24/24), so "list more than one box" genuinely over-states those two. That
+    finding stands and is recorded in prompt_templates.py. It is reverted only so that v6
+    reproduces v2 with a single variable changed; reinstating it alone is a clean, separate
+    experiment. reward_violation_grounding scores mask-UNION IoU, so count is never scored
+    directly -- what the clause moves is the region the model learns to cover.
+    """
     from data import prompt_templates as P
     c = P._VIOLATION_INSTRUCTIONS
-    assert "one box per person at fault" in c
-    assert "Rule 3 takes one box over the edge" in c
-    assert "Rule 4 takes one box over the worker or group" in c
-    assert "never the excavator" in c
+    assert "List more than one box if more than one instance violates the same rule" in c
+    assert "one box per person at fault" not in c
+    assert "never the excavator" not in c
 
 
 def test_rule_description_is_the_prompt_wording_without_list_formatting():

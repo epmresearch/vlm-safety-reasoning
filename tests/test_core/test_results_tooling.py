@@ -417,3 +417,52 @@ def test_support_keys_cover_both_conditioned_families():
     assert any("scored_count" in k for k in SUPPORT_KEYS["reasoning"])
     assert "violation_gt_positive_image_count" in SUPPORT_KEYS["violation"]
     assert any("grounding_scored_count" in k for k in SUPPORT_KEYS["violation"])
+
+
+def test_bootstrap_fbeta_matches_the_reported_metric_and_the_reward():
+    """The one thing that could silently desync F2 across the three places it lives.
+
+    experiments/results_lib.py declares REPORTED_FBETA locally instead of importing it
+    from evaluation.metrics_violations, because that module pulls in pandas and the
+    comparison toolset is deliberately stdlib-only. That is a conscious duplication,
+    so it needs a test: without one, editing beta in the metrics module would leave
+    the bootstrap silently computing a DIFFERENT metric under the same name, and the
+    confidence intervals in significance.csv would not belong to the point estimates
+    in metrics.json.
+
+    Both are in turn pinned to the reward's `violation_fbeta`, which is what GRPO
+    actually optimises -- the whole reason F2 is reported at all.
+    """
+    from experiments.results_lib import REPORTED_FBETA as BOOTSTRAP_BETA, _metric_from_totals
+    from evaluation.metrics_violations import REPORTED_FBETA as METRIC_BETA, _fbeta
+    from rewards.reward_utils import reward_constant
+
+    assert BOOTSTRAP_BETA == METRIC_BETA == 2.0
+    assert reward_constant("violations_only", "violation_fbeta", 2.0) == METRIC_BETA
+    assert reward_constant("unified", "violation_fbeta", 2.0) == METRIC_BETA
+
+    # The count form in results_lib and the rate form in metrics_violations are
+    # different expressions of the same quantity; they must agree numerically.
+    for tp, fp, fn in [(10, 10, 10), (1, 0, 99), (99, 1, 0), (7, 3, 11), (0, 5, 5)]:
+        p = tp / (tp + fp) if (tp + fp) else 0.0
+        r = tp / (tp + fn) if (tp + fn) else 0.0
+        from_counts = _metric_from_totals([tp, 0, 0, 0], [fp, 0, 0, 0], [fn, 0, 0, 0], "f2_micro")
+        assert abs(from_counts - _fbeta(p, r)) < 1e-12, (tp, fp, fn)
+
+    # F2 weights recall above precision -- the property that makes it the reward's
+    # objective. A sign error here would be invisible in any single number.
+    recall_heavy = _metric_from_totals([30, 0, 0, 0], [70, 0, 0, 0], [3, 0, 0, 0], "f2_micro")
+    precision_heavy = _metric_from_totals([30, 0, 0, 0], [3, 0, 0, 0], [70, 0, 0, 0], "f2_micro")
+    assert recall_heavy > precision_heavy
+
+
+def test_bootstrap_metrics_covers_both_objectives():
+    """F1 is what the project reports; F2 is what the reward maximises. Both need a
+    confidence interval, and both must be resampled on the SAME index sets so an F1
+    delta and an F2 delta for one comparison stay paired with each other.
+    """
+    from experiments.results_lib import BOOTSTRAP_METRICS, _metric_from_totals
+    assert set(BOOTSTRAP_METRICS) == {"f1_micro", "f1_macro", "f2_micro", "f2_macro"}
+    for m in BOOTSTRAP_METRICS:
+        v = _metric_from_totals([5, 5, 5, 5], [5, 5, 5, 5], [5, 5, 5, 5], m)
+        assert 0.0 <= v <= 1.0, m

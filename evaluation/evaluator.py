@@ -80,9 +80,79 @@ def run_full_evaluation(
         )
     
     # 1. Structural metrics & Parsing
+    #
+    # TWO families are emitted, and the difference between them IS the repair.
+    #
+    #   structural_*       scored on `raw_predictions` -- the REPAIRED file, which is
+    #                      what the fixed inference -> repair -> evaluation chain feeds
+    #                      in. Unchanged; every historical number keeps its meaning.
+    #   structural_*_raw   scored on `model_texts` -- what the MODEL actually emitted,
+    #                      before structural_repair.py rewrote it (ADDED 2026-10-28,
+    #                      README_v2.md P0-3).
+    #
+    # WHY: the post-repair number alone is badly misleading. Measured on
+    # `vo-baseline-2b-v2` (n=3004), the four gates separate like this:
+    #
+    #     structural_json_validity_rate          0.9810   (repaired)
+    #     structural_json_validity_rate_raw      0.9597   (model's own text)
+    #     structural_schema_adherence_rate       0.9810   (repaired)
+    #     structural_schema_adherence_rate_raw   0.2011   (model's own text)
+    #
+    # READ THE SECOND PAIR. 0.2011 is the honest answer to 'how often did this model
+    # emit exactly the contract, unaided', and it is 4.9x below the number the file
+    # reported before this change.
+    #
+    # AND NOTE THE MECHANISM, because it is easy to get wrong and this repo's own notes
+    # had it wrong: those 2,400 records do NOT fail to parse. 95.97% of them parse
+    # cleanly; they fail SCHEMA VALIDATION. Only 57 records (1.9%) are unparseable even
+    # after repair. Verified by decomposing the gates on the saved predictions:
+    #
+    #     strict parse 95.97% | strict parse + schema 20.11%
+    #     tolerant parse 95.97% | tolerant parse + schema 20.11%
+    #
+    # The strict and tolerant parsers agree exactly here, so for this task the whole
+    # 75.9-point gap is the schema, not the JSON. Describing it as a parse failure
+    # points debugging at the wrong layer (token caps and repetition loops) instead of
+    # the right one (missing/ill-typed rule fields).
+    #
+    # `structural_schema_adherence_rate_raw` reproduces repair_report.json's `valid_raw`
+    # share EXACTLY (0.2011 both ways) -- that status is defined as 'passed the strict
+    # gate AND validated, with zero repair applied', which is the same conjunction. So
+    # the number README_v2.md quotes by hand from repair_stats.csv is now a first-class
+    # key in metrics.json, carried into the results index and every comparison table
+    # automatically.
+    #
+    # The remaining movement -- raw schema adherence 20.11% -> 99.93% -- is the single
+    # biggest thing SFT does to this model, and it was invisible here until now.
+    #
+    # SEMANTICS, deliberately chosen: the _raw family is the SAME function on a
+    # different input. Nothing is filtered and nothing is scored differently -- an
+    # unparseable output counts in the DENOMINATOR as a failure, exactly as it already
+    # does post-repair (compute_structural_metrics divides both rates by the full
+    # sample count). That is the only choice that makes the pair comparable: if the
+    # raw family excluded format failures it would be a format-compliance rate that
+    # excludes non-compliance, i.e. it would measure nothing, and any gap between the
+    # two keys would conflate 'repair fixed it' with 'we changed the denominator'.
+    # Because both come from one function, the gap is attributable to repair alone.
+    #
+    # SCOPE: reporting only. No other metric family changes -- the violation, grounding
+    # and reasoning numbers are still scored on the repaired file exactly as before,
+    # and an unparseable prediction still surfaces there as
+    # violation_prediction_failure_{count,rate}. This adds keys; it reshapes nothing.
+    #
+    # When `model_texts` is None (spice_only, or a caller that did not pass it) the
+    # _raw keys are ABSENT, never zero -- same convention as the LLM judge, so a
+    # missing measurement can never be read as a measured failure. Scoring an
+    # UNREPAIRED file is also well defined: run_evaluation.py's fallback makes
+    # model_texts == raw_predictions there, so the two families agree, correctly.
     structural_metrics = {}
     if not spice_only:
         structural_metrics = compute_structural_metrics(raw_predictions, task=task)
+        if model_texts is not None:
+            raw_structural = compute_structural_metrics(model_texts, task=task)
+            structural_metrics.update(
+                {f"{k}_raw": v for k, v in raw_structural.items()}
+            )
         
     # Parse predictions and capture failures
     parsed_preds = []

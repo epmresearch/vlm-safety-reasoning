@@ -187,6 +187,81 @@ class PersistentCheckpointCallback(TrainerCallback):
                 logger.info(f"Saving permanent checkpoint at step {state.global_step} to {persistent_ckpt}")
                 shutil.copytree(current_ckpt, persistent_ckpt)
 
+class NonFiniteLogGuardCallback(TrainerCallback):
+    """Fails loudly the moment a trained quantity stops being a finite number.
+
+    ADDED 2026-10-28 (README_v2.md P1-7). The v2 8B GRPO run logged `kl: NaN` at
+    exactly the two steps where `completions/clipped_ratio > 0`. The cause is benign:
+    with `mask_truncated_completions: true`, a fully-masked truncated sequence makes
+    the LOGGED per-token KL mean a 0/0. The loss stayed finite and that run was
+    unaffected.
+
+    The reason to guard anyway is the case one step further out: if an ENTIRE
+    generation batch were truncated, the loss itself would go NaN, every subsequent
+    weight would follow, and the job would keep running to completion and emit a
+    checkpoint full of NaNs. GRPO auto-resumes from `save_steps: 20`, so that state
+    would be persisted and resumed from. Nothing downstream would flag it: inference
+    on a NaN policy produces garbage text, repair rescues some of it, and the result
+    is a plausible-looking low score indistinguishable from 'the method did not work'.
+    That exact ambiguity -- a silent failure that reads as a negative result -- is what
+    voided this repo's pre-b8f2470 GRPO runs and cost a full re-run to detect.
+
+    Sized honestly: for `violations_only` the measured completion length is 59-62
+    tokens against a 1024 budget, so truncation is practically impossible and this
+    will never fire. It is insurance for `unified` (completions to ~1000 tokens) and
+    for any future change that raises `max_completion_length` or lowers the budget.
+
+    `kl` and `clipped_ratio` are DIAGNOSTICS, not trained quantities, so a non-finite
+    value there is warned about once and tolerated -- raising on it would have killed
+    the healthy v2 8B run. `loss`, `grad_norm` and `reward` are the trained ones;
+    those raise, because there is no state in which continuing is useful.
+    """
+
+    # Substring match: TRL namespaces these (`rewards/<name>/mean`, `reward_std`...).
+    FATAL_KEYS = ("loss", "grad_norm", "reward")
+    DIAGNOSTIC_KEYS = ("kl", "clipped_ratio")
+
+    def __init__(self):
+        self._warned = set()
+
+    @staticmethod
+    def _non_finite(value) -> bool:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return False
+        return value != value or value in (float("inf"), float("-inf"))
+
+    def on_log(self, args, state, control, logs=None, **kwargs):
+        if not logs:
+            return
+        fatal = []
+        for key, value in logs.items():
+            if not self._non_finite(value):
+                continue
+            lowered = key.lower()
+            if any(tok in lowered for tok in self.DIAGNOSTIC_KEYS):
+                if key not in self._warned:
+                    self._warned.add(key)
+                    logger.warning(
+                        f"Non-finite DIAGNOSTIC {key}={value} at step "
+                        f"{state.global_step}. Tolerated: with "
+                        f"mask_truncated_completions=true a fully-masked completion makes "
+                        f"this a 0/0. Training continues. Warned once per key."
+                    )
+            elif any(tok in lowered for tok in self.FATAL_KEYS):
+                fatal.append((key, value))
+        if fatal:
+            detail = ", ".join(f"{k}={v}" for k, v in fatal)
+            raise RuntimeError(
+                f"Non-finite value in a TRAINED quantity at step "
+                f"{state.global_step}: {detail}. Stopping now rather than writing "
+                f"NaN weights to a checkpoint that save_steps would persist and "
+                f"auto-resume from. Most likely cause: an entire generation batch "
+                f"was truncated at max_completion_length, so every token was masked "
+                f"by mask_truncated_completions. Check completions/clipped_ratio in "
+                f"the preceding log lines."
+            )
+
+
 class ConsoleLogCallback(TrainerCallback):
     """Prints all training logs directly to the console/SLURM log."""
     

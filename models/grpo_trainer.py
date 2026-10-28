@@ -22,7 +22,12 @@ from core.config import load_config, load_task_config
 from core.io import ensure_dir
 from core.logging import get_logger
 from core.wandb_utils import init_run, finish_run
-from core.callbacks import PersistentCheckpointCallback, GPUMemoryLoggingCallback, ConsoleLogCallback
+from core.callbacks import (
+    PersistentCheckpointCallback,
+    GPUMemoryLoggingCallback,
+    ConsoleLogCallback,
+    NonFiniteLogGuardCallback,
+)
 from models.model_loader import get_model_info, load_model_for_training
 from core.io import get_drive_path
 from data.loader import load_processed_dataset
@@ -346,7 +351,12 @@ def run_grpo(
         callbacks=[
             PersistentCheckpointCallback(persistent_freq=100),
             GPUMemoryLoggingCallback(every_n_steps=10),
-            ConsoleLogCallback()
+            ConsoleLogCallback(),
+            # P1-7. Raises on a non-finite loss/grad_norm/reward rather than letting
+            # NaN weights reach a checkpoint that save_steps persists and GRPO
+            # auto-resumes from. Non-finite `kl` is warned about, not fatal -- the
+            # healthy v2 8B run logged exactly that twice.
+            NonFiniteLogGuardCallback(),
         ],
     )
     logger.info(

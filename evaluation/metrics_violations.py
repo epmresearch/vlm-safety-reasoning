@@ -22,6 +22,49 @@ logger = get_logger(__name__)
 # which region of the image the violation is in."
 IOU_CONDITIONED_THRESHOLD = 0.25
 
+# ---------------------------------------------------------------------------
+# F-beta reporting
+#
+# ADDED 2026-10-28. The GRPO reward optimises F-BETA, not F1: reward_violation_id
+# scores a set-F-beta with beta read from `violation_fbeta` (rewards/reward_utils.py
+# ::reward_constant, default 2.0, which no task YAML overrides). Until now this module
+# emitted only F1, so every published number scored the models on a different objective
+# from the one they were trained against -- and the gap is not cosmetic. Recomputed
+# from the saved per-image outcome vectors of the v2/v4/v5 arms, SFT->GRPO moves:
+#
+#     arm   dF2 micro (2b/4b/8b)        dF1 micro (same runs)
+#     v2    +0.160 / +0.127 / +0.151    +0.091 / +0.072 / +0.074
+#     v4    +0.135 / +0.099 / +0.097    +0.006 / +0.008 / +0.007   (all ns under F1)
+#     v5    +0.165 / +0.135 / +0.136    -0.018 / -0.018 / -0.075
+#
+# i.e. under the metric the reward actually maximises, GRPO helps in every arm at
+# every tier, including the two where F1 says it did nothing.
+#
+# READ IT WITH THE FLAG RATE, ALWAYS. F2 weights recall 4x, so it also flatters the
+# zero-shot baselines, which buy their recall by flagging 59-94% of images against a
+# 13.7% base rate (the 8b baseline scores F2 0.4698 against SFT's 0.5052). F2 is a
+# companion to precision/recall/F1/`violation_pred_positive_rate`, never a
+# replacement: quoting it alone would launder over-flagging into a result.
+#
+# BETA IS HARDCODED HERE, deliberately, and does NOT read the task config. A metric
+# key whose meaning silently tracks a config value cannot be compared across runs --
+# the long-format results index is keyed by metric NAME, so `..._f2_micro` must mean
+# the same thing in every row of every index ever built. If `violation_fbeta` is ever
+# changed away from 2.0, add a new key family (f1p5_*, f3_*) rather than redefining
+# this one.
+REPORTED_FBETA = 2.0
+
+
+def _fbeta(precision: float, recall: float, beta: float = REPORTED_FBETA) -> float:
+    """(1+b^2)*P*R / (b^2*P + R), 0.0 when undefined.
+
+    Same zero-guard convention as the F1 expressions in this module: a rule with no
+    predictions and no ground-truth positives scores 0.0 rather than raising.
+    """
+    b2 = beta * beta
+    denom = b2 * precision + recall
+    return (1.0 + b2) * precision * recall / denom if denom > 0 else 0.0
+
 def compute_violation_metrics(predictions: List[Dict[str, Any]], references: List[Dict[str, Any]]) -> Dict[str, float]:
     """
     Computes rule identification (F1, Precision, Recall) and grounding IoU for safety violations.
@@ -265,17 +308,26 @@ def compute_violation_metrics(predictions: List[Dict[str, Any]], references: Lis
     metrics["violation_identification_precision_micro"] = precision
     metrics["violation_identification_recall_micro"] = recall
     metrics["violation_identification_f1_micro"] = f1
+    # The reward's own objective -- see REPORTED_FBETA above. Read next to
+    # violation_pred_positive_rate, never alone.
+    metrics["violation_identification_f2_micro"] = _fbeta(precision, recall)
     
-    rule_precisions, rule_recalls, rule_f1s = [], [], []
+    rule_precisions, rule_recalls, rule_f1s, rule_f2s = [], [], [], []
     for r in ALL_RULES:
         tp, fp, fn = rule_counts[r]["tp"], rule_counts[r]["fp"], rule_counts[r]["fn"]
         p = tp / (tp + fp) if (tp + fp) > 0 else 0.0
         rec = tp / (tp + fn) if (tp + fn) > 0 else 0.0
         r_f1 = 2 * p * rec / (p + rec) if (p + rec) > 0 else 0.0
+        r_f2 = _fbeta(p, rec)
         
         metrics[f"violation_identification_precision_{r}"] = p
         metrics[f"violation_identification_recall_{r}"] = rec
         metrics[f"violation_identification_f1_{r}"] = r_f1
+        # Per-rule F2 is emitted for the same reason the per-rule F1 is: the macro
+        # below is its mean, and a macro whose components are not published cannot
+        # be audited. The same tiny-denominator warning applies -- see the counts
+        # immediately below.
+        metrics[f"violation_identification_f2_{r}"] = r_f2
         # Absolute counts behind those three ratios. rule_2/rule_3/rule_4 have
         # 25/63/24 ground-truth positives in the real test split, so a recall
         # figure there moves in steps of 4%/1.6%/4.2% and a precision figure is
@@ -289,6 +341,7 @@ def compute_violation_metrics(predictions: List[Dict[str, Any]], references: Lis
             rule_precisions.append(p)
             rule_recalls.append(rec)
             rule_f1s.append(r_f1)
+            rule_f2s.append(r_f2)
     
     metrics["violation_identification_precision_macro"] = (
         sum(rule_precisions) / len(rule_precisions) if rule_precisions else 0.0
@@ -298,6 +351,15 @@ def compute_violation_metrics(predictions: List[Dict[str, Any]], references: Lis
     )
     metrics["violation_identification_f1_macro"] = (
         sum(rule_f1s) / len(rule_f1s) if rule_f1s else 0.0
+    )
+    # Unweighted mean over rules 1-4, exactly like the F1 macro above, and for the
+    # same reason NOT gated on having a true positive: an identification metric has a
+    # well-defined denominator at zero TPs (rule_3 has 63 GT positives whether the
+    # model finds any or not), so a 0.0 there is earned and must keep its full weight.
+    # Only the TP-CONDITIONED families (reasoning, violation grounding) skip
+    # unmeasured rules.
+    metrics["violation_identification_f2_macro"] = (
+        sum(rule_f2s) / len(rule_f2s) if rule_f2s else 0.0
     )
         
     # Grounding IoU per rule and global macro/micro
